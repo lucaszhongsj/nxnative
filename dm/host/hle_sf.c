@@ -9,8 +9,7 @@
 // then the data words, whose CMIF part starts 16-byte aligned to the buffer: in a domain session the domain header {u8 type, u8 objects, u16 size, u32 object, u32, u32 token} first,
 // then {"SFCI", version, command, token} and the arguments. The response is the same with {u32 objects, 3 × u32} and {"SFCO", version, result, token}
 #include "hle.h"
-#include <mach-o/getsect.h>
-#include <mach-o/ldsyms.h>
+#include "host_image.h"
 #include <pthread.h>
 
 #define SF_H0 0xd0000u   // session handles: outside the kernel handle table (0x1000 + slot, 4096 slots, hle_thread.c)
@@ -26,7 +25,7 @@ static const struct { const char *name; sf_answer answer; } sf_served[] = {
 };
 // The services other files serve (SF_SERVICE, hle.h): audren:u (hle_audren_sv.c)
 static const sf_service_ent *sf_registered(unsigned long *n) {
-    unsigned long sz = 0; const sf_service_ent *e = (const sf_service_ent *)getsectiondata(&_mh_execute_header, "__DATA", "swsf", &sz);
+    unsigned long sz = 0; const sf_service_ent *e = (const sf_service_ent *)getsectiondata(DM_HOST_IMAGE, "__DATA", "swsf", &sz);
     *n = e ? sz / sizeof *e : 0; return e;
 }
 
