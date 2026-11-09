@@ -86,10 +86,11 @@ __attribute__((weak, visibility("hidden"))) void *dm_bigstack_caller(void *ra) {
 // header; the buffers are the client's A (send), B (receive) and X (pointer) descriptors, read and written in place (one address space); the output is the raw data after "SFCO",
 // zeroed beforehand. A service may copy one kernel handle to the client (an event's read end) and move one (a new session: an out object outside a domain)
 typedef struct {
+    const char *name;                                  // service name
     unsigned cmd, object;                              // CMIF command; domain object (0 outside a domain)
     const uint8_t *in; size_t in_len;                  // raw input data
     uint32_t copy[4], move[4]; unsigned ncopy, nmove;  // handles the client sent
-    struct { uint8_t *p; uint64_t size; } a[4], b[4], x[4]; unsigned na, nb, nx;
+    struct { uint8_t *p; uint64_t size; } a[4], b[4], c[4], x[4]; unsigned na, nb, nc, nx;
     uint8_t out[0xc0]; size_t out_len;                 // raw output data (zeroed; out_len is how much of it the service wrote)
     uint32_t out_copy, out_move;                       // handles for the client (0: none)
     void *ctx;                                         // the session's own state (sf_session)

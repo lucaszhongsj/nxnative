@@ -1,7 +1,7 @@
 // Services whose client a game links into its own main (nn::sf::hipc), and sessions the SDK gets from another service (the Switch 2's camera, below): Animal Crossing: New Horizons 3.0.3 carries the clients of olsc:u (cloud save data backup settings,
 // main+0x404bc6c) and npns (push notifications). The SDK's client code connects through sm (an abort in sm::Initialize under InitializeHipcServiceResolution, from main+0x5b8198) and talks
 // HIPC through svcSendSyncRequest; the host has neither. It hands out sessions of its own instead and answers each request in the message buffer, for the services listed in sf_served:
-// success, the output data zeroed, no objects or handles. For olsc that reads as "backup off for every user", so the game leaves the settings alone (main+0x2809c8c asks per user and
+// success, the output data zeroed, no objects or handles, unless the service has an answer of its own (nsd, below). For olsc that reads as "backup off for every user", so the game leaves the settings alone (main+0x2809c8c asks per user and
 // switches backup off where it is on). Any other service name is refused with a red line, as sm refuses a service that is not registered.
 // The SDK's own client functions are taken over where they reach the kernel (their calls inside sdk go through its PLT): the session manager's CreateNewSession runs natively on
 // DuplicateSession, and ConvertToDomainImpl on QueryPointerBufferSize and ConvertSessionToDomain. DM_SF_TRACE=1 dumps every request.
@@ -17,12 +17,12 @@
 // A session: its service's answer (sf_req, hle.h; NULL: success with zeroed output, as for olsc:u), its own state, and what to do with that state when the session closes
 static struct { char name[16]; int used, domain; unsigned seen; sf_answer answer; void *ctx; void (*close)(void *); } g_sf[SF_MAX];
 static pthread_mutex_t g_sf_mu = PTHREAD_MUTEX_INITIALIZER;
-// notif:a, the reminder alarms (nn::notification, linked by most SDKs; Fit Boxing 3 lists them when its Settings open, PR 1974): the SDK's client sends only 1000 Initialize (with the process
-// ID), 500 Register, 510 Update, 520 List, 530 LoadApplicationParameter and 540 Delete (SDK 21's sdk+0x58ac80..0x58ad10), and aborts on any failure; its notification event comes from am.
-// The host schedules no alarms, so zeroed output is its answer: no alarms listed, a registration that never fires (ID 0), a parameter of 0 bytes
-static const struct { const char *name; sf_answer answer; } sf_served[] = {
-    {"olsc:u", NULL}, {"caps:su", NULL}, {"caps:u", NULL}, {"caps:a", NULL}, {"caps:c", NULL}, {"caps:sc", NULL}, {"caps:ss", NULL}, {"notif:a", NULL},
-};
+// An AutoSelect output buffer (type 0x16) goes mapped (B) when larger than the pointer buffer (0 here) or in the receive list (C) beside an empty B: take the one with a size
+static void sf_out(const sf_req *r, unsigned i, uint8_t **p, uint64_t *size) {
+    if (i < 4 && r->b[i].size) { *p = r->b[i].p; *size = r->b[i].size; }
+    else if (i < 4 && r->c[i].size) { *p = r->c[i].p; *size = r->c[i].size; }
+    else { *p = NULL; *size = 0; }
+}
 // The services other files serve (SF_SERVICE, hle.h): audren:u (hle_audren_sv.c)
 static const sf_service_ent *sf_registered(unsigned long *n) {
     unsigned long sz = 0; const sf_service_ent *e = (const sf_service_ent *)getsectiondata(DM_HOST_IMAGE, "__DATA", "swsf", &sz);
@@ -73,13 +73,61 @@ HLE_FORCE("_ZN2nn6camera3sdk19CreateCameraContextEPNS_5gsdrv18UniqueNativeHandle
     return RES_OK;
 }
 
+// nsd:a / nsd:u, network service discovery (nn::nsd::detail::IManager): the server environment and the names of Nintendo's servers. PATAPON 1+2 REPLAY (call site sdk+0x3aefa8,
+// LNPANDY/NX2Apple#426) and Hogwarts Legacy 1.0.5 (sdk+0x3a1748, LNPANDY/NX2Apple#475) connect to nsd:a, then to nsd:u, at boot, and abort with Result 0xe8d (module 141, nsd) when sm refuses
+// both. Hogwarts Legacy asks nn::oe::GetServerEnvironmentType, which SDK 17 sends to nsd as GetApplicationServerEnvironmentType (seedds/nxnative#890 traced it). Served here as a retail
+// console that is offline, whichever SDK function asks; the commands are switchbrew's (Sockets services, "nsd:u, nsd:a"):
+//   11 GetEnvironmentIdentifier: "lp1" in the 8-byte output buffer, as hle_offline.c answers nn::nsd::GetEnvironmentIdentifier
+//   12 GetDeviceId: 16 zero bytes (the console's own is a stub that returns 0); 63 IsChangeEnvironmentIdentifierDisabled: false
+//   100 GetApplicationServerEnvironmentType: a u8, 1 for lp1 (0 dd1, 1 lp1, 2 sd1, 3 sp1, 4 dp1), or the type 101 SetApplicationServerEnvironmentType set until 102 deletes it
+//   20 Resolve, 30 GetNasServiceSetting, 40 GetNasRequestFqdn, 42 GetNasApiFqdn: RES_FAIL, as hle_misc.c answers nn::nsd::Resolve (networking is out of scope). Their Ex forms (21, 31, 41, 43)
+//   succeed with RES_FAIL as the u32 InnerResult output, which the SDK's wrapper returns as the lookup's result
+// Any other command (the setting name and URL, nsd:a's settings import, the test commands) logs a red line once and fails with sf's ResultUnknownCommandId (0x1ba0a), as a server without it would
+enum { NSD_ENV_LP1 = 1 };
+static int g_nsd_env = -1;   // 101's type, -1: none (lp1)
+static Result nsd_answer(sf_req *r) {
+    switch (r->cmd) {
+    case 11: {
+        uint8_t *p = NULL; uint64_t size = 0; sf_out(r, 0, &p, &size);
+        if (!p || size < 8) { LOG("[RED] sf: %s GetEnvironmentIdentifier without an 8-byte output buffer (%llu bytes)", r->name, (unsigned long long)size); return RES_FAIL; }
+        memset(p, 0, 8); memcpy(p, "lp1", 3); return RES_OK;
+    }
+    case 12: r->out_len = 16; return RES_OK;
+    case 63: r->out_len = 1; return RES_OK;
+    case 100: { int t = __atomic_load_n(&g_nsd_env, __ATOMIC_RELAXED); r->out[0] = (uint8_t)(t < 0 ? NSD_ENV_LP1 : t); r->out_len = 1; return RES_OK; }
+    case 101:
+        if (r->in_len < 1) { LOG("[RED] sf: %s SetApplicationServerEnvironmentType without its argument", r->name); return RES_FAIL; }
+        __atomic_store_n(&g_nsd_env, r->in[0], __ATOMIC_RELAXED); LOG("sf: %s: the application server environment type is set to %u", r->name, r->in[0]); return RES_OK;
+    case 102: __atomic_store_n(&g_nsd_env, -1, __ATOMIC_RELAXED); return RES_OK;
+    case 20: case 30: case 40: case 42: return RES_FAIL;
+    case 21: case 31: case 41: case 43: { uint32_t res = RES_FAIL; memcpy(r->out, &res, 4); r->out_len = 4; return RES_OK; }
+    }
+    static uint64_t seen[4]; unsigned k = r->cmd < 256 ? r->cmd : 255;
+    if (!(__atomic_fetch_or(&seen[k / 64], 1ull << k % 64, __ATOMIC_RELAXED) >> k % 64 & 1))
+        LOG("[RED] sf: %s command %u not answered by the host (fails with 0x1ba0a, unknown command)", r->name, r->cmd);
+    return 0x1ba0au;   // sf ResultUnknownCommandId
+}
+
+// notif:a, the reminder alarms (nn::notification, linked by most SDKs; Fit Boxing 3 lists them when its Settings open, PR 1974): the SDK's client sends only 1000 Initialize (with the process
+// ID), 500 Register, 510 Update, 520 List, 530 LoadApplicationParameter and 540 Delete (SDK 21's sdk+0x58ac80..0x58ad10), and aborts on any failure; its notification event comes from am.
+// The host schedules no alarms, so zeroed output is its answer: no alarms listed, a registration that never fires (ID 0), a parameter of 0 bytes
+// The services the host serves to a game's own client (ConnectToHipcService): their answer (NULL: every request succeeds with zeroed output) and what the log says of them
+static const struct { const char *name; sf_answer answer; const char *what; } sf_served[] = {
+    {"olsc:u", NULL, "every request succeeds with zeroed output"},
+    {"caps:su", NULL, "every request succeeds with zeroed output"}, {"caps:u", NULL, "every request succeeds with zeroed output"},
+    {"caps:a", NULL, "every request succeeds with zeroed output"}, {"caps:c", NULL, "every request succeeds with zeroed output"},
+    {"caps:sc", NULL, "every request succeeds with zeroed output"}, {"caps:ss", NULL, "every request succeeds with zeroed output"},
+    {"notif:a", NULL, "every request succeeds with zeroed output"},
+    {"nsd:a", nsd_answer, "a retail console offline: environment lp1, no server names"}, {"nsd:u", nsd_answer, "a retail console offline: environment lp1, no server names"},
+};
+
 HLE_FORCE("_ZN2nn2sf4hipc31InitializeHipcServiceResolutionEv", "service name resolution (connects to sm); the host resolves the names it serves itself", Result, h_sf_InitRes, void) { return RES_OK; }
 HLE_FORCE("_ZN2nn2sf4hipc29FinalizeHipcServiceResolutionEv", "service name resolution (sm)", void, h_sf_FinRes, void) {}
 HLE_FORCE("_ZN2nn2sf4hipc20ConnectToHipcServiceEPNS_3svc6HandleEPKc", "connect to a service through sm → a host session for the services the host serves", Result, h_sf_Connect,
           uint32_t *out, const char *name) {
     for (size_t k = 0; k < sizeof sf_served / sizeof *sf_served; k++)
         if (!strncmp(name, sf_served[k].name, 8)) {
-            *out = sf_new(sf_served[k].name, 0, sf_served[k].answer, NULL, NULL); LOG("sf: %s → host session %#x (every request succeeds with zeroed output)", sf_served[k].name, *out);
+            *out = sf_new(sf_served[k].name, 0, sf_served[k].answer, NULL, NULL); LOG("sf: %s → host session %#x (%s)", sf_served[k].name, *out, sf_served[k].what);
             return RES_OK;
         }
     unsigned long nreg; const sf_service_ent *reg = sf_registered(&nreg);
@@ -114,9 +162,9 @@ HLE_FORCE("_ZN2nn2sf4hipc6client16DuplicateSessionEPNS_3svc6HandleES4_", "contro
 HLE_FORCE("_ZN2nn2sf4hipc6client18DuplicateSessionExEPNS_3svc6HandleES4_j", "control request: clone a session (with a tag) → a new host session to the same service", Result, h_sf_DupEx,
           uint32_t *out, uint32_t h, unsigned tag) { (void)tag; return h_sf_Dup(out, h); }
 
-// A request on a host session. The message (Atmosphère / libnx): HIPC header {u16 type, X / A / B / W descriptor counts; data word count, special header flag}, the special header (process ID,
+// A request on a host session. The message (Atmosphère / libnx): HIPC header {u16 type, X / A / B / W descriptor counts; data word count, receive list, special header flag}, the special header (process ID,
 // copied and moved handles) and the descriptors, then the data words, whose CMIF part starts 16-byte aligned to the buffer. X descriptors are 2 words {index:6, address 36..41:6, address
-// 32..35:4, size:16; address low}, A / B / W 3 words {size low; address low; mode:2, address 36..57:22, size 32..35:4, address 32..35:4}
+// 32..35:4, size:16; address low}, A / B / W 3 words {size low; address low; mode:2, address 36..57:22, size 32..35:4, address 32..35:4}, receive list entries 2 words {address low; address 32..47:16, size:16}
 static uint64_t sf_desc_addr(uint32_t lo, uint32_t mid4, uint32_t hi) { return lo | (uint64_t)mid4 << 32 | (uint64_t)hi << 36; }
 HLE_FORCE("_ZN2nn2sf4hipc15SendSyncRequestENS_3svc6HandleEPvm", "send a request on a session (svcSendSyncRequest) → answered by the host for its sessions", Result, h_sf_Send,
           uint32_t h, uint32_t *m, uint64_t size) {
@@ -124,7 +172,7 @@ HLE_FORCE("_ZN2nn2sf4hipc15SendSyncRequestENS_3svc6HandleEPvm", "send a request 
     if (i < 0 || size < 0x40) { LOG("[RED] sf: SendSyncRequest on %#x (%llu bytes), not a host session", h, (unsigned long long)size); return 0xe401u; }   // kernel ResultInvalidHandle
     uint8_t *base = (uint8_t *)m;
     unsigned type = m[0] & 0xffff, nx = m[0] >> 16 & 15, na = m[0] >> 20 & 15, nb = m[0] >> 24 & 15, nw = m[0] >> 28 & 15, ndw = m[1] & 0x3ff;
-    sf_req q; memset(&q, 0, sizeof q);
+    sf_req q; memset(&q, 0, sizeof q); q.name = g_sf[i].name;
     uint32_t *p = m + 2;
     if (m[1] >> 31) {   // special header: process ID, copied and moved handles
         uint32_t sh = *p++; if (sh & 1) p += 2;
@@ -154,6 +202,13 @@ HLE_FORCE("_ZN2nn2sf4hipc15SendSyncRequestENS_3svc6HandleEPvm", "send a request 
     q.cmd = cmd & 0xffff; q.object = obj; q.in = base + hin + 16; q.in_len = end_in > hin + 16 ? end_in - hin - 16 : 0; q.ctx = g_sf[i].ctx;
     unsigned key = (obj & 0xff) << 16 | (cmd & 0xffff);   // log each object / command once
     pthread_mutex_lock(&g_sf_mu); int first = g_sf[i].seen != key; g_sf[i].seen = key; pthread_mutex_unlock(&g_sf_mu);
+    // The receive list: mode 0 none, 2 one entry, 2 + n n entries; at its offset in words, or right after the data words
+    unsigned rmode = m[1] >> 10 & 15, nrl = rmode > 2 ? rmode - 2 : rmode == 2, roff = m[1] >> 20 & 0x7ff;
+    const uint32_t *rl = roff ? m + roff : (const uint32_t *)(base + data) + ndw;
+    for (unsigned k = 0; k < nrl && q.nc < 4 && (const uint8_t *)(rl + 2 * k + 2) <= base + size; k++) {
+        q.c[q.nc].p = (uint8_t *)(uintptr_t)(rl[2 * k] | (uint64_t)(rl[2 * k + 1] & 0xffff) << 32);
+        q.c[q.nc++].size = rl[2 * k + 1] >> 16;
+    }
     Result res = g_sf[i].answer ? g_sf[i].answer(&q) : RES_OK;
     if (q.out_move && dom) { LOG("[RED] sf: %s: command %u returns an object in a domain, which the host does not serve", g_sf[i].name, q.cmd); q.out_move = 0; res = 0xe401u; }
     if (first || trace) LOG("sf: %s object %u command %u (%u data words in): %s%s%s", g_sf[i].name, obj, cmd, ndw, res ? "fails" : g_sf[i].answer ? "success" : "success, zeroed output",
@@ -167,6 +222,9 @@ HLE_FORCE("_ZN2nn2sf4hipc15SendSyncRequestENS_3svc6HandleEPvm", "send a request 
     if (nc + nm) { m[1] |= 1u << 31; m[2] = nc << 1 | nm << 5; if (nc) m[3] = q.out_copy; if (nm) m[3 + nc] = q.out_move; }
     size_t out = ((dw + 15) & ~(size_t)15) + (dom ? 16 : 0);
     uint32_t *o = (uint32_t *)(base + out); o[0] = 0x4f434653; o[1] = ver; o[2] = res; o[3] = 0;   // "SFCO"; a domain's out-object count before it stays 0
-    if (!res && q.out_len) memcpy(base + out + 16, q.out, q.out_len <= sizeof q.out && out + 16 + q.out_len <= end ? q.out_len : 0);
+    if (!res && q.out_len) {
+        if (q.out_len > sizeof q.out || out + 16 + q.out_len > end) LOG("[RED] sf: %s: %zu bytes of output data do not fit the %zu-byte message", g_sf[i].name, q.out_len, end);
+        else memcpy(base + out + 16, q.out, q.out_len);   // the output data after SFCO
+    }
     return RES_OK;
 }
