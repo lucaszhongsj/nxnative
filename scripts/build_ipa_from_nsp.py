@@ -2952,58 +2952,187 @@ def build_gl_shaders(py, repo, roots, sh, env, logs, g, reuse=True, mac=False, p
 
 
 class IpaWatch:
-    """Progress of build_ipa.sh, from its step lines ("[time] generate Gen/ …", "xcodebuild …", "pack IPA …", then pack_ipa.py's "pack: N entries, X bytes") and the files it writes:
-    the CompileC lines in xcodebuild's build.log (one per source file: Gen/src, Gen/main/main.c, Gen/embed.S and the app's Sources), then the bytes of the archive pack_ipa.py is
-    writing (<IPA>.partial, renamed at the end). Its two halves are the stages "app build" and "IPA pack" """
-    XCODE = {'CompileC': 'compiling', 'Ld': 'linking', 'CpResource': 'copying resources', 'CompileAssetCatalogVariant': 'asset catalog', 'ProcessInfoPlistFile': 'Info.plist'}
+    """Progress of build_ipa.sh, from its step lines ("[time] generate Gen/ …", "pipeline archive for …", "pso_offline: …",
+    "framework: Gen/framework …", "xcodebuild …", "copying resources into …", "pack IPA …", then pack_ipa.py's "pack: N entries, X bytes")
+    and the files it writes: pso_offline.py's batch folders under build/ios/pso/work, the CompileC lines in xcodebuild's build.log or
+    build-framework.log, then (for an IPA) the bytes of <IPA>.partial. Used by "game framework", "app build" and "IPA pack" """
+    XCODE = {'CompileC': 'compiling', 'SwiftCompile': 'compiling', 'Ld': 'linking', 'CpResource': 'copying resources', 'CompileAssetCatalogVariant': 'asset catalog', 'ProcessInfoPlistFile': 'Info.plist'}
 
-    def __init__(self, repo, w, out_ipa):
-        self.ios, self.o, self.part = repo / 'dm/ios', w / 'build/ios/pkg', out_ipa.with_name(out_ipa.name + '.partial')
-        self.last = out_ipa.stat().st_size if out_ipa.is_file() else None   # the last IPA's size: the expected size of the new archive
+    def __init__(self, repo, w, out_ipa=None):
+        self.ios, self.o, self.pso = repo / 'dm/ios', w / 'build/ios/pkg', w / 'build/ios/pso/work'
+        ipa = Path(out_ipa) if out_ipa is not None else None
+        if ipa is not None and not ipa.is_dir() and ipa.suffix != '.framework':
+            self.part = ipa.with_name(ipa.name + '.partial')
+            self.last = ipa.stat().st_size if ipa.is_file() else None   # the last IPA's size: the expected size of the new archive
+        else:
+            self.part, self.last = None, None
+        self.xlog = self.o / 'build.log'
         self.kept = 0
-        self.state, self.t, self.off, self.compiled, self.what, self.total, self.most, self.lock = None, 0, 0, 0, '', None, 0, threading.Lock()
+        self.pso_archs, self.pso_arch, self.pso_done, self.pso_logged = [], '', set(), False
+        self.pso_js_key, self.pso_counts = ('', -1, -1), (0, 0)
+        self.state, self.t, self.off, self.compiled, self.what, self.total, self.most, self.lock = None, 0.0, 0, 0, '', None, 0, threading.Lock()
 
     def line(self, line):   # a line of build_ipa.sh's output
         s = re.sub(r'^\[[\d:]+\] ', '', line)
         with self.lock:   # a poll sees a step change whole
-            if s.startswith('generate Gen/'): self.state = 'gen'; PROG.set(step='generating sources')
-            elif s.startswith('[RED] pipeline archive:'): say(s)   # the build goes on without one, and only this says so
-            elif s.startswith('pipeline archive for'): PROG.set(step='pipeline archive (metal-tt)')
+            if s.startswith('generate Gen/'):
+                self.state = 'gen'
+                PROG.set(step='generating sources')
+            elif s.startswith('[RED] pipeline archive:'):
+                self.state = None
+                say(s)   # the build goes on without one, and only this says so
+            elif s.startswith('pipeline archive for'):
+                m = re.match(r'pipeline archive for (\S+)', s)
+                raw = m.group(1).split(',') if m else []
+                self.pso_archs = [x if x.startswith('applegpu_') else f'applegpu_{x}' for x in raw if x]
+                self.pso_arch = self.pso_archs[0] if len(self.pso_archs) == 1 else ''
+                self.pso_done, self.pso_logged = set(), False
+                self.state, self.t = 'pso', time.time()
+                PROG.set(step='pipeline archive (metal-tt)')
+            elif (m := re.match(r'pso_offline: (\S+): metal-tt, \d+ bases, \d+ compute pipelines', s)):
+                self.pso_arch = m.group(1)
+                self.pso_done, self.pso_logged = set(), False
+                self.state, self.t = 'pso', time.time()
+            elif (m := re.match(r'pso_offline: (\S+): batch (\d+)/(\d+): (.*)', s)):
+                arch, idx, tot, tail = m.group(1), int(m.group(2)), int(m.group(3)), m.group(4)
+                if arch != self.pso_arch:
+                    self.pso_arch, self.pso_done = arch, set()
+                if tail.startswith('ready'):
+                    self.pso_done.add(idx)
+                self.state, self.pso_logged = 'pso', True
+                PROG.set(done=len(self.pso_done), total=tot, unit='batches', note='')
+            elif (m := re.match(r'pso_offline: (\S+): merging (\d+) batches', s)):
+                tot = int(m.group(2))
+                self.state, self.pso_logged = 'pso', True
+                PROG.set(done=tot, total=tot, unit='batches', note='merging')
+            elif s.startswith('framework: Gen/framework'):
+                self.state = 'gen'
+                PROG.set(step='generating Xcode project')
             elif s.startswith('xcodebuild'):
-                units = len(os.listdir(self.ios / 'Gen/src')) + 2 + sum(1 for p in (self.ios / 'Sources').iterdir() if p.suffix in ('.c', '.m'))   # + Gen/main/main.c and Gen/embed.S
-                self.state, self.t = 'xcode', time.time(); PROG.set(step='xcodebuild', done=0, total=units, unit='files', est=True)   # an incremental build compiles fewer
+                fw = 'the game framework' in s or self.part is None
+                self.xlog = self.o / ('build-framework.log' if fw else 'build.log')
+                self.off, self.compiled, self.what = 0, 0, ''
+                try:
+                    extra = 9 if fw else 2 + sum(1 for p in (self.ios / 'Sources').iterdir() if p.suffix in ('.c', '.m'))   # + Gen/main/main.c and Gen/embed.S
+                    units = len(os.listdir(self.ios / 'Gen/src')) + extra
+                except OSError:
+                    units = None
+                self.state, self.t = 'xcode', time.time()
+                if units is not None:
+                    PROG.set(step='xcodebuild', done=0, total=units, unit='files', est=True)   # an incremental build compiles fewer
+                else:
+                    PROG.set(step='xcodebuild', unit='files', est=True)
+            elif s.startswith('copying resources into '):
+                if self.state == 'xcode':
+                    r = self._poll()
+                    if r: PROG.set(**r)
+                self.state = 'copy'
+                PROG.set(step='copying resources')
+            elif s.startswith('done: ') and self.state == 'xcode':
+                r = self._poll()
+                if r: PROG.set(**r)
+                self.state = None
             elif s.startswith('pack IPA'):
-                try: self._poll()   # the rest of build.log (xcodebuild writes it in big blocks)
-                except OSError: pass
+                self._poll()   # the rest of build.log (xcodebuild writes it in big blocks)
                 PROG.end(f'{self.compiled:,} file{"" if self.compiled == 1 else "s"} compiled')
-                self.state, self.total, self.most = 'list', None, 0; PROG.stage('IPA pack', poll=self.poll, step='listing the files')
+                self.state, self.total, self.most = 'list', None, 0
+                PROG.stage('IPA pack', poll=self.poll, step='listing the files')
             elif self.state == 'list' and (m := re.match(r'pack: (\d+) entries, (\d+) bytes', s)):   # the files' bytes: the archive's size when nothing deflates, else the last IPA's size is closer
-                self.state, self.total = 'keep', self.last or int(m.group(2)); PROG.set(step='packing', unit='B', note=f'{int(m.group(1)):,} entries')
+                self.state, self.total = 'keep', self.last or int(m.group(2))
+                PROG.set(step='packing', unit='B', note=f'{int(m.group(1)):,} entries')
             elif self.state == 'keep' and (m := re.match(r'pack: keeping (\d+) bytes', s)):
                 self.kept = int(m.group(1)); self.state = 'pack'; self.most = 0; self.total = max(0, self.total - self.kept)
 
     def poll(self):   # from the poll thread
         with self.lock: return self._poll()
 
+    def _poll_pso(self):
+        js = self.pso / 'bases.mtl4-json'
+        try: st = js.stat()
+        except OSError: return None
+        key = (str(js), st.st_size, st.st_mtime_ns)
+        if key != self.pso_js_key:
+            try: raw = js.read_bytes()
+            except OSError: return None
+            if not raw.rstrip().endswith(b'}'): return None
+            counts = (raw.count(b'"vertex_function_descriptor"'), raw.count(b'"compute_function_descriptor"'))
+            self.pso_js_key, self.pso_counts = key, counts
+        bases, computes = self.pso_counts
+        base_groups, compute_groups = (bases + 999) // 1000, (computes + 15) // 16
+        total = base_groups + compute_groups
+        if total <= 1: return None
+        candidates = [self.pso_arch] if self.pso_arch else (self.pso_archs or [p.name[8:] for p in sorted(self.pso.glob('batches.*')) if p.is_dir()])
+        arch, bdir = '', None
+        for cand in candidates:
+            d = self.pso / f'batches.{cand}'
+            if cand and d.is_dir():
+                arch, bdir = cand, d
+                break
+        if bdir is None: return None
+        pack_log = self.pso / f'metal-pack.{arch}.log'
+        newest = st.st_mtime
+        try: newest = max(newest, bdir.stat().st_mtime)
+        except OSError: return None
+        try: newest = max(newest, pack_log.stat().st_mtime)
+        except OSError: pass
+        for idx in range(1, base_groups + 1):
+            gdir = bdir / f'{idx:05d}'
+            for p in (gdir, gdir / f'{arch}.mtl4a.partial', gdir / f'{arch}.mtl4a', gdir / f'key.{arch}'):
+                try: newest = max(newest, p.stat().st_mtime)
+                except OSError: pass
+        for idx in range(1, compute_groups + 1):
+            gdir = bdir / f'c{idx:05d}'
+            for p in (gdir, gdir / f'{arch}.mtl4a.partial', gdir / f'{arch}.mtl4a', gdir / f'key.{arch}'):
+                try: newest = max(newest, p.stat().st_mtime)
+                except OSError: pass
+        if newest < self.t - 2: return None   # still files from an earlier build
+        def group_done(gdir):
+            if (gdir / f'{arch}.mtl4a.partial').exists() or not (gdir / f'key.{arch}').is_file(): return False
+            try: return (gdir / f'{arch}.mtl4a').stat().st_size > 0
+            except OSError: return False
+        done = 0
+        for idx in range(1, base_groups + 1):
+            if group_done(bdir / f'{idx:05d}'): done += 1
+            else: break   # render-base groups run sequentially: anything later is left from an interrupted run
+        if done == base_groups:
+            for idx in range(1, compute_groups + 1):
+                if group_done(bdir / f'c{idx:05d}'): done += 1
+        merging = False
+        if done == total:
+            try: merging = pack_log.stat().st_mtime >= self.t - 2
+            except OSError: merging = False
+        return {'done': done, 'total': total, 'unit': 'batches', 'note': 'merging' if merging else ''}
+
     def _poll(self):
         state = self.state
+        if state == 'pso':
+            return None if self.pso_logged else self._poll_pso()
         if state == 'xcode':
-            log = self.o / 'build.log'
-            if log.stat().st_mtime < self.t - 1: return None   # still the last build's log
-            if log.stat().st_size < self.off: self.off = self.compiled = 0
-            with open(log, 'rb') as f: f.seek(self.off); chunk = f.read()
-            chunk = chunk[:chunk.rfind(b'\n') + 1]; self.off += len(chunk)
+            log = self.xlog
+            try: st = log.stat()
+            except OSError: return None
+            if st.st_mtime < self.t - 1: return None   # still the last build's log
+            if st.st_size < self.off: self.off = self.compiled = 0
+            try:
+                with open(log, 'rb') as f:
+                    f.seek(self.off)
+                    chunk = f.read()
+            except OSError:
+                return None
+            chunk = chunk[:chunk.rfind(b'\n') + 1]
+            self.off += len(chunk)
             for ln in chunk.split(b'\n'):
                 w = ln.split(b' ', 1)[0].decode(errors='replace')
                 if w == 'CompileC': self.compiled += 1
                 self.what = self.XCODE.get(w, self.what)
-            r = {'done': self.compiled, 'note': self.what}
-        elif state == 'pack':
-            try: self.most = max(self.most, self.part.stat().st_size - self.kept)   # never backwards: the archive is renamed at the end
+            return {'done': self.compiled, 'note': self.what}
+        if state == 'pack':
+            part = self.part
+            if part is None: return None
+            try: self.most = max(self.most, part.stat().st_size - self.kept)   # never backwards: the archive is renamed at the end
             except OSError: pass
-            r = {'done': self.most, 'total': self.total, 'est': True}
-        else: return None
-        return r
+            return {'done': self.most, 'total': self.total, 'est': True}
+        return None
 
 
 def env_file_pairs(path):   # an environment file's switches (one KEY=VALUE per line, # starts a comment), read as the iOS app reads them (dm/ios/Sources/main.m)
@@ -3360,6 +3489,10 @@ def parse_args(argv):
     ap.add_argument('--shader-files', action=argparse.BooleanOptionalAction, help='an NVN game\'s shader library goes into the IPA as its separate files, not as one file, for install tools that cannot copy '
                     'a large file (AltServer: 2 GiB; the game files then need --romfs separate too) (default: the SHADER_FILES setting, off)')
     ap.add_argument('--prepare-xcode', action='store_true', help='prepare a per-game Xcode project and add it to the shared workspace instead of packing an IPA (requires keeping extracted files)')
+    ap.add_argument('--framework', action='store_true', help='the game\'s modules go into DmIOS.app/Frameworks/DmGame.framework, which the app dlopens at launch (route C, docs/launcher-c-plan.md M1), instead of the executable; the IPA is otherwise the usual one')
+    ap.add_argument('--shell-framework', metavar='FOLDER', help='route C\'s shell (docs/launcher-c-plan.md M2): build only the game\'s framework, FOLDER/DmGame<title ID>.framework '
+                    '(its code, tables, settings list, shader libraries and icon), for dm/ios/tools/build_shell.sh to embed in the one app for all games; no IPA or Xcode project, '
+                    'the game files stay separate (implies --romfs separate and --keep-extracted)')
     ap.add_argument('--platform', choices=('ios', 'mac', 'mac-app'), help='ios = the IPA (or the Xcode project); mac = for development: build only what running the game on this Mac needs (the Mac shaders and the Mac host, '
                     'no iOS shaders, Xcode project or IPA), keep the extracted files and print the command that runs the game; mac-app = what mac builds, then a self-contained, double-clickable '
                     'Mac app of the game (default: <game name>.app in the NSP folder, -o names another) (default: the PLATFORM setting, ios)')
@@ -3512,6 +3645,11 @@ def main(args=None):
     if args.mac_sign and not mac_pack: raise BuildError('--mac-sign signs the Mac app: it needs --platform mac-app')
     if args.prebake and not mac_pack: raise BuildError('--prebake makes the Mac app\'s prewarm pipelines: it needs --platform mac-app')
     if mac and prepare_xcode: raise BuildError(f'--prepare-xcode makes an iPhone project: it cannot be combined with --platform {platform}')
+    if mac and args.framework: raise BuildError(f'--framework builds the iPhone app\'s game framework: it cannot be combined with --platform {platform}')
+    shell_fw = Path(os.path.expanduser(args.shell_framework)).resolve() if args.shell_framework else None
+    if shell_fw and (mac or prepare_xcode or args.framework): raise BuildError('--shell-framework builds only the game framework for the shell: it cannot be combined with --platform mac / mac-app, --prepare-xcode or --framework')
+    if shell_fw and args.romfs == 'bundle': raise BuildError('--shell-framework keeps the game files separate (the shell takes them from Documents/games/<title ID>/): it cannot be combined with --romfs bundle')
+    if shell_fw: args.romfs = 'separate'; args.keep_extracted = True
     if mac and not apple_silicon(): raise BuildError(f'--platform {platform} runs the game in the Mac host, which runs the game\'s own arm64 code natively: it needs a Mac with Apple silicon, and this Mac has an Intel processor')
     check_native_python()
     keep = KEEP_EXTRACTED if args.keep_extracted is None else args.keep_extracted
@@ -3776,10 +3914,11 @@ def main(args=None):
         rmtree(work / 'tmp'); return {'row': (PROGRAM_INDEX, g.id, patched, rfs.source(game), ios, gfx), 'ex': ex, 'keep': keep}
     programs = other_programs(args, g)
     if programs and romfs_mode == 'separate': raise BuildError('a game of several programs keeps its files in the app (ROMFS / --romfs bundle): Documents holds one RomFS image, one program\'s')
-    if not prepare_xcode and free_gb(out_ipa.parent) < 5: raise BuildError(f'less than 5 GB free on the volume of {out_ipa.parent}')
-    say('preparing the Xcode project' if prepare_xcode else f'building the IPA → {out_ipa}')
+    if not prepare_xcode and not shell_fw and free_gb(out_ipa.parent) < 5: raise BuildError(f'less than 5 GB free on the volume of {out_ipa.parent}')
+    say('preparing the Xcode project' if prepare_xcode else f'building the game framework for the shell → {shell_fw}' if shell_fw else f'building the IPA → {out_ipa}')
     ipa_env = dict(env, GAME=g.id, W=str(work / 'ipa'), PATCHED=str(patched), ROMFS=str(rfs.source(game)), MSL_IOS=str(ios), GFXAPI=gfx, FONT_PY=py, DM_DISPLAY_NAME=app_name, DM_BUNDLE_ID=bundle_id, AOC=str(aoc or ''), DM_XCODE_DERIVED_DATA=str(work / 'xcode-derived-data'), DM_TEAM_ID=team_id, DM_LANG=lang, CONTROL=str(control))
     if prepare_xcode: ipa_env['DM_XCODE_PROJECT_DIR'] = str(project.parent)
+    if args.framework: ipa_env['DM_FRAMEWORK'] = '1'; say('route C: the game\'s modules go into DmIOS.app/Frameworks/DmGame.framework (DM_FRAMEWORK=1)')
     separate = romfs_mode == 'separate'
     if separate: ipa_env['DM_COPY_ROMFS'] = 'NO'; say('game files: separate (DM_COPY_ROMFS=NO), left out of the app; the image stays at ' + str(rfs.source(game)))
     if shader_files: ipa_env['DM_SHADER_FILES'] = '1'; say('shader library: its separate files (DM_SHADER_FILES=1), for install tools that cannot copy a large file')
@@ -3800,6 +3939,19 @@ def main(args=None):
         rows = [(0, g.id, patched, rfs.source(game), ios, gfx)] + [programs[n]['row'] for n in sorted(programs)]
         tsv.write_text('# program\tprofile\trewritten modules\tRomFS\tiOS shaders\tgraphics API (build_ipa.sh PROGRAMS_TSV)\n' + ''.join('\t'.join(map(str, r)) + '\n' for r in rows))
         say(f'one app holding programs {", ".join(str(r[0]) for r in rows)}')
+    if shell_fw:   # route C's shell: the framework alone, which build_shell.sh embeds, while the game files stay where they are for the copy to the device
+        ipa_env['DM_FRAMEWORK_ONLY'] = str(shell_fw)
+        fw = shell_fw / f'DmGame{g.id.upper()}.framework'
+        watch = IpaWatch(repo, work / 'ipa', fw)
+        PROG.stage('game framework', poll=watch.poll, step='starting')
+        run(['bash', repo / 'dm/ios/tools/build_ipa.sh'], logs / 'build_framework.log', env=ipa_env, on_line=watch.line)
+        if not (fw / 'game.manifest.json').is_file(): raise BuildError(f'no game framework at {fw}')
+        PROG.end(fw.name)
+        rmtree(work / 'tmp')
+        say(f'game framework: {fw}')
+        say(f'game files: {rfs.source(game)}')
+        report_profile_status(g, reg, pkg_ver, derived, provisional, 'shell framework', patched)
+        return
     if prepare_xcode:
         PROG.stage('prepare Xcode')
         run(['bash', repo / 'dm/ios/tools/build_ipa.sh', '--prepare-xcode'], logs / 'prepare_xcode.log', env=ipa_env)

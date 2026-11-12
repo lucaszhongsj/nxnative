@@ -9,7 +9,6 @@
 #include <sys/stat.h>
 #include <unistd.h>
 #include "hle_profile.h"   // the runtime game profile (DM_PROFILE): the RomFS marker path comes from it
-#include "game_profile.h"   // DM_GAME_TEX_BC_CPU: a game whose BC textures are decoded on the CPU runs on a GPU without BC
 #include "front.h"
 #include "romfs_image.h"
 #include "DataBookmark.h"
@@ -17,6 +16,14 @@
 #include "player_env.h"
 #ifndef DM_PLAYER_BUILD
 #define DM_PLAYER_BUILD 0
+#endif
+// Route C (docs/launcher-c-plan.md M1): DM_FRAMEWORK_BUILD is set by project-framework.yml, whose app carries the game's
+// modules in Frameworks/DmGame.framework instead of Gen/embed.S. The default project never defines it.
+#ifndef DM_FRAMEWORK_BUILD
+#define DM_FRAMEWORK_BUILD 0
+#endif
+#if DM_FRAMEWORK_BUILD
+#include "FrameworkBootstrap.h"
 #endif
 
 extern char **environ;
@@ -204,7 +211,7 @@ const char *front_ios_device_check(void) {
     static char msg[320]; static int done;
     if (done++) return msg[0] ? msg : NULL;
     id<MTLDevice> gpu = MTLCreateSystemDefaultDevice();   // the system default device, the one the graphics layers take (mtl_init repeats this check for the other routes)
-    if (gpu.supportsBCTextureCompression || DM_GAME_TEX_BC_CPU) return NULL;   // tex_bc_cpu: nvn_mtl.m decodes BC on the CPU (nvn_bcdec.c)
+    if (gpu.supportsBCTextureCompression || dm_profile()->tex_bc_cpu) return NULL;   // tex_bc_cpu: nvn_mtl.m decodes BC on the CPU (nvn_bcdec.c)
     snprintf(msg, sizeof msg, "This device's GPU (%s) cannot read BC-compressed textures, which the games use. It needs an iPhone 15 Pro or newer (A17 Pro chip or later) or an iPad with an M1 chip or later.",
              gpu ? gpu.name.UTF8String : "no Metal device");
     fprintf(stderr, "[RED] boot: %s\n", msg);
@@ -237,6 +244,14 @@ static int boot_env(void) {
     // First line of the log: the fork's patches this build carries (Info.plist DMForkPatches), so a report says whether it comes from a build beyond upstream's support
     NSString *fork_patches = [NSBundle.mainBundle objectForInfoDictionaryKey:@"DMForkPatches"];
     fprintf(stderr, "fork patches: %s\n", [fork_patches isKindOfClass:NSString.class] && fork_patches.length ? fork_patches.UTF8String : "none");
+#if DM_FRAMEWORK_BUILD
+    // Route C: the runtime profile ships inside the game framework, and dm_profile() (hle_profile.c) reads DM_PROFILE on its
+    // first call below (front_hud_env, romfs_locate, the per-game data folders). Before the env files, and forced: the game
+    // this app carries is the framework's, not whatever a diagnostic file names.
+    NSString *fwd = [NSBundle.mainBundle.privateFrameworksURL URLByAppendingPathComponent:@DM_FRAMEWORK_DIRECTORY].path;
+    setenv("DM_PROFILE", [fwd stringByAppendingPathComponent:@"profile.tsv"].fileSystemRepresentation, 1);
+    fprintf(stderr, "boot: game framework %s\n", fwd.fileSystemRepresentation);
+#endif
     // Environment switch files (for on-device diagnostics: a sideloaded app cannot be given environment variables from outside): one KEY=VALUE per line, # starts a comment; Documents/env.txt takes precedence over dm/env.txt in the bundle (put there by build_ipa.sh's DM_ENV_FILE)
     NSMutableArray<NSString *> *from_file = [NSMutableArray array], *from_launch = [NSMutableArray array];
     for (char **e = environ; *e; e++) {   // set at launch (Xcode, devicectl): before the env files, and the launcher keeps them
@@ -284,6 +299,12 @@ static int boot_env(void) {
         fprintf(stderr, "boot: no game data yet (Documents/romfs.img, Documents/romfs or <App>/romfs); the launcher asks for it\n"); }
     setenv("DM_SYSTEM_DIR", [doc stringByAppendingPathComponent:@"system"].fileSystemRepresentation, 0);
     setenv("DM_GUEST_FILE_DIR", NSTemporaryDirectory().fileSystemRepresentation, 0);   // DM_GUEST_FILE (hle_svc.c) keeps the guest's memory in files there
+#if DM_FRAMEWORK_BUILD
+    // Route C: the modules, their rewriter tables and the shader map are the framework's. dlopen + dlsym + dladdr hand its
+    // mach header to the loader here, after the data went to DM_ROMFS and before loading starts (the design's order).
+    if (!dm_open_game_framework(fwd.fileSystemRepresentation)) return 0;
+    dm = [fwd stringByAppendingPathComponent:@"dm"];
+#endif
     setenv("DM_NVN_SHMAP", [dm stringByAppendingPathComponent:@"shader_map.tsv"].fileSystemRepresentation, 0);
     // Shader libraries: a game's own <gdir>/msl first (a per-game layout may carry its own), else
     // the app's shared <App>/msl (the program's <App>/msl/p<N> in a game of several programs).

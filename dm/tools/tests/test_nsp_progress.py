@@ -236,5 +236,334 @@ class HumanModes(unittest.TestCase):
             self.assertEqual('\r' in text, mode == 'bar')
             self.assertEqual(ticker is None, mode == 'off')
 
+
+class ShellFrameworkProgress(unittest.TestCase):
+    """Progress of --shell-framework (stage 'game framework') and IpaWatch on directory or None targets."""
+
+    def setUp(self):
+        self.now, self.wall, self.out = 100.0, 1_700_000_000.0, io.StringIO()
+        self.prog = nsp.Progress('json')
+        for cm in (
+            contextlib.redirect_stdout(self.out),
+            mock.patch.object(nsp.time, 'monotonic', side_effect=lambda: self.now),
+            mock.patch.object(nsp.time, 'time', side_effect=lambda: self.wall),
+            mock.patch.object(nsp.threading, 'Thread'),
+            mock.patch.object(nsp, 'PROG', self.prog),
+        ):
+            cm.__enter__()
+            self.addCleanup(cm.__exit__, None, None, None)
+
+    def events(self, ev=None):
+        return [e for e in map(json.loads, self.out.getvalue().splitlines()) if ev in (None, e['ev'])]
+
+    def write_pso_script(self, pso_work, bases, computes=0, mtime=None):
+        pso_work.mkdir(parents=True, exist_ok=True)
+        render = [{'vertex_function_descriptor': f'fnd:v{i}', 'fragment_function_descriptor': f'fnd:f{i}'} for i in range(bases)]
+        desc = {'render_pipeline_descriptors': render}
+        if computes:
+            desc['compute_pipeline_descriptors'] = [{'compute_function_descriptor': f'fnd:c{i}'} for i in range(computes)]
+        js = pso_work / 'bases.mtl4-json'
+        js.write_text(json.dumps({'pipeline_descriptors': desc}))
+        if mtime is not None:
+            nsp.os.utime(js, (mtime, mtime))
+        return js
+
+    def mark_batch(self, batches_dir, name, arch, done, mtime=None):
+        gdir = batches_dir / name
+        gdir.mkdir(parents=True, exist_ok=True)
+        part = gdir / f'{arch}.mtl4a.partial'
+        dst = gdir / f'{arch}.mtl4a'
+        kf = gdir / f'key.{arch}'
+        if done:
+            part.unlink(missing_ok=True)
+            dst.write_bytes(b'archive')
+            kf.write_text('digest\n')
+            targets = (gdir, dst, kf)
+        else:
+            kf.unlink(missing_ok=True)
+            part.write_bytes(b'compiling')
+            targets = (gdir, part)
+        if mtime is not None:
+            for p in targets:
+                nsp.os.utime(p, (mtime, mtime))
+
+    def test_watch_directory_and_none_targets_are_safe(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            shell_dir = root / 'frameworks'
+            shell_dir.mkdir()
+            existing_fw = shell_dir / 'DmGame01007EF00011E000.framework'
+            existing_fw.mkdir()
+            missing_fw = shell_dir / 'DmGame0100000000010000.framework'
+            for target in (None, shell_dir, existing_fw, missing_fw):
+                with self.subTest(target=target):
+                    watch = nsp.IpaWatch(SCRIPT.parents[1], root / 'ipa', target)
+                    self.assertIsNone(watch.part)
+                    self.assertIsNone(watch.last)
+                    self.assertIsNone(watch.poll())
+                    watch.line('[12:00:00] pipeline archive for g18p (metal-tt)')
+                    self.assertIsNone(watch.poll())
+                    watch.line('[12:00:01] xcodebuild (Release, unsigned, the game framework DmGame01007EF00011E000 with its own host)')
+                    self.assertIsNone(watch.poll())
+                    watch.state = 'pack'
+                    self.assertIsNone(watch.poll())
+
+    def test_poll_pso_work_batches_and_stale_guard(self):
+        arch = 'applegpu_g18p'
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            ipa_work = root / 'ipa'
+            pso_work = ipa_work / 'build/ios/pso/work'
+            batches = pso_work / f'batches.{arch}'
+            stale = self.wall - 30.0
+            self.write_pso_script(pso_work, bases=2500, computes=20, mtime=stale)
+            self.mark_batch(batches, '00001', arch, done=True, mtime=stale)
+            self.mark_batch(batches, '00002', arch, done=True, mtime=stale)
+            nsp.os.utime(batches, (stale, stale))
+
+            watch = nsp.IpaWatch(SCRIPT.parents[1], ipa_work, root / 'DmGame01007EF00011E000.framework')
+            watch.line('[12:00:00] pipeline archive for g18p (metal-tt)')
+            self.assertIsNone(watch.poll())
+
+            # Batch 1 starts compiling now while batch 2 still holds files from an interrupted earlier run.
+            self.mark_batch(batches, '00001', arch, done=False, mtime=self.wall)
+            self.assertEqual(watch.poll(), {'done': 0, 'total': 5, 'unit': 'batches', 'note': ''})
+
+            # Batch 1 finishes and batch 2 starts compiling: only sequential base groups before the active one count.
+            self.mark_batch(batches, '00001', arch, done=True, mtime=self.wall)
+            self.mark_batch(batches, '00002', arch, done=False, mtime=self.wall)
+            self.assertEqual(watch.poll(), {'done': 1, 'total': 5, 'unit': 'batches', 'note': ''})
+
+            # All three render-base groups finish, and compute batch c00002 finishes before c00001.
+            self.mark_batch(batches, '00002', arch, done=True, mtime=self.wall)
+            self.mark_batch(batches, '00003', arch, done=True, mtime=self.wall)
+            self.mark_batch(batches, 'c00001', arch, done=False, mtime=self.wall)
+            self.mark_batch(batches, 'c00002', arch, done=True, mtime=self.wall)
+            self.assertEqual(watch.poll(), {'done': 4, 'total': 5, 'unit': 'batches', 'note': ''})
+
+            # Final compute batch finishes and metal-pack starts merging.
+            self.mark_batch(batches, 'c00001', arch, done=True, mtime=self.wall)
+            pack_log = pso_work / f'metal-pack.{arch}.log'
+            pack_log.write_text('')
+            nsp.os.utime(pack_log, (self.wall, self.wall))
+            self.assertEqual(watch.poll(), {'done': 5, 'total': 5, 'unit': 'batches', 'note': 'merging'})
+
+            # A small game that fits in one compiler run (total <= 1) uses no batch count.
+            sh_work = root / 'small'
+            self.write_pso_script(sh_work / 'build/ios/pso/work', bases=500, computes=0, mtime=self.wall)
+            small_watch = nsp.IpaWatch(SCRIPT.parents[1], sh_work, None)
+            small_watch.line('[12:00:00] pipeline archive for g18p (metal-tt)')
+            self.assertIsNone(small_watch.poll())
+
+    def test_framework_lines_and_json_progress_stream(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            repo = root / 'repo'
+            gen_src = repo / 'dm/ios/Gen/src'
+            gen_src.mkdir(parents=True)
+            for idx in range(3):
+                (gen_src / f'u{idx}.c').write_text('')
+            ipa_work = root / 'ipa'
+            pkg = ipa_work / 'build/ios/pkg'
+            pkg.mkdir(parents=True)
+            fw_dir = root / 'shell/DmGame01007EF00011E000.framework'
+
+            watch = nsp.IpaWatch(repo, ipa_work, fw_dir)
+            self.prog.plan(1)
+            self.prog.stage('game framework', poll=watch.poll, step='starting')
+            watch.line('[12:00:00] generate Gen/ (01007EF00011E000, modules: main sdk, graphics: nvn)')
+            watch.line('[12:00:01] pipeline archive for g18p (metal-tt)')
+            watch.line('[12:00:02] pso_offline: applegpu_g18p: metal-tt, 2100 bases, 32 compute pipelines (minutes) ...')
+            watch.line('[12:00:03] pso_offline: applegpu_g18p: batch 1/5: 1000 bases, compiling or checking cache')
+            self.now += 1.0
+            self.wall += 4.0
+            watch.line('[12:00:07] pso_offline: applegpu_g18p: batch 1/5: ready (reused)')
+            self.now += 1.0
+            self.wall += 4.0
+            watch.line('[12:00:11] pso_offline: applegpu_g18p: batch 2/5: ready (compiled)')
+            self.now += 1.0
+            self.wall += 4.0
+            watch.line('[12:00:15] pso_offline: applegpu_g18p: batch 3/5: ready (compiled)')
+            self.now += 1.0
+            self.wall += 4.0
+            # Out-of-order parallel compute completion: batch 5 finishes before batch 4 starts logging.
+            watch.line('[12:00:19] pso_offline: applegpu_g18p: batch 5/5: ready (compiled)')
+            self.now += 1.0
+            self.wall += 1.0
+            watch.line('[12:00:20] pso_offline: applegpu_g18p: batch 4/5: 16 compute pipelines, compiling or checking cache')
+            self.now += 1.0
+            self.wall += 2.0
+            watch.line('[12:00:22] pso_offline: applegpu_g18p: batch 4/5: ready (compiled)')
+            watch.line('[12:00:23] pso_offline: applegpu_g18p: merging 5 batches')
+            watch.line('[12:00:30] framework: Gen/framework (modules main sdk, profile.tsv, game.manifest.json)')
+            watch.line('[12:00:31] xcodebuild (Release, unsigned, the game framework DmGame01007EF00011E000 with its own host)')
+
+            flog = pkg / 'build-framework.log'
+            flog.write_bytes(b'CompileC a.o a.c\nCompileC b.o b.c\nSwiftCompile normal arm64 GameMenu.swift\nLd DmGame normal arm64\n')
+            nsp.os.utime(flog, (self.wall, self.wall))
+            polled = watch.poll()
+            self.assertEqual(polled, {'done': 2, 'note': 'linking'})
+            assert polled is not None
+            self.now += 1.0
+            self.prog.set(**polled)
+            flog.write_bytes(flog.read_bytes() + b'CompileC c.o c.c\n')
+            nsp.os.utime(flog, (self.wall, self.wall))
+            watch.line('[12:00:40] copying resources into DmGame01007EF00011E000.framework')
+            self.prog.end(fw_dir.name)
+
+            steps = [e['step'] for e in self.events('step')]
+            self.assertEqual(
+                steps,
+                [
+                    'generating sources',
+                    'pipeline archive (metal-tt)',
+                    'generating Xcode project',
+                    'xcodebuild',
+                    'copying resources',
+                ],
+            )
+            pso_prog = [e for e in self.events('progress') if e['step'] == 'pipeline archive (metal-tt)' and e['total'] == 5]
+            self.assertEqual([e['done'] for e in pso_prog], [0, 1, 2, 3, 4, 5, 5])
+            self.assertEqual(pso_prog[-1]['note'], 'merging')
+            self.assertEqual(pso_prog[-1]['unit'], 'batches')
+            self.assertEqual(pso_prog[-1]['frac'], 0.99)
+            self.assertIsNotNone(pso_prog[-1]['eta'])
+            xc_prog = [e for e in self.events('progress') if e['step'] == 'xcodebuild']
+            self.assertEqual((xc_prog[0]['done'], xc_prog[0]['total'], xc_prog[0]['unit'], xc_prog[0]['est']), (0, 12, 'files', True))
+            self.assertEqual((xc_prog[-1]['done'], xc_prog[-1]['note']), (3, 'compiling'))
+            end = self.events('stage_end')[-1]
+            self.assertEqual((end['name'], end['ok'], end['summary']), ('game framework', True, 'DmGame01007EF00011E000.framework'))
+
+    def test_main_shell_framework_wires_watch_to_run(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve()
+            dump_dir = root / 'dump'
+            (dump_dir / 'exefs').mkdir(parents=True)
+            (dump_dir / 'exefs/main').write_bytes(b'main')
+            (dump_dir / 'romfs').mkdir()
+            shell_out = root / 'shell_fw'
+            shell_out.mkdir()
+            tid = 0x01007EF00011E000
+            gid = f'{tid:016X}'
+            fake_g = mock.MagicMock()
+            fake_g.id = gid
+            fake_g.title_id = tid
+            fake_g.dir = root / 'profile'
+            fake_g.builds.return_value = {'v0': {'display': '1.0.0', 'main': 'aa' * 16}}
+            fake_g.words.side_effect = lambda k: ['v0'] if k == 'shader_versions' else ['main']
+            fake_g.get.side_effect = lambda k, d='': {'name': 'Test Game', 'ipa': 'Test.ipa', 'pso_mtl4': 'on'}.get(k, d)
+            fake_g.modules_in.return_value = ['main']
+            fake_g.table.side_effect = lambda n: root / 'profile' / n
+            (root / 'profile').mkdir()
+            (root / 'profile/shader_map.tsv').write_text('')
+
+            def fake_extract_dump(ex, ver, src, app):
+                vdir = ex / ver
+                (vdir / 'ExeFS').mkdir(parents=True, exist_ok=True)
+                (vdir / 'ExeFS/main').write_bytes(b'main')
+                (vdir / 'RomFS').mkdir(exist_ok=True)
+                return vdir
+
+            def fake_run(cmd, log, env=None, cwd=None, on_line=None, ok=(0,), fatal=True):
+                if len(cmd) >= 2 and str(cmd[1]).endswith('dm/ios/tools/build_ipa.sh'):
+                    self.assertIsNotNone(on_line)
+                    assert on_line is not None
+                    on_line('[12:00:00] generate Gen/ (01007EF00011E000, modules: main, graphics: nvn)')
+                    on_line('[12:00:01] pipeline archive for g18p (metal-tt)')
+                    on_line('[12:00:02] pso_offline: applegpu_g18p: batch 1/2: 1000 bases, compiling or checking cache')
+                    self.now += 1.0
+                    on_line('[12:00:05] pso_offline: applegpu_g18p: batch 1/2: ready (compiled)')
+                    self.now += 1.0
+                    on_line('[12:00:08] pso_offline: applegpu_g18p: batch 2/2: ready (compiled)')
+                    on_line('[12:00:09] pso_offline: applegpu_g18p: merging 2 batches')
+                    on_line('[12:00:10] framework: Gen/framework (modules main, profile.tsv, game.manifest.json)')
+                    on_line(f'[12:00:11] xcodebuild (Release, unsigned, the game framework DmGame{gid} with its own host)')
+                    on_line(f'[12:00:20] copying resources into DmGame{gid}.framework')
+                    fw = shell_out / f'DmGame{gid}.framework'
+                    fw.mkdir(parents=True, exist_ok=True)
+                    (fw / 'game.manifest.json').write_text('{"schema": 1}\n')
+                return 0
+
+            fake_pg = mock.MagicMock()
+            fake_pg.build_sources.return_value = {
+                'graphics': ('nvn', ''),
+                'glslc_capture': (False, ''),
+                'vk_capture': (False, ''),
+                'gl_capture': (False, ''),
+                'ue_decode': (False, ''),
+                'oodle_packs': (False, ''),
+                'ue_legacy': (False, ''),
+            }
+            fake_gamemod = mock.MagicMock()
+            fake_gamemod.by_title.return_value = fake_g
+
+            patches = (
+                mock.patch('builtins.input', side_effect=AssertionError('unexpected input prompt')),
+                mock.patch.dict(sys.modules, {'game': fake_gamemod, 'profile_guess': fake_pg}),
+                mock.patch.object(nsp, 'check_native_python'),
+                mock.patch.object(nsp, 'dump_folder', return_value=True),
+                mock.patch.object(nsp, 'scan_dump', return_value=(tid, {'base': dump_dir, 'updates': [], 'dlc': []})),
+                mock.patch.object(nsp, 'check_prereqs'),
+                mock.patch.object(nsp, 'free_gb', return_value=100.0),
+                mock.patch.object(nsp, 'extract_dump', side_effect=fake_extract_dump),
+                mock.patch.object(nsp, 'check_formats'),
+                mock.patch.object(nsp, 'check_versions_aarch64'),
+                mock.patch.object(nsp, 'build_mismatch', return_value=[]),
+                mock.patch.object(nsp, 'check_metal'),
+                mock.patch.object(nsp, 'extract_aoc', return_value=None),
+                mock.patch.object(nsp, 'rewrite', return_value=fake_g),
+                mock.patch.object(nsp, 'captured_nros', return_value=None),
+                mock.patch.object(nsp, 'chain_header'),
+                mock.patch.object(nsp, 'split_shaders', return_value='PK'),
+                mock.patch.object(nsp, 'build_shaders', return_value=root / 'ios_sh'),
+                mock.patch.object(nsp, 'uses_jit', return_value=False),
+                mock.patch.object(nsp, 'report_profile_status'),
+                mock.patch.object(nsp, 'run', side_effect=fake_run),
+            )
+            with contextlib.ExitStack() as stack:
+                for p in patches:
+                    stack.enter_context(p)
+                nsp.main(nsp.parse_args([str(dump_dir), '--shell-framework', str(shell_out), '--work-dir', str(root / 'work'), '--progress', 'json']))
+
+            stages = [e for e in self.events('stage') if e['name'] == 'game framework']
+            self.assertEqual(len(stages), 1)
+            self.assertEqual(stages[0]['step'], 'starting')
+            steps = [e['step'] for e in self.events('step') if e['name'] == 'game framework']
+            self.assertEqual(
+                steps,
+                [
+                    'generating sources',
+                    'pipeline archive (metal-tt)',
+                    'generating Xcode project',
+                    'xcodebuild',
+                    'copying resources',
+                ],
+            )
+            pso_counts = [(e['done'], e['total'], e['note']) for e in self.events('progress') if e['name'] == 'game framework' and e['step'] == 'pipeline archive (metal-tt)' and e['total'] == 2]
+            self.assertEqual(pso_counts, [(0, 2, ''), (1, 2, ''), (2, 2, ''), (2, 2, 'merging')])
+
+    def test_build_ipa_and_pso_sources_emit_watched_markers(self):
+        repo = SCRIPT.parents[1]
+        ipa_sh = (repo / 'dm/ios/tools/build_ipa.sh').read_text(encoding='utf-8')
+        pso_py = (repo / 'dm/gfx/tools/pso_offline.py').read_text(encoding='utf-8')
+        for marker in (
+            't "generate Gen/',
+            't "pipeline archive for $GPUS',
+            't "framework: Gen/framework ',
+            't "xcodebuild (Release, unsigned, the game framework $FW_NAME with its own host)"',
+            '> "$O/build-framework.log"',
+            't "copying resources into $FW_NAME.framework"',
+        ):
+            self.assertIn(marker, ipa_sh)
+        for marker in (
+            'pso_offline: {arch}: metal-tt, {len(bases)} bases, {len(computes)} compute pipelines',
+            'pso_offline: {arch}: batch {index}/{total}:',
+            'pso_offline: {arch}: batch {index}/{total}: ready (',
+            'pso_offline: {arch}: merging {total} batches',
+            'metal-pack.{arch}.log',
+        ):
+            self.assertIn(marker, pso_py)
+
+
 if __name__ == '__main__':
     unittest.main()
