@@ -92,6 +92,13 @@ class LauncherSettingsTests(unittest.TestCase):
         self.assertNotIn('DM_BC6H_RGB9E5', build(BOTW, 'nvn'))   # no tex_bc_cpu in its profile
         self.assertNotIn('DM_BC6H_RGB9E5', build('0100F2C0115B6000', 'vulkan'))
 
+    def test_touch_controls_size_and_stick_are_rows_of_a_standalone_app(self):   # #991: the shell's two touch-control choices, in a game's own app
+        rows = build(BOTW, 'nvn')
+        size, stick = rows['DM_TOUCH_SIZE'], rows['DM_TOUCH_STICK']
+        self.assertEqual((size['section'], size['default'], size['options']), ('Controls', 'medium', [['small', 'Small'], ['medium', 'Medium'], ['large', 'Large']]))
+        self.assertEqual((stick['section'], stick['default'], stick['options']), ('Controls', 'corner', [['corner', 'Corner'], ['higher', 'Higher'], ['inward', 'Inward']]))
+        self.assertFalse({'DM_TOUCH_SIZE', 'DM_TOUCH_STICK'} & set(build(BOTW, 'nvn', 'mac')))   # a Mac has no touch controls
+
     def test_hold_frames_takes_on_and_off(self):   # the host reads DM_FPS_HOLD as on / off (hle_nvn.c), not 1 / 0
         s = build(BOTW, 'nvn')['DM_FPS_HOLD']
         self.assertEqual((s['on'], s['off'], s['default']), ('on', 'off', 'on'))
@@ -101,7 +108,7 @@ class LauncherSettingsTests(unittest.TestCase):
     def test_iphone_switches_only_on_the_iphone(self):   # the frame-rate counter and touch feedback are the iOS front end's (front_ios.m, DmGamepad.m)
         ios, mac = build(BOTW, 'nvn'), build(BOTW, 'nvn', 'mac')
         self.assertEqual(build(BOTW, 'nvn', 'ios').keys(), ios.keys())   # ios when unset
-        self.assertEqual(set(ios) - set(mac), {'DM_SHOW_FPS', 'DM_TOUCH_HAPTICS', 'DM_PICTURE_FIT'})
+        self.assertEqual(set(ios) - set(mac), {'DM_SHOW_FPS', 'DM_TOUCH_HAPTICS', 'DM_PICTURE_FIT', 'DM_TOUCH_SIZE', 'DM_TOUCH_STICK'})
         self.assertIn('DM_RUMBLE', mac); self.assertIn('DM_METAL_HUD', mac)
         self.assertEqual(set(mac) - set(ios), {'DM_FULLSCREEN', 'DM_SW2'})   # the Mac window's Display mode (front_mac.m reads 1 or 0); Switch 2 controllers (pad_switch2_apple.m, wired on the Mac only)
         s = mac['DM_FULLSCREEN']

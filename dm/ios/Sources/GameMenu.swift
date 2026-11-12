@@ -6,9 +6,28 @@ import UIKit
 
 var gameMenuModel: LauncherModel?   // the settings screen's model (Launcher.swift); nil in an app without one: the menu has the layout only
 
+// The menu's own words in the player's language (LNPANDY/NX2Apple#1129): DM_GAME_MENU_TEXT, one per line in GameMenuText's order, passed by the
+// launcher as DM_HOME_QUIT_TEXT is for the quit prompt: the shell sets it at launch, and a game's own app gets it in its bundled dm/env.txt (the build's
+// --env-file), where the lines are joined by a backslash and n. A line that is missing or empty stays English.
+enum GameMenuText: Int, CaseIterable {
+    case moreSettings, controllerLayout
+    var english: String {
+        switch self {
+        case .moreSettings: return "More settings on the start screen"
+        case .controllerLayout: return "Controller layout"
+        }
+    }
+    static func line(_ t: GameMenuText, in text: String?) -> String {
+        let lines = (text ?? "").replacingOccurrences(of: "\\n", with: "\n").components(separatedBy: "\n")
+        let line = t.rawValue < lines.count ? lines[t.rawValue].trimmingCharacters(in: .whitespaces) : ""
+        return line.isEmpty ? t.english : line
+    }
+    var text: String { Self.line(self, in: getenv("DM_GAME_MENU_TEXT").map { String(cString: $0) }) }
+}
+
 @_cdecl("dm_game_menu")
 public func dmGameMenu() -> UnsafeMutableRawPointer {
-    let title = gameMenuModel != nil ? "More settings on the start screen" : ""
+    let title = gameMenuModel != nil ? GameMenuText.moreSettings.text : ""
     let menu = UIMenu(title: title, children: [UIDeferredMenuElement.uncached { done in done(gameMenuItems()) }])   // built each time it opens, so it shows the current choices
     return Unmanaged.passRetained(menu).toOpaque()
 }
@@ -18,7 +37,7 @@ private func gameMenuItems() -> [UIMenuElement] {
     let layouts = (0..<3).filter { dm_pad_layout_offered(Int32($0)) }.map { l in
         UIAction(title: names[l], state: dm_pad_layout() == l ? .on : .off) { _ in dm_pad_layout_set(Int32(l)) }
     }
-    let layout = UIMenu(title: "Controller layout", options: .singleSelection, children: layouts)   // a choice's value shows in its submenu: a subtitle would make each row two lines
+    let layout = UIMenu(title: GameMenuText.controllerLayout.text, options: .singleSelection, children: layouts)   // a choice's value shows in its submenu: a subtitle would make each row two lines
     var items: [UIMenuElement] = []
     var placed = false
     if let m = gameMenuModel {
