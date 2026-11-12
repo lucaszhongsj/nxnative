@@ -7,7 +7,7 @@ Each file is compiled to nothing (-c -o /dev/null), so the assembler sees entry.
 Two passes: the default build, then the same sources with DM_FRAMEWORK_BUILD=1 (project-framework.yml: main.m's dlopen path and
 FrameworkBootstrap.m's real body), so a change to either build breaks here rather than in a device build.
 Usage: DM_GAME=<base game title ID> compile_check.py   (or GAME=)   Exit status 1 when any file fails in either pass."""
-import concurrent.futures, os, shlex, subprocess, sys
+import concurrent.futures, os, shlex, subprocess, sys, tempfile
 repo = os.path.abspath(os.path.join(os.path.dirname(__file__), '../../..'))
 host, ios = f'{repo}/dm/host', f'{repo}/dm/ios'
 game = os.environ.get('GAME') or os.environ.get('DM_GAME')
@@ -36,13 +36,21 @@ def one(s, extra=()):
     if s.endswith('.c'): c[4:4] = ['-std=gnu11']
     p = subprocess.run(c, capture_output=True, text=True)
     return s, p.returncode, p.stderr
-def check(label, extra=()):
+def check(label, extra=(), files=None):
+    target = srcs if files is None else files
     bad = 0
     with concurrent.futures.ThreadPoolExecutor(os.cpu_count()) as ex:
-        for s, rc, err in ex.map(lambda s: one(s, extra), srcs):
+        for s, rc, err in ex.map(lambda s: one(s, extra), target):
             if rc: bad += 1; print(f'FAIL {os.path.relpath(s, repo)}\n{err}', file=sys.stderr)
-    print(f'iOS compile check ({label}): {len(srcs)} files, {bad} failed')
+    print(f'iOS compile check ({label}): {len(target)} files, {bad} failed')
     return bad
 # The framework build defines its macro in project-framework.yml's OTHER_CFLAGS, make never sees it: pass it here
 bad = check('default') + check('DM_FRAMEWORK_BUILD=1', ['-DDM_FRAMEWORK_BUILD=1'])
+with tempfile.TemporaryDirectory() as tmp:
+    ns_h = os.path.join(tmp, 'objc_namespace.h')
+    subprocess.run([sys.executable, f'{ios}/tools/gen_objc_namespace.py', '--game', game, '--header', ns_h], check=True)
+    fw_dir = os.path.normpath(f'{ios}/framework')
+    shell_srcs = [s for s in srcs if os.path.basename(s) not in ('main.m', 'FrameworkBootstrap.m')]
+    shell_srcs += sorted(os.path.join(fw_dir, f) for f in os.listdir(fw_dir) if f.endswith(('.c', '.m')))
+    bad += check('DmShellGame', ['-include', ns_h], shell_srcs)
 sys.exit(1 if bad else 0)

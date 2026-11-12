@@ -1812,6 +1812,13 @@ static int touch_read(void *s, int N, int want) {
     pthread_mutex_unlock(&g_touch_mu);
     return cnt;
 }
+void dm_hid_touch_teardown(void) {
+    pthread_mutex_lock(&g_touch_mu);
+    memset(g_touch_hist, 0, sizeof g_touch_hist);
+    g_touch_kept = g_touch_newest = g_touch_points = 0;
+    g_touch_at = 0;
+    pthread_mutex_unlock(&g_touch_mu);
+}
 HLE_FORCE("_ZN2nn3hid21InitializeTouchScreenEv", "connect to the hid touch screen; the host takes touch points from the front end", void, h_hid_InitTouch, void) {}
 // SDK 18 overload with two ints (Super Mario Galaxy); the SDK's own one opens the hid service and aborts in sm::Initialize
 HLE_FORCE("_ZN2nn3hid21InitializeTouchScreenEii", "connect to the hid touch screen (SDK 18 two-argument version); the host takes touch points from the front end", void, h_hid_InitTouch2, int a, int b) { (void)a; (void)b; }

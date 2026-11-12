@@ -7,8 +7,8 @@
 #define TLS_SIZE 8192
 #define TLR_SIZE 0x200
 #define THREAD_OBJ_SIZE 0x400
-static pthread_key_t g_keyown;   // raw pointers of the TLS block / thread-local region this thread allocated (see the end of guest_thread_init)
-static pthread_once_t g_keyown_once = PTHREAD_ONCE_INIT;
+static pthread_key_t g_keyown __attribute__((section("__DATA,__dm_keep")));   // raw pointers of the TLS block / thread-local region this thread allocated (see the end of guest_thread_init)
+static pthread_once_t g_keyown_once __attribute__((section("__DATA,__dm_keep"))) = PTHREAD_ONCE_INIT;
 static void own_free(void *p) { void **own = p; free(own[0]); free(own[1]); free(own); }
 static void own_key_init(void) { if (pthread_key_create(&g_keyown, own_free)) die("cannot create the free key for thread-local blocks"); }
 void guest_thread_init(void) {
@@ -39,9 +39,16 @@ void guest_thread_set_id(uint64_t id) { *(uint32_t *)((uint8_t *)pthread_getspec
 #define GATE_STACK_SIZE (1 << 20)       // = entry.S nesting check
 extern uint64_t dm_gate_top[GATE_SLOTS];
 extern const uint8_t dm_gate_stubs[];
-static pthread_mutex_t g_gate_lock = PTHREAD_MUTEX_INITIALIZER;
-static uint16_t g_gate_free[GATE_SLOTS]; static int g_gate_nfree = -1;
-static pthread_key_t g_keygslot; static pthread_once_t g_gslot_once = PTHREAD_ONCE_INIT;
+static pthread_mutex_t g_gate_lock __attribute__((section("__DATA,__dm_keep"))) = PTHREAD_MUTEX_INITIALIZER;
+static uint16_t g_gate_free[GATE_SLOTS] __attribute__((section("__DATA,__dm_keep")));
+static int g_gate_nfree __attribute__((section("__DATA,__dm_keep"))) = -1;
+static pthread_key_t g_keygslot __attribute__((section("__DATA,__dm_keep")));
+static pthread_once_t g_gslot_once __attribute__((section("__DATA,__dm_keep"))) = PTHREAD_ONCE_INIT;
+static uint8_t *g_main_gate_stack __attribute__((section("__DATA,__dm_keep")));
+uint64_t guest_gate_top_self(void) {
+    uintptr_t s = (uintptr_t)pthread_getspecific(g_keygslot);
+    return s ? dm_gate_top[s - 1] : 0;
+}
 static void gslot_release(void *p) {   // key destructor (pthread_exit): slot + 1
     pthread_mutex_lock(&g_gate_lock); g_gate_free[g_gate_nfree++] = (uint16_t)((uintptr_t)p - 1); pthread_mutex_unlock(&g_gate_lock);
 }
@@ -55,9 +62,12 @@ __attribute__((noinline)) void guest_gate_stack(int own_stack) {
     uint8_t *top;
     if (own_stack) top = (uint8_t *)__builtin_frame_address(0);   // this function's frame record: everything above it is the caller's frame, everything below is free once the guest runs elsewhere
     else {
-        uint8_t *m = mmap(NULL, GATE_STACK_SIZE + 16384, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0);
-        if (m == MAP_FAILED || mprotect(m, 16384, PROT_NONE)) die("cannot map a gate stack (errno %d)", errno);   // guard page at the bottom
-        top = m + 16384 + GATE_STACK_SIZE;
+        if (!g_main_gate_stack) {
+            uint8_t *m = mmap(NULL, GATE_STACK_SIZE + 16384, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0);
+            if (m == MAP_FAILED || mprotect(m, 16384, PROT_NONE)) die("cannot map a gate stack (errno %d)", errno);   // guard page at the bottom
+            g_main_gate_stack = m;
+        }
+        top = g_main_gate_stack + 16384 + GATE_STACK_SIZE;
     }
     uintptr_t prev = (uintptr_t)pthread_getspecific(g_keygslot);
     int k;

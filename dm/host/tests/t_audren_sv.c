@@ -14,14 +14,17 @@ static int checks, fails, signals;
 uint32_t hle_new_event(uint32_t *write_end) { if (write_end) *write_end = 0x2001; return 0x1001; }
 uint32_t hle_dup_readable_handle(uint32_t h) { return h == 0x1001 ? 0x1002 : 0; }
 int hle_signal_event_handle(uint32_t w) { signals += w == 0x2001; return 1; }
-void *dm_guest_thread_spawn(void (*fn)(void *), void *arg, int prio, size_t stack_size) { (void)fn; (void)arg; (void)prio; (void)stack_size; return NULL; }
-void dm_guest_thread_join(void *tt) { (void)tt; }
-void *dm_pcmout_open(int ch) { (void)ch; return NULL; }
-void dm_pcmout_close(void *k) { (void)k; }
+static int join_calls, pcm_close_calls, pcm_wake_calls;
+static void *fake_thread_ret, *fake_pcm_ret, *last_wake_arg;
+void *dm_guest_thread_spawn(void (*fn)(void *), void *arg, int prio, size_t stack_size) { (void)fn; (void)arg; (void)prio; (void)stack_size; return fake_thread_ret; }
+void dm_guest_thread_join(void *tt) { (void)tt; join_calls++; }
+void *dm_pcmout_open(int ch) { (void)ch; return fake_pcm_ret; }
+void dm_pcmout_close(void *k) { (void)k; pcm_close_calls++; }
 void dm_pcmout_start(void *k) { (void)k; }
 int dm_pcmout_append(void *k, void *b) { (void)k; (void)b; return 1; }
 void *dm_pcmout_released(void *k) { (void)k; return NULL; }
 void dm_pcmout_wait(void *k, int ms) { (void)k; (void)ms; }
+void dm_pcmout_wake(void *k) { pcm_wake_calls++; last_wake_arg = k; }
 size_t dm_audren_work_size(const uint8_t *p, uint32_t revision) { return revision == 0x32564552 && rd32(p) == 48000 ? 0x12000 : 0; }
 
 // A non-domain CMIF request: optional process ID and copied handles in a special header, A then B descriptors, the raw input after "SFCI"
@@ -142,6 +145,36 @@ int main(void) {
     CHECK(call(r, 6, NULL, 0, 0, NULL, 0, NULL, 0, NULL, 0, NULL, 0) == RES_OK && !rnd->started, "Stop");
     h_sf_Close(r); h_sf_Close(mgr);
     CHECK(sf_slot(r) < 0, "closing the renderer session ends it");
+
+    // Two-phase shell teardown: stop before park must not join guest threads or drop slots;
+    // post-park teardown frees host shells without dm_guest_thread_join or dm_pcmout_close.
+    uint32_t mgr2 = 0;
+    CHECK(h_sf_Connect(&mgr2, "audren:u") == RES_OK && mgr2, "second audren:u connection");
+    void *fake_thread = calloc(1, 64), *fake_pcm = calloc(1, 64);
+    fake_thread_ret = fake_thread;
+    CHECK(call(mgr2, 0, param, sizeof param, 1, copies, 2, NULL, 0, NULL, 0, NULL, 0) == RES_OK, "second OpenAudioRenderer succeeds");
+    fake_thread_ret = NULL;
+    uint32_t r2 = msg[3];
+    int slot2 = sf_slot(r2); sv_rnd *rnd2 = slot2 >= 0 ? g_sf[slot2].ctx : NULL;
+    CHECK(rnd2 && rnd2->thread == fake_thread, "second renderer captures host thread handle");
+    if (rnd2) {
+        pthread_mutex_lock(&rnd2->mu);
+        rnd2->pcmout = fake_pcm;
+        pthread_mutex_unlock(&rnd2->mu);
+        join_calls = 0; pcm_close_calls = 0; pcm_wake_calls = 0; last_wake_arg = NULL;
+        dm_sf_stop_all();
+        CHECK(join_calls == 0 && pcm_close_calls == 0, "dm_sf_stop_all never joins guest thread or closes pcmout");
+        CHECK(pcm_wake_calls == 1 && last_wake_arg == fake_pcm, "dm_sf_stop_all wakes active pcmout");
+        CHECK(!rnd2->open && sf_slot(r2) >= 0 && sf_slot(mgr2) >= 0, "dm_sf_stop_all marks renderer closed while keeping slots intact");
+        CHECK(rnd2->thread == fake_thread && rnd2->pcmout == fake_pcm, "dm_sf_stop_all defers freeing host shells");
+        dm_sf_teardown();
+        CHECK(join_calls == 0 && pcm_close_calls == 0, "dm_sf_teardown frees shells directly without guest join or pcmout close");
+        CHECK(sf_slot(r2) < 0 && sf_slot(mgr2) < 0, "dm_sf_teardown drops all audren sessions");
+    } else {
+        free(fake_thread);
+        free(fake_pcm);
+    }
+
     (void)signals;
     printf("t_audren_sv: %d checks, %d failed\n", checks, fails);
     return fails != 0;

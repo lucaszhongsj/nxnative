@@ -243,8 +243,8 @@ static void on_crash(int sig, siginfo_t *si, void *uc_) {
 }
 // The signal alternate stack is per thread: every guest thread must call this when it starts running (only then can the crash state be printed on the alternate stack on a stack overflow)
 // The alternate stack is released when the thread exits: the pthread key destructor is called at thread exit (disable the alternate stack first, then free). The game frequently starts short-lived threads, and without releasing each one leaks 64 KiB.
-static pthread_key_t g_altstack_key;
-static pthread_once_t g_altstack_once = PTHREAD_ONCE_INIT;
+static pthread_key_t g_altstack_key __attribute__((section("__DATA,__dm_keep")));
+static pthread_once_t g_altstack_once __attribute__((section("__DATA,__dm_keep"))) = PTHREAD_ONCE_INIT;
 static void altstack_free(void *p) { stack_t off = {.ss_flags = SS_DISABLE}; sigaltstack(&off, 0); free(p); }
 static void altstack_key_init(void) { if (pthread_key_create(&g_altstack_key, altstack_free)) die("altstack key"); }
 void crash_thread_init(void) {

@@ -222,12 +222,11 @@ static BOOL fullOnly(int b) { return b == B_LS || b == B_RS || b >= B_LEFT; }   
             [_touchFeedback prepare];
         }
         _owner = [NSMapTable strongToStrongObjectsMapTable]; _faceOf = [NSMapTable strongToStrongObjectsMapTable];
-        static dispatch_once_t once;
-        dispatch_once(&once, ^{
+        if (!k_idle) {
             // each colour carries its own low opacity instead of lowering the whole view's alpha (that would add an off-screen pass for the full-screen layer)
             k_idle = [UIColor colorWithWhite:1 alpha:0.14]; k_on = [UIColor colorWithWhite:1 alpha:0.45]; k_line = [UIColor colorWithWhite:1 alpha:0.38];
             k_ringFill = [UIColor colorWithWhite:1 alpha:0.06]; k_text = [UIColor colorWithWhite:1 alpha:0.6]; k_textOn = [UIColor colorWithWhite:0 alpha:0.7];
-        });
+        }
         _controls = [CALayer layer]; [self.layer addSublayer:_controls];
         _ring = shape(_controls); _ring.fillColor = k_ringFill.CGColor;
         _knob = shape(_controls);
@@ -796,6 +795,15 @@ static void cp_show(void) {   // the card once per prompt; its count and its Don
     g_cp_done_btn.enabled = cp_can_confirm(&g_cp);
 }
 void dm_gamepad_pads_read(void);
+static void cp_teardown(void) {
+    g_cp = (ctrl_prompt){0};
+    g_cp_confirm = g_cp_cancel = 0;
+    g_cp_ok = 0;
+    [g_cp_view removeFromSuperview];
+    g_cp_view = nil; g_cp_count = nil; g_cp_done_btn = nil; g_cp_target = nil;
+    dispatch_semaphore_t done = g_cp_done; g_cp_done = nil;
+    if (done) dispatch_semaphore_signal(done);
+}
 // One step of the prompt (a button, a touch on the card, a controller joining, coming or going); returns whether it keeps the game's input
 static int cp_poll(void) {
     if (g_cp.phase == CP_IDLE) return 0;
@@ -806,16 +814,19 @@ static int cp_poll(void) {
     if (was == CP_OPEN && ph != CP_OPEN) {
         [g_cp_view removeFromSuperview]; g_cp_view = nil; g_cp_count = nil; g_cp_done_btn = nil;
         LOG("front end: controller prompt closed: %d players (%s)", joined, g_cp.ok ? "done" : "canceled");
-        g_cp_ok = g_cp.ok; dispatch_semaphore_signal(g_cp_done);
+        g_cp_ok = g_cp.ok;
+        dispatch_semaphore_t done = g_cp_done; g_cp_done = nil;
+        if (done) dispatch_semaphore_signal(done);
         ph = cp_step(&g_cp, joined, 0, a, b, 0, 0);   // nothing held: the game has its input at once
     }
     if (ph == CP_IDLE) { dm_gamepad_pads_read(); return 0; }   // each controller read as it is now
     return 1;
 }
 int front_ctrl_support(int min, int max) {
-    if (!front_metal_layer()) return -1;
+    if (!g_view || !front_metal_layer()) return -1;
     dispatch_semaphore_t done = dispatch_semaphore_create(0);
     dispatch_async(dispatch_get_main_queue(), ^{
+        if (!g_view || !front_metal_layer()) { g_cp_ok = 0; dispatch_semaphore_signal(done); return; }
         [g_view reset]; dm_touch_set(NULL, 0);   // nothing the game held stays pressed while the prompt has the input
         if (g_merge) dm_pad_set(0, 0, 0, 0, 0); else for (int p = 0; p < DM_PLAYERS; p++) if (g_held[p]) dm_pad_set_player(p, 0, 0, 0, 0, 0);
         int a, b; cp_buttons(&a, &b);
@@ -844,4 +855,29 @@ void dm_gamepad_reset(void) {   // On resign active: release everything (a key h
     pthread_mutex_lock(&g_mu); g_shake_btn = 0; pthread_mutex_unlock(&g_mu); publish();
     if (g_merge) dm_pad_set(0, 0, 0, 0, 0);
     else for (int p = 0; p < DM_PLAYERS; p++) if (g_held[p]) dm_pad_set_player(p, 0, 0, 0, 0, 0);
+}
+void dm_gamepad_teardown(void) {
+    if (g_motion) {
+        [g_motion stopAccelerometerUpdates];
+        [g_motion stopDeviceMotionUpdates];
+        if (@available(iOS 27.0, *)) g_motion.deviceMotionBody = nil;
+        g_motion = nil;
+    }
+    if (g_view) {
+        [NSNotificationCenter.defaultCenter removeObserver:g_view];
+        [g_view reset];
+        g_view = nil;
+    }
+    if ([NSThread isMainThread]) cp_teardown();
+    else dispatch_sync(dispatch_get_main_queue(), ^{ cp_teardown(); });
+    for (GCController *c in GCController.controllers) {
+        c.extendedGamepad.valueChangedHandler = nil;
+        c.extendedGamepad.buttonHome.pressedChangedHandler = nil;
+        for (int p = 0; p < DM_PLAYERS; p++) dm_motion_detach(c, p);
+    }
+    for (int p = 0; p < DM_PLAYERS; p++) {
+        dm_haptics_apple_controller(p, nil);
+        g_held[p] = nil;
+    }
+    k_idle = nil; k_on = nil; k_line = nil; k_ringFill = nil; k_text = nil; k_textOn = nil;
 }

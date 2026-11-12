@@ -86,6 +86,40 @@ static void check_nsd(void) {
     CHECK(request_dom(u, m, 100, 0) == RES_OK && m[8] == 0x4f434653 && m[10] == RES_OK && (m[12] & 0xff) == 1, "a domain request: SFCO after the domain header, the type after it");
     h_sf_Close(a); h_sf_Close(u);
 }
+
+static int sf_close_calls, sf_stop_calls, sf_teardown_calls, sf_stop_saw_slot = -1;
+static uint32_t sf_lifecycle_handle;
+static uint32_t lc_answer(sf_req *q) { (void)q; return RES_OK; }
+static void lc_close(void *ctx) { (void)ctx; sf_close_calls++; }
+static void lc_stop(void *ctx) { (void)ctx; sf_stop_calls++; sf_stop_saw_slot = sf_slot(sf_lifecycle_handle); }
+static void lc_teardown(void *ctx) { free(ctx); sf_teardown_calls++; }
+
+static void check_two_phase_teardown(void) {
+    uint32_t m[0x40], a = 0;
+    uint8_t dummy[4] = {0};
+    CHECK(h_sf_Connect(&a, "nsd:a") == RES_OK && a, "nsd:a reconnect before teardown check");
+    CHECK(request_b(a, m, 101, dummy, 0, 3) == RES_OK && m[6] == RES_OK, "set nsd env type 3 before teardown");
+
+    void *ctx = malloc(16);
+    sf_lifecycle_handle = sf_session_lifecycle("lc:test", lc_answer, ctx, lc_close, lc_stop, lc_teardown);
+    CHECK(sf_lifecycle_handle != 0 && sf_slot(sf_lifecycle_handle) >= 0, "sf_session_lifecycle registers active slot");
+
+    sf_close_calls = 0; sf_stop_calls = 0; sf_teardown_calls = 0; sf_stop_saw_slot = -1;
+    dm_sf_stop_all();
+    CHECK(sf_stop_calls == 1 && sf_stop_saw_slot >= 0, "dm_sf_stop_all invokes stop while slot is live");
+    CHECK(sf_close_calls == 0 && sf_teardown_calls == 0, "dm_sf_stop_all skips close and teardown");
+    CHECK(sf_slot(sf_lifecycle_handle) >= 0 && sf_slot(a) >= 0, "dm_sf_stop_all leaves session slots intact");
+    CHECK(request(a, m, 100) == RES_OK && (m[8] & 0xff) == 3, "dm_sf_stop_all preserves nsd env before park");
+
+    dm_sf_teardown();
+    CHECK(sf_teardown_calls == 1 && sf_close_calls == 0, "dm_sf_teardown invokes teardown and never close");
+    CHECK(sf_slot(sf_lifecycle_handle) < 0 && sf_slot(a) < 0, "dm_sf_teardown clears all slots");
+
+    uint32_t a2 = 0;
+    CHECK(h_sf_Connect(&a2, "nsd:a") == RES_OK && a2, "nsd:a reconnect after teardown");
+    CHECK(request(a2, m, 100) == RES_OK && (m[8] & 0xff) == 1, "dm_sf_teardown resets g_nsd_env to default");
+    h_sf_Close(a2);
+}
 int main(void) {
     uint32_t m[0x40], h = 0;
     CHECK(h_sf_Connect(&h, "olsc:u") == RES_OK && h, "olsc:u is served");
@@ -120,6 +154,7 @@ int main(void) {
     CHECK(request(dup, m, 4) == RES_OK && m[6] == RES_OK, "finalizing the camera library: success");
     h_sf_Close(dup); h_sf_Close(cam); h_sf_Close(h);
     check_nsd();
+    check_two_phase_teardown();
     printf("t_sf: %d checks, %d failed\n", checks, fails);
     return fails != 0;
 }

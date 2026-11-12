@@ -40,10 +40,61 @@ void dm_host_shutdown_then(const char *why, void (*then)(void *), void *arg) {
     exit_end(then, arg);
 }
 void dm_host_shutdown(const char *why) { dm_host_shutdown_then(why, NULL, NULL); }
+static dispatch_source_t g_term_src;
 void dm_term_install(void) {
     signal(SIGTERM, SIG_IGN);                       // do not take the default action: hand over to the GCD signal source to wrap up on an ordinary thread
-    static dispatch_source_t src;
-    src = dispatch_source_create(DISPATCH_SOURCE_TYPE_SIGNAL, SIGTERM, 0, dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0));
-    dispatch_source_set_event_handler(src, ^{ dm_host_shutdown("SIGTERM"); });
-    dispatch_resume(src);
+    if (g_term_src) { dispatch_source_cancel(g_term_src); g_term_src = NULL; }
+    g_term_src = dispatch_source_create(DISPATCH_SOURCE_TYPE_SIGNAL, SIGTERM, 0, dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0));
+    dispatch_source_set_event_handler(g_term_src, ^{ dm_host_shutdown("SIGTERM"); });
+    dispatch_resume(g_term_src);
+}
+void dm_vsync_stop_all(void);
+void dm_audio_stop_all(void);
+void dm_threads_park_all(void);
+void dm_guest_memory_release(int unmap_as);
+void dm_modules_teardown(void);
+__attribute__((weak)) void dm_audren_stop_all(void) {}
+__attribute__((weak)) void dm_audren_teardown_post(void) {}
+__attribute__((weak)) void dm_movie_stop_all(void) {}
+__attribute__((weak)) void dm_movie_teardown_post(void) {}
+__attribute__((weak)) void dm_save_sync_stop(void) {}
+__attribute__((weak)) void dm_haptics_apple_teardown(void) {}
+__attribute__((weak)) void dm_gfx_quit_begin(void) {}
+__attribute__((weak)) void dm_gfx_teardown(void) {}
+__attribute__((weak)) void dm_fs_teardown(void) {}
+__attribute__((weak)) void dm_ue_malloc_teardown(void) {}
+__attribute__((weak)) void dm_guest_clock_wake_teardown(void) {}
+__attribute__((weak)) void dm_sf_stop_all(void) {}
+__attribute__((weak)) void dm_sf_teardown(void) {}
+__attribute__((weak)) void dm_net_teardown(void) {}
+__attribute__((weak)) void dm_sdk16_teardown(void) {}
+__attribute__((weak)) void dm_hid_touch_teardown(void) {}
+__attribute__((weak)) void dm_fpslock_teardown(void) {}
+void dm_host_teardown_for_shell(void) {
+    if (g_term_src) { dispatch_source_cancel(g_term_src); g_term_src = NULL; }
+    dm_cheats_exit();
+    dm_vsync_stop_all();
+    dm_sf_stop_all();
+    dm_audren_stop_all();
+    dm_audio_stop_all();
+    dm_movie_stop_all();
+    dm_save_sync_stop();
+    dm_haptics_apple_teardown();
+    dm_guest_clock_wake_teardown();
+    dm_gfx_quit_begin();
+    dm_gfx_suspend(1);
+    dm_threads_park_all();
+    dm_audren_teardown_post();
+    dm_sf_teardown();
+    dm_movie_teardown_post();
+    dm_gfx_teardown();
+    dm_net_teardown();
+    dm_sdk16_teardown();
+    dm_hid_touch_teardown();
+    dm_fpslock_teardown();
+    dm_fs_teardown();
+    dm_guest_memory_release(1);
+    dm_ue_malloc_teardown();
+    dm_modules_teardown();
+    LOG("host torn down for shell game switch");
 }

@@ -496,10 +496,12 @@ int nvn_ft_tracked(uint64_t serial) {   // registered and not resolved yet: its 
 // Each poll looks at no more than FT_POLL_BYTES of registered textures, going on where the last one stopped; any guest write starts another pass over the whole list.
 // Checking every texture at every submission cost TOTK 0.4 ms of submit CPU per frame on the Mac; this way a texture is picked up a few submissions later at most
 enum { FT_POLL_BYTES = 128 << 20 };
+static struct { tex_t t; size_t at; int how; } *g_ft_hit;
+static size_t g_ft_chit;
 void nvn_ft_poll(void) {
     if (!dm_prof()->tex_dirty_upload) return;
     static uint64_t gen; static size_t cur, left;
-    static struct { tex_t t; size_t at; int how; } *hit; static size_t chit; size_t nhit = 0;
+    size_t nhit = 0;
     uint64_t now = nvn_dirty_now(), scanned = 0;
     pthread_mutex_lock(&g_ft_mu);
     if (now != gen) { gen = now; left = g_nft; }   // guest memory changed: every entry gets one more look
@@ -507,33 +509,33 @@ void nvn_ft_poll(void) {
         if (cur >= g_nft) cur = 0;
         scanned += g_ft[cur].size; left--;
         if (ft_written(&g_ft[cur])) {   // writes beside it only (its edge pages, its bytes there unchanged) restamp it and are no hit
-            if (nhit == chit && !(hit = realloc(hit, (chit = chit ? 2 * chit : 64) * sizeof *hit))) die("nvn_ft_poll allocation failed");
-            hit[nhit].t = g_ft[cur].t; hit[nhit++].at = cur;
+            if (nhit == g_ft_chit && !(g_ft_hit = realloc(g_ft_hit, (g_ft_chit = g_ft_chit ? 2 * g_ft_chit : 64) * sizeof *g_ft_hit))) die("nvn_ft_poll allocation failed");
+            g_ft_hit[nhit].t = g_ft[cur].t; g_ft_hit[nhit++].at = cur;
         }
         cur++;
     }
     pthread_mutex_unlock(&g_ft_mu);
     if (!nhit) return;
     uint64_t st = nvn_dirty_now();
-    for (size_t i = 0; i < nhit; i++) nvn_dirty_protect(hit[i].t.mem, hit[i].t.L.size);
+    for (size_t i = 0; i < nhit; i++) nvn_dirty_protect(g_ft_hit[i].t.mem, g_ft_hit[i].t.L.size);
     static uint64_t up, kept;
     for (size_t i = 0; i < nhit; i++) {   // outside g_ft_mu: the question takes the serial table's and the storage spans' locks
-        const tex_t *t = &hit[i].t;
-        hit[i].how = mtl_tex_cpu_rewritten(t);
-        if (hit[i].how == MTL_REWRITE_UPLOADED && ++up <= 4)
+        const tex_t *t = &g_ft_hit[i].t;
+        g_ft_hit[i].how = mtl_tex_cpu_rewritten(t);
+        if (g_ft_hit[i].how == MTL_REWRITE_UPLOADED && ++up <= 4)
             LOG("[nvn] registered texture written by the CPU after its first use: uploaded from its storage (ser=%llu %ux%ux%u format %#x levels %u, %llu bytes; %llu so far)",
                 (unsigned long long)t->serial, t->d.width, t->d.height, t->d.depth, t->d.format, t->d.levels, (unsigned long long)t->L.size, (unsigned long long)up);
-        if (hit[i].how == MTL_REWRITE_GPU_NOW && ++kept <= 4)
+        if (g_ft_hit[i].how == MTL_REWRITE_GPU_NOW && ++kept <= 4)
             LOG("[nvn] registered texture written by the CPU after its first use, left to the GPU until the CPU rewrites it (the GPU wrote its storage after the CPU): ser=%llu %ux%ux%u format %#x levels %u, %llu bytes (%llu so far, %llu uploaded)",
                 (unsigned long long)t->serial, t->d.width, t->d.height, t->d.depth, t->d.format, t->d.levels, (unsigned long long)t->L.size, (unsigned long long)kept, (unsigned long long)up);
     }
     pthread_mutex_lock(&g_ft_mu);
     for (size_t i = 0; i < nhit; i++) {   // where the scan saw it, unless an entry was removed meanwhile (a removal moves the last entry into its place)
-        size_t j = hit[i].at;
-        if (j >= g_nft || g_ft[j].t.serial != hit[i].t.serial)
-            for (j = 0; j < g_nft && g_ft[j].t.serial != hit[i].t.serial; j++) {}
+        size_t j = g_ft_hit[i].at;
+        if (j >= g_nft || g_ft[j].t.serial != g_ft_hit[i].t.serial)
+            for (j = 0; j < g_nft && g_ft[j].t.serial != g_ft_hit[i].t.serial; j++) {}
         if (j == g_nft) continue;
-        if (hit[i].how == MTL_REWRITE_GPU_NOW) { g_ft[j].stamp = st; ft_edges_take(&g_ft[j]); }   // its edges as they are now, read after st's protection
+        if (g_ft_hit[i].how == MTL_REWRITE_GPU_NOW) { g_ft[j].stamp = st; ft_edges_take(&g_ft[j]); }   // its edges as they are now, read after st's protection
         else g_ft[j] = g_ft[--g_nft];
     }
     pthread_mutex_unlock(&g_ft_mu);
@@ -1776,7 +1778,25 @@ static pthread_mutex_t g_susp_mu = PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t g_susp_cv = PTHREAD_COND_INITIALIZER;
 static int g_susp, g_inflight_api;
 __thread _Atomic int dm_host_work;   // see dm.h (defined here: the graphics unit tests compile this file but not hle_thread.c)
-static void gfx_enter(void) { pthread_mutex_lock(&g_susp_mu); while (g_susp) pthread_cond_wait(&g_susp_cv, &g_susp_mu); g_inflight_api++; pthread_mutex_unlock(&g_susp_mu); dm_host_work++; }
+void dm_vk_wake_teardown(void);
+static void nq_wake_teardown(void);
+void dm_gfx_wake_teardown(void) {
+    pthread_mutex_lock(&g_susp_mu);
+    pthread_cond_broadcast(&g_susp_cv);
+    pthread_mutex_unlock(&g_susp_mu);
+    nq_wake_teardown();
+    dm_vk_wake_teardown();
+}
+static void gfx_enter(void) {
+    pthread_mutex_lock(&g_susp_mu);
+    while (g_susp && !dm_teardown_is_parking())
+        pthread_cond_wait(&g_susp_cv, &g_susp_mu);
+    int parking = g_susp && dm_teardown_is_parking();
+    if (!parking) g_inflight_api++;
+    pthread_mutex_unlock(&g_susp_mu);
+    if (parking) dm_teardown_check_current_thread();
+    dm_host_work++;
+}
 static void gfx_leave(void) { dm_host_work--; pthread_mutex_lock(&g_susp_mu); g_inflight_api--; pthread_cond_broadcast(&g_susp_cv); pthread_mutex_unlock(&g_susp_mu); }
 void dm_gfx_enter(void) { gfx_enter(); }   // the same gate for the Vulkan layer's submits and presents (dm/gfx/vk)
 void dm_gfx_leave(void) { gfx_leave(); }
@@ -1802,6 +1822,10 @@ _Static_assert(DM_QUIT_ARCH_MS == MTL_QUIT_ARCH_MS, "a graceful exit gives the p
 // comes before the gate: a second submission waiting for it must not count as in flight, or the suspend waits for it while the first waits to enter the closed gate holding the lock
 #include "nvn_queue.inc"
 NVN(nvnQueueSubmitCommands, void, NVNqueue *q, int n, const NVNcommandHandle *h) {
+    if (dm_teardown_is_parking()) {
+        dm_teardown_check_current_thread();
+        return;
+    }
     ((queue_t *)q)->submits++;
     nvn_queue_submit((queue_t *)q,n,(const uint64_t *)h);
 }
@@ -2326,7 +2350,7 @@ __attribute__((weak)) void dm_fps_lock_tick(void) {}   // hle_fpslock.c: engine 
 static int g_engine_stub = 1;   // the weak dm_fps_lock_engine's answer, for graphics unit tests (t_nvn sets it)
 __attribute__((weak)) int dm_fps_lock_engine(void) { return g_engine_stub; }   // hle_fpslock.c: the host writes fps_target into an engine limiter of this main
 __attribute__((weak)) void dm_ue_cvar_tick(void) {}   // hle_uecvar.c: Unreal's texture streaming pool (profile ue_texture_pool)
-__attribute__((weak)) int dm_movie_hz(void) { return 0; }   // hle_movie.c: the picture rate of the movie playing, 0 when none; graphics unit tests have no movie decoder
+int dm_movie_hz(void);   // hle_movie.c: the picture rate of the movie playing, 0 when none; graphics unit tests have no movie decoder
 // Thermal cap (iOS): while the device is thermally serious or worse (NSProcessInfo thermalState >= 2) the frame step holds 30 fps, and it goes back to the cap after the device
 // has been fair or better for THERMAL_CALM_NS, so it does not flap. At "serious" iOS caps the GPU clock to about a third: Breath of the Wild's vistas (about 3,000 G-buffer draws)
 // then took 17-26 ms a frame and dropped a frame in most windows; a steady 30 instead also lets the device cool. DM_THERMAL_CAP=0 turns it off; the Mac reports no thermal state
@@ -3813,3 +3837,71 @@ int nvn_host_signal_sync(void *nvnsync) {
     o->fence = 0; o->fenced = 1; return 0;
 }
 NVN(nvnTextureFlushTexels, void, const NVNtexture *t, const NVNtextureView *v, const NVNcopyRegion *r) { (void)t; (void)v; (void)r; }   // unified memory + dirty page tracking: nothing to flush
+
+static void pk_free_cb(const void *key, const void *value, void *context) {
+    (void)key; (void)context;
+    free((void *)value);
+}
+
+void nvn_hle_teardown(void) {
+    nq_teardown();
+    pthread_mutex_lock(&g_vp_mu);
+    for (int i = 0; i < g_nvp; i++) {
+        struct vpool *v = g_vp[i];
+        if (!v) continue;
+        if (v->base && v->len) munmap(v->base, v->len);
+        for (uint64_t l = 0; l < (v->size + (2u << 20) - 1) >> 21; l++) free(v->pt[l]);
+        free(v->pt);
+        free(v->log);
+        free(v);
+    }
+    free(g_vp); g_vp = NULL; g_nvp = g_cvp = 0;
+    memset(g_vnote, 0, sizeof g_vnote);
+    pthread_mutex_unlock(&g_vp_mu);
+
+    pthread_mutex_lock(&g_hostseg_mu);
+    for (int i = 0; i < g_nhostseg; i++) free(g_hostseg[i].mem);
+    free(g_hostseg); g_hostseg = NULL; g_nhostseg = g_caphostseg = 0; g_hostseg_bytes = 0;
+    atomic_store(&g_hostseg_held, 0);
+    pthread_mutex_unlock(&g_hostseg_mu);
+
+    pthread_mutex_lock(&g_ft_mu);
+    free(g_ft); g_ft = NULL; g_nft = g_cft = 0;
+    free(g_ft_hit); g_ft_hit = NULL; g_ft_chit = 0;
+    pthread_mutex_unlock(&g_ft_mu);
+
+    pthread_mutex_lock(&g_fl_mu);
+    free(g_fl); g_fl = NULL; g_nfl = g_cfl = 0;
+    pthread_mutex_unlock(&g_fl_mu);
+
+    pthread_mutex_lock(&g_pk_mu);
+    if (g_pk) {
+        CFDictionaryApplyFunction(g_pk, pk_free_cb, NULL);
+        CFRelease(g_pk);
+        g_pk = NULL;
+    }
+    pthread_mutex_unlock(&g_pk_mu);
+
+    pthread_mutex_lock(&g_dpool_mu);
+    memset(g_tpb, 0, sizeof g_tpb);
+    memset(g_spb, 0, sizeof g_spb);
+    g_ntpb = g_nspb = g_tnext = g_snext = g_tend = g_send = 0;
+    pthread_mutex_unlock(&g_dpool_mu);
+
+    pthread_mutex_lock(&g_rt_mu);
+    memset(g_rtt, 0, sizeof g_rtt);
+    atomic_store(&g_rtt_n, 0);
+    atomic_store(&g_rt_frame_ns, 0);
+    pthread_mutex_unlock(&g_rt_mu);
+
+    atomic_store(&g_screen_at, 0);
+    g_fs_drain = g_fs_drain_late = 0;
+
+    pthread_mutex_lock(&g_susp_mu);
+    g_susp = 0;
+    g_inflight_api = 0;
+    pthread_cond_broadcast(&g_susp_cv);
+    pthread_mutex_unlock(&g_susp_mu);
+
+    nvn_dirty_teardown();
+}

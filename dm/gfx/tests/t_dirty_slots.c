@@ -118,7 +118,24 @@ int main(void) {
     nvn_dirty_remove_range(pb);
     EXPECT("A still tracked after destroying B (ranges keyed by pool start)", 1, nvn_dirty_tracked(pa, na));
     EXPECT("B no longer tracked after destroying B", 0, nvn_dirty_tracked(pb, tex));
-    nvn_dirty_remove_range(pa);
+    nvn_dirty_protect(pa, na);
+    nvn_dirty_open(pa, na);
+    pa[0] = 7;
+    nvn_dirty_close();
+    uint64_t opened = 0, open_changed = 0;
+    nvn_dirty_open_stats(&opened, &open_changed);
+    EXPECT("open stats record opened page before teardown", 1, opened > 0 && open_changed > 0);
+    nvn_dirty_teardown();
+    nvn_dirty_open_stats(&opened, &open_changed);
+    EXPECT("open stats reset after nvn_dirty_teardown", 0, opened | open_changed);
+    EXPECT("A no longer tracked after nvn_dirty_teardown", 0, nvn_dirty_tracked(pa, na));
+    nvn_dirty_add_range(pa, na);
+    EXPECT("A tracked again in a second session after teardown", 1, nvn_dirty_tracked(pa, na));
+    nvn_dirty_protect(pa, na);
+    stamp = nvn_dirty_now();
+    pa[0] = 9;
+    EXPECT("write to A in second session after teardown is dirty", 1, nvn_dirty_since(pa, na, stamp));
+    nvn_dirty_teardown();
     munmap(blk, 4 * pg);
 
     // Written pages but those holding a byte of the host's own write (nvn_dirty_since_except: a GPU copy's bytes the host wrote into a texture's storage, nvn_mtl.m pkg_copy_absorb)

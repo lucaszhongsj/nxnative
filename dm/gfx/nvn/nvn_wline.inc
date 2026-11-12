@@ -86,3 +86,10 @@ static void wl_encode(id<MTLRenderCommandEncoder> en_) {
     g_wl.rect = g_pass.samples > 1 && S.ms.enable; g_wl.cpu->rect = (uint32_t)g_wl.rect;
     enc_r_vbuf(en, 15, g_wl.block); enc_r_draw_instanced(en, MTLPrimitiveTypeTriangle, 0, g_wl.count, g_wl.instances, (uint32_t)g_draw_binst);
 }
+static void wl_teardown(void) {
+    nvn_hm_clear(&g_pso_wl, hm_rel);
+    nvn_hm_clear(&g_pso_wl_fail, hm_rel);
+    memset(&g_wl, 0, sizeof g_wl);
+    g_wl_draws = 0;
+    g_wl_segments = 0;
+}

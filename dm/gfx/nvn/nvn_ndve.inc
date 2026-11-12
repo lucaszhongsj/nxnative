@@ -67,7 +67,7 @@ static int ndve_index(NvShader *cs, int from) { for (int i = from; i < NDVE_N; i
 // Pipelines and tensors, made once in the background; the game's dispatches run until they are ready
 static void ndve_build(void) {
     int z = 0; if (!atomic_compare_exchange_strong(&g_nd.state, &z, 1)) return;
-    dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{ @autoreleasepool {
+    bg_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{ @autoreleasepool {
         if (!ndve_offsets()) { MLOG("[RED] NDVE engine: the layer table does not add up to the model's weights; the game's network runs"); g_nd.state = -1; return; }
         NSError *e = nil; id<MTLLibrary> lib = host_lib("ndve_engine", &e);
         if (!lib) { MLOG("[RED] NDVE engine: no library (%s); the game's network runs", e.localizedDescription.UTF8String); g_nd.state = -1; return; }
@@ -252,4 +252,7 @@ static int ndve_engine_dispatch(NvShader *cs, const p_dispatch *dp) {
     g_nd.pos = 13;   // the resampler next
     if (!g_nd.frames++) MLOG("NDVE engine: first movie frame by the engine (%llu dispatches skipped)", (unsigned long long)g_nd.skipped);
     (void)dp; return !chk;
+}
+static void ndve_teardown(void) {
+    g_nd = (typeof(g_nd)){0};
 }

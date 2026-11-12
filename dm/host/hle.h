@@ -97,6 +97,7 @@ typedef struct {
 } sf_req;
 typedef Result (*sf_answer)(sf_req *r);
 uint32_t sf_session(const char *name, sf_answer answer, void *ctx, void (*close)(void *ctx));   // a new host session (its handle), for a service to move to its client
+uint32_t sf_session_lifecycle(const char *name, sf_answer answer, void *ctx, void (*close)(void *ctx), void (*stop)(void *ctx), void (*teardown)(void *ctx));
 // A service the host serves in its own file: SF_SERVICE("name", answer) registers it (the __DATA,swsf section), and connecting to that name gives a session answered by it
 typedef struct { const char *name; sf_answer answer; } sf_service_ent;
 #define SF_SERVICE(svc, fn) __attribute__((used, section("__DATA,swsf"))) static const sf_service_ent sf_service_##fn = {svc, fn}

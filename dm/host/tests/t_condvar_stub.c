@@ -6,6 +6,8 @@ void crash_thread_init(void) {}
 void guest_thread_init(void) {}
 void guest_thread_set_id(uint64_t id) { (void)id; }
 void guest_gate_stack(int own_stack) { (void)own_stack; }
+uint64_t guest_gate_top_self(void) { return 0; }
+__attribute__((weak)) void dm_oe_wake_teardown(void) {}
 // The notification scheduler test supplies a C entry for real thread SVCs.
 #ifndef DM_TEST_THREAD_ENTER
 void dm_thread_enter(uint64_t entry, uint64_t arg, uint64_t sp) { (void)entry; (void)arg; (void)sp; abort(); }

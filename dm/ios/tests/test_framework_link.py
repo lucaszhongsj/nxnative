@@ -145,9 +145,17 @@ class FrameworkLinkTests(unittest.TestCase):
                    DM_SHOW_FPS='NO', DM_LANG='en-US')
         build_cfg = run(sys.executable, REPO / 'dm/ios/tools/gen_build.py', REPO / 'dm/host', gen, env=env)
         self.assertEqual(build_cfg.returncode, 0, fail_tail(build_cfg))
-        (gen / 'dm.xcconfig').write_text(build_cfg.stdout + f'OTHER_LDFLAGS = $(inherited) $(DM_FRAMEWORKS) {flags.stdout.strip()}\n')
+        fw_name = f'DmGame{GAME}'
+        ns_gen = run(sys.executable, REPO / 'dm/ios/tools/gen_objc_namespace.py', '--print-tag', '--game', GAME,
+                     '--framework-name', fw_name, '--header', gen / 'framework/objc_namespace.h',
+                     '--exports', gen / 'framework/exported_symbols.txt')
+        self.assertEqual(ns_gen.returncode, 0, fail_tail(ns_gen))
+        ns_tag = ns_gen.stdout.strip()
+        (gen / 'dm.xcconfig').write_text(build_cfg.stdout +
+                                         f'DM_NS_TAG = {ns_tag}\n' +
+                                         f'OTHER_LDFLAGS = $(inherited) $(DM_FRAMEWORKS) {flags.stdout.strip()}\n')
         (gen / 'framework.xcconfig').write_text(f'OTHER_LDFLAGS = $(inherited) {flags.stdout.strip()}\n')
-        (gen / 'framework/dm').mkdir(parents=True)
+        (gen / 'framework/dm').mkdir(parents=True, exist_ok=True)
         for name in ('main.fixups.tsv', 'nrotest.fixups.tsv', 'nro.tsv'):
             shutil.copyfile(patched / name, gen / 'dm' / name)
             shutil.copyfile(patched / name, gen / 'framework/dm' / name)
@@ -157,7 +165,6 @@ class FrameworkLinkTests(unittest.TestCase):
         self.assertEqual(profile.returncode, 0, fail_tail(profile))
         chain = next(line.split('"')[1] for line in (REPO / 'dm/gfx/nvn/dmsh_chain.h').read_text().splitlines()
                      if line.startswith('#define DMSH_CHAIN "'))
-        fw_name = f'DmGame{GAME}'
         manifest = run(sys.executable, REPO / 'dm/ios/tools/gen_manifest.py', gen / 'framework/game.manifest.json', '--game', GAME,
                        '--name', 'Fixture Game', '--display-version', '1.0', '--package-version', 'v0', '--modules', 'main',
                        '--nro-table', patched / 'nro.tsv', '--chain', 'b-' + chain, '--romfs-marker', 'marker',
@@ -180,9 +187,31 @@ class FrameworkLinkTests(unittest.TestCase):
         for pair in [('__TEXT', '__dmmainx0'), ('__DMmainW', '__img'), ('__TEXT', '__dmmainx1'),
                      ('__DATA', '__dm_nro_tab'), ('__DATA', 'swhle'), ('__DATA', 'swforce'), ('__DATA', 'swnvn')]:
             self.assertIn(pair, got, f'{pair[0]},{pair[1]} is not a section of the shell framework')
-        exported = run('nm', '-gU', binary).stdout
-        for sym in ('_dmgame_image_marker', '_dm_glue_version', '_dm_glue_start_game', '_dm_glue_present_game', '_dm_glue_focus_event', '_dm_game_menu'):
-            self.assertIn(sym, exported, f'{sym} is not exported by the shell framework')
+        exported_lines = [ln.split()[-1] for ln in run('nm', '-gU', binary).stdout.splitlines() if ln.strip()]
+        expected_exports = {
+            '_dmgame_image_marker',
+            '_dm_glue_version',
+            '_dm_glue_start_game',
+            '_dm_glue_present_game',
+            '_dm_glue_focus_event',
+        }
+        self.assertEqual(set(exported_lines), expected_exports,
+                         f'exported global symbols must match the shell glue allowlist, got {exported_lines}')
+        defined = run('nm', binary).stdout
+        for sym in ('_dm_game_menu', '_dm_host_teardown_for_shell', '_dm_guest_memory_release',
+                    '_dm_threads_park_all', '_dm_modules_teardown', '_dm_gamepad_teardown'):
+            self.assertIn(sym, defined, f'{sym} is not linked into the shell framework')
+        defined_objc = [
+            ln.split()[-1] for ln in defined.splitlines()
+            if ' _OBJC_CLASS_$_' in ln and ' U _OBJC_CLASS_$_' not in ln
+        ]
+        self.assertTrue(defined_objc, 'expected defined Objective-C classes in DmShellGame')
+        for cls_sym in defined_objc:
+            cls_name = cls_sym.split('_OBJC_CLASS_$_', 1)[1]
+            self.assertTrue(
+                cls_name.startswith(f'DmFw_{ns_tag}_') or f'DmGame_{ns_tag}' in cls_name,
+                f'unnamespaced Objective-C or Swift class in DmShellGame: {cls_name}',
+            )
         undef = run('nm', '-u', binary).stdout
         self.assertNotIn('__mh_execute_header', undef, 'the framework must read its own image header (__dso_handle), not the executable\'s')
 

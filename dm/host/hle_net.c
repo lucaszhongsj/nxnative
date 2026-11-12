@@ -89,10 +89,18 @@ int dm_sk_close(int fd) {
     g_efd[fd].head = g_efd[fd].tail = NULL; g_efd[fd].used = 0; pthread_cond_broadcast(&g_efd_c);
     pthread_mutex_unlock(&g_efd_m); return 0;
 }
+__attribute__((weak)) int dm_teardown_is_parking(void) { return 0; }
+__attribute__((weak)) void dm_teardown_check_current_thread(void) {}
+void dm_net_wake_teardown(void) {
+    pthread_mutex_lock(&g_efd_m);
+    pthread_cond_broadcast(&g_efd_c);
+    pthread_mutex_unlock(&g_efd_m);
+}
 static int efd_read(int fd, uint64_t *out) {
     dm_host_mutex_lock(&g_efd_m); int r = -1;
     uint64_t gen = efd_used(fd) ? g_efd[fd].generation : 0;
     for (;;) {
+        if (dm_teardown_is_parking()) { pthread_mutex_unlock(&g_efd_m); dm_teardown_check_current_thread(); return -1; }
         if (!efd_used(fd) || g_efd[fd].generation != gen) { t_skerr = SK_EBADF; break; }
         uint64_t *c = &g_efd[fd].count; int f = g_efd[fd].flags;
         if (*c) { if (f & 1) { *out = 1; *c -= 1; } else { *out = *c; *c = 0; } r = 0; break; }
@@ -310,6 +318,7 @@ int dm_sk_poll(void *fds, uint64_t n, int ms) {
     // Periodically return from an endless wait, as before, so guest garbage collection/shutdown can observe a thread outside the host hook.
     int64_t limit = (ms < 0 ? 100 : (int64_t)ms) * 1000000; uint64_t start = guest_ns(); int ready;
     while (!(ready = efd_ready(p, n, open, generation))) {
+        if (dm_teardown_is_parking()) { pthread_mutex_unlock(&g_efd_m); dm_teardown_check_current_thread(); return 0; }
         int64_t left = limit - (int64_t)(guest_ns() - start); if (left <= 0) break;
         dm_guest_cond_wait_ns(&g_efd_c, &g_efd_m, dm_detclock_enabled() && left > 1000000 ? 1000000 : left);
     }
@@ -432,3 +441,16 @@ SSC("nnsslConnectionSetNextAlpnProto", h_nssl_SetAlpn) SSC("nnsslConnectionSetOp
 SSC("nnsslConnectionSetSessionCacheMode", h_nssl_SetCache) SSC("nnsslConnectionSetSocketDescriptor", h_nssl_SetSock)
 SSC("nnsslConnectionSetVerifyOption", h_nssl_SetVerify) SSC("nnsslConnectionWrite", h_nssl_Write)
 SSC("nnsslContextDestroy", h_nssl_CtxDestroy) SSC("nnsslContextGetContextId", h_nssl_CtxGetId)
+
+void dm_net_teardown(void) {
+    pthread_mutex_lock(&g_efd_m);
+    for (int i = 0; i < EFD_MAX; i++) {
+        sk_packet *p = g_efd[i].head;
+        while (p) { sk_packet *next = p->next; free(p); p = next; }
+    }
+    memset(g_efd, 0, sizeof g_efd);
+    g_sk_generation = 0;
+    g_sk_ephemeral = 49152;
+    pthread_cond_broadcast(&g_efd_c);
+    pthread_mutex_unlock(&g_efd_m);
+}

@@ -1066,7 +1066,7 @@ static void *cheat_tick_thread(void *arg) {
 // Started with the first file that has a cheat in it (load_all, at launch or on "Reload cheats"), never for a game without
 // one: a run without cheats keeps no thread waking 60 times a second. It runs from then on, standing down while the game
 // presents; a reload that loses the file leaves g_active off and the passes return at once
-static int g_tick_started;
+static int g_tick_started __attribute__((section("__DATA,__dm_keep")));
 static void tick_start(void) {
     if (g_tick_started) return;
     g_tick_started = 1;
@@ -1094,7 +1094,8 @@ static void flag_file(char *out, size_t n, const char *what) { snprintf(out, n, 
 // a clean exit, so nothing is lost or read stale. The queue's blocks take no lock of this file: a drain under g_lock
 // cannot deadlock
 static dispatch_queue_t files_queue(void) {
-    static dispatch_queue_t q; static dispatch_once_t once;
+    static dispatch_queue_t q __attribute__((section("__DATA,__dm_keep")));
+    static dispatch_once_t once __attribute__((section("__DATA,__dm_keep")));
     dispatch_once(&once, ^{ q = dispatch_queue_create("nxnative.cheats.files", DISPATCH_QUEUE_SERIAL); });
     return q;
 }

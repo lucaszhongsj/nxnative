@@ -216,3 +216,16 @@ static void tf_geometry(NvShader *reader,uint64_t indices,uint64_t args,uint32_t
     for(int b=0;b<4;b++)if(reader->tf_stride[b])enc_r_vbuf(en,TF_SLOT+b,dst[b]);
     enc_r_draw_indirect(en,MTLPrimitiveTypePoint,job+16);enc_r_end(en);tf_note(reader);
 }
+static void tf_teardown(void) {
+    g_tf_enc = nil;
+    g_tf_state = nil;
+    g_tf_prepare = nil;
+    memset(g_tf_cpu, 0, sizeof g_tf_cpu);
+    g_tf_known = 0;
+    memset(g_tf_w, 0, sizeof g_tf_w);
+    memset(g_tf_r, 0, sizeof g_tf_r);
+    g_tf_nw = g_tf_nr = g_tf_wild = g_tf_bar = 0;
+    g_tf_ncpu = g_tf_ngpu = g_tf_npass = g_tf_nbar = 0;
+    memset(g_tf_save, 0, sizeof g_tf_save);
+    g_tf_nsave = 0;
+}

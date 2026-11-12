@@ -47,7 +47,7 @@ static uint64_t outputGeneration[DM_PLAYERS];
 static BOOL phoneSupported;
 #endif
 static float gain = 1;
-static pthread_mutex_t routeLock = PTHREAD_MUTEX_INITIALIZER;
+static pthread_mutex_t routeLock __attribute__((section("__DATA,__dm_keep"))) = PTHREAD_MUTEX_INITIALIZER;
 static unsigned errors;
 static NSTimeInterval now(void) {
     struct timespec t; clock_gettime(CLOCK_MONOTONIC, &t);
@@ -429,7 +429,20 @@ static void configure(int p, GCController *controller, GCHapticsLocality localit
                 channels[p] = [NSMutableArray new];
                 GCHapticsLocality both = [localities containsObject:GCHapticsLocalityHandles] ? GCHapticsLocalityHandles : GCHapticsLocalityDefault;
                 add_engine(p, -1, @"controller handles", ^CHHapticEngine *(NSError **e) { (void)e; return [h createEngineWithLocality:both]; });
-                channels[p].lastObject.simple = YES;
+                DmRumbleChannel *m = channels[p].lastObject;
+                m.simple = YES;
+                if (![both isEqualToString:GCHapticsLocalityDefault]) {
+                    __weak NSArray *merged = channels[p];
+                    m.fallback = ^(NSTimeInterval retryAfter) {
+                        if (!merged || channels[p] != merged) return;
+                        for (DmRumbleChannel *old in channels[p]) [old stop];
+                        channels[p] = [NSMutableArray new];
+                        default_controller(p, h, retryAfter);
+                        channels[p].lastObject.simple = YES;
+                        dm_haptics_route(p, 1);
+                        fprintf(stderr, "haptics: player %d retrying with the default controller locality\n", p + 1);
+                    };
+                }
                 dm_haptics_route(p, 1);
                 fprintf(stderr, "haptics: player %d plays both motors on one engine (%s)\n", p + 1, both.UTF8String);
             };
@@ -497,37 +510,86 @@ void dm_haptics_apple_focus(int active) { if(queue) suspend(DM_HAPTICS_UNFOCUSED
 void dm_haptics_apple_shutdown(void) {
     if (queue) suspend(DM_HAPTICS_INACTIVE, YES);
 }
+static int g_haptics_inited;
+static int g_haptics_atexit __attribute__((section("__DATA,__dm_keep")));
+static id g_haptics_obs[5];
+void dm_haptics_apple_teardown(void) {
+    NSNotificationCenter *nc = NSNotificationCenter.defaultCenter;
+    for (int i = 0; i < 5; i++) {
+        if (g_haptics_obs[i]) {
+            [nc removeObserver:g_haptics_obs[i]];
+            g_haptics_obs[i] = nil;
+        }
+    }
+    pthread_mutex_lock(&routeLock);
+    if (queue) {
+        void (^clean)(void) = ^{
+            for (int p = 0; p < DM_PLAYERS; p++) {
+                native_stop(p);
+                for (DmRumbleChannel *c in channels[p]) [c stop];
+                sink_silence(p);
+                sinks[p] = NULL;
+#if !TARGET_OS_IPHONE
+                ds4_release(p);
+#endif
+                channels[p] = nil;
+                nativeOutputs[p] = nil;
+            }
+        };
+        if (dispatch_get_specific(&queue)) clean();
+        else dispatch_sync(queue, clean);
+        for (int p = 0; p < DM_PLAYERS; p++) {
+            controllers[p] = nil;
+            controllerLocalities[p] = nil;
+            outputOwners[p] = nil;
+        }
+        queue = nil;
+    }
+    dm_haptics_init(NULL, 0);
+    gain = 1;
+    rumble_min = 0;
+    errors = 0;
+    g_haptics_inited = 0;
+    pthread_mutex_unlock(&routeLock);
+}
 void dm_haptics_apple_init(void) {
-    static dispatch_once_t once;
-    dispatch_once(&once, ^{
-        queue = dispatch_queue_create("dm.rumble", DISPATCH_QUEUE_SERIAL);
-        dispatch_queue_set_specific(queue, &queue, &queue, NULL);
-        const char *e = getenv("DM_RUMBLE_GAIN");
-        if (e) { float v = strtof(e, NULL); if (isfinite(v)) gain = fmaxf(0, fminf(3, v)); }
-        e = getenv("DM_RUMBLE_MIN");
-        if (e) { float v = strtof(e, NULL); if (isfinite(v)) rumble_min = fmaxf(0, fminf(0.9f, v)); }
-        e = getenv("DM_RUMBLE");
-        dm_haptics_init(apply, !e || atoi(e) != 0);
+    pthread_mutex_lock(&routeLock);
+    if (g_haptics_inited) {
+        pthread_mutex_unlock(&routeLock);
+        return;
+    }
+    g_haptics_inited = 1;
+    gain = 1;
+    rumble_min = 0;
+    errors = 0;
+    queue = dispatch_queue_create("dm.rumble", DISPATCH_QUEUE_SERIAL);
+    dispatch_queue_set_specific(queue, &queue, &queue, NULL);
+    const char *e = getenv("DM_RUMBLE_GAIN"); char *end = NULL;
+    if (e && *e) { float v = strtof(e, &end); if (end != e && !*end && isfinite(v)) gain = fmaxf(0, fminf(3, v)); }
+    e = getenv("DM_RUMBLE_MIN"); end = NULL;
+    if (e && *e) { float v = strtof(e, &end); if (end != e && !*end && isfinite(v)) rumble_min = fmaxf(0, fminf(0.9f, v)); }
+    e = getenv("DM_RUMBLE");
+    dm_haptics_init(apply, !e || atoi(e) != 0);
 #if TARGET_OS_IPHONE
-        phoneSupported = CHHapticEngine.capabilitiesForHardware.supportsHaptics;
+    phoneSupported = CHHapticEngine.capabilitiesForHardware.supportsHaptics;
 #endif
-        dispatch_sync(queue, ^{ configure(0, nil, nil); });
-        NSNotificationCenter *nc = NSNotificationCenter.defaultCenter;
+    dispatch_sync(queue, ^{ configure(0, nil, nil); });
+    NSNotificationCenter *nc = NSNotificationCenter.defaultCenter;
 #if TARGET_OS_IPHONE
-        [nc addObserverForName:UIApplicationWillResignActiveNotification object:nil queue:nil usingBlock:^(NSNotification *n) { (void)n; suspend(DM_HAPTICS_INACTIVE, YES); }];
-        [nc addObserverForName:UIApplicationDidBecomeActiveNotification object:nil queue:nil usingBlock:^(NSNotification *n) { (void)n; suspend(DM_HAPTICS_INACTIVE, NO); }];
-        [nc addObserverForName:UIApplicationWillTerminateNotification object:nil queue:nil usingBlock:^(NSNotification *n) { (void)n; dm_haptics_apple_shutdown(); }];
-        [nc addObserverForName:AVAudioSessionInterruptionNotification object:nil queue:nil usingBlock:^(NSNotification *n) {
-            suspend(DM_HAPTICS_INTERRUPTED, [n.userInfo[AVAudioSessionInterruptionTypeKey] unsignedIntegerValue] == AVAudioSessionInterruptionTypeBegan);
-        }];
-        [nc addObserverForName:AVAudioSessionRouteChangeNotification object:nil queue:nil usingBlock:^(NSNotification *n) {
-            (void)n; dm_haptics_clear(0);
-        }];
+    g_haptics_obs[0] = [nc addObserverForName:UIApplicationWillResignActiveNotification object:nil queue:nil usingBlock:^(NSNotification *n) { (void)n; suspend(DM_HAPTICS_INACTIVE, YES); }];
+    g_haptics_obs[1] = [nc addObserverForName:UIApplicationDidBecomeActiveNotification object:nil queue:nil usingBlock:^(NSNotification *n) { (void)n; suspend(DM_HAPTICS_INACTIVE, NO); }];
+    g_haptics_obs[2] = [nc addObserverForName:UIApplicationWillTerminateNotification object:nil queue:nil usingBlock:^(NSNotification *n) { (void)n; dm_haptics_apple_shutdown(); }];
+    g_haptics_obs[3] = [nc addObserverForName:AVAudioSessionInterruptionNotification object:nil queue:nil usingBlock:^(NSNotification *n) {
+        suspend(DM_HAPTICS_INTERRUPTED, [n.userInfo[AVAudioSessionInterruptionTypeKey] unsignedIntegerValue] == AVAudioSessionInterruptionTypeBegan);
+    }];
+    g_haptics_obs[4] = [nc addObserverForName:AVAudioSessionRouteChangeNotification object:nil queue:nil usingBlock:^(NSNotification *n) {
+        (void)n; dm_haptics_clear(0);
+    }];
 #else
-        [nc addObserverForName:NSApplicationWillResignActiveNotification object:nil queue:nil usingBlock:^(NSNotification *n) { (void)n; suspend(DM_HAPTICS_INACTIVE, YES); }];
-        [nc addObserverForName:NSApplicationDidBecomeActiveNotification object:nil queue:nil usingBlock:^(NSNotification *n) { (void)n; suspend(DM_HAPTICS_INACTIVE, NO); }];
-        [nc addObserverForName:NSApplicationWillTerminateNotification object:nil queue:nil usingBlock:^(NSNotification *n) { (void)n; dm_haptics_apple_shutdown(); }];
+    g_haptics_obs[0] = [nc addObserverForName:NSApplicationWillResignActiveNotification object:nil queue:nil usingBlock:^(NSNotification *n) { (void)n; suspend(DM_HAPTICS_INACTIVE, YES); }];
+    g_haptics_obs[1] = [nc addObserverForName:NSApplicationDidBecomeActiveNotification object:nil queue:nil usingBlock:^(NSNotification *n) { (void)n; suspend(DM_HAPTICS_INACTIVE, NO); }];
+    g_haptics_obs[2] = [nc addObserverForName:NSApplicationWillTerminateNotification object:nil queue:nil usingBlock:^(NSNotification *n) { (void)n; dm_haptics_apple_shutdown(); }];
 #endif
-        atexit(dm_haptics_apple_shutdown);
-    });
+    if (!g_haptics_atexit) { g_haptics_atexit = 1; atexit(dm_haptics_apple_shutdown); }
+    pthread_mutex_unlock(&routeLock);
 }

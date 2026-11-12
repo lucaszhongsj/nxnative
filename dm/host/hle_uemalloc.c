@@ -156,3 +156,12 @@ void dm_ue_malloc_install(void) {
         }
     }
 }
+
+void dm_ue_malloc_teardown(void) {
+    if (g_zone) {
+        malloc_destroy_zone(g_zone);
+        g_zone = NULL;
+    }
+    atomic_store(&g_used, 0);
+    atomic_store(&g_peak, 0);
+}

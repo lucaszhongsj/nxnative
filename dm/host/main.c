@@ -178,6 +178,8 @@ int main(int argc, char **argv) {
     if (atomic_load(&g_pre.started)) {
         pthread_join(g_pre.th, NULL);
         int same = argc == g_pre.argc; for (int i = 0; same && i < argc; i++) same = !strcmp(argv[i], g_pre.argv[i]);
+        for (int i = 0; i < g_pre.argc; i++) free(g_pre.argv[i]);
+        free(g_pre.argv); g_pre.argv = NULL; g_pre.argc = 0;
         if (!same) die("[RED] dm_host_preload_start arguments differ from main's");
         void crash_thread_init(void); crash_thread_init();   // The signal alternate stack is per thread: loading installed it on another thread, so add it for this thread
         LOG("host loading already finished early in the background (dm_host_preload_start)");

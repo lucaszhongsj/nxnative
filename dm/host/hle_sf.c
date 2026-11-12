@@ -15,8 +15,10 @@
 #define SF_H0 0xd0000u   // session handles: outside the kernel handle table (0x1000 + slot, 4096 slots, hle_thread.c)
 #define SF_MAX 64
 // A session: its service's answer (sf_req, hle.h; NULL: success with zeroed output, as for olsc:u), its own state, and what to do with that state when the session closes
-static struct { char name[16]; int used, domain; unsigned seen; sf_answer answer; void *ctx; void (*close)(void *); } g_sf[SF_MAX];
+static struct { char name[16]; int used, domain; unsigned seen; sf_answer answer; void *ctx; void (*close)(void *); void (*stop)(void *); void (*teardown)(void *); int stop_busy; } g_sf[SF_MAX];
 static pthread_mutex_t g_sf_mu = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t g_sf_cv = PTHREAD_COND_INITIALIZER;
+static int g_sf_trace = -1;
 // An AutoSelect output buffer (type 0x16) goes mapped (B) when larger than the pointer buffer (0 here) or in the receive list (C) beside an empty B: take the one with a size
 static void sf_out(const sf_req *r, unsigned i, uint8_t **p, uint64_t *size) {
     if (i < 4 && r->b[i].size) { *p = r->b[i].p; *size = r->b[i].size; }
@@ -33,16 +35,20 @@ static int sf_slot(uint32_t h) {
     unsigned i = h - SF_H0;
     return i < SF_MAX && g_sf[i].used ? (int)i : -1;
 }
-static uint32_t sf_new(const char *name, int domain, sf_answer answer, void *ctx, void (*close)(void *)) {
+static uint32_t sf_new_ex(const char *name, int domain, sf_answer answer, void *ctx, void (*close)(void *), void (*stop)(void *), void (*teardown)(void *)) {
     pthread_mutex_lock(&g_sf_mu);
-    unsigned i = 0; while (i < SF_MAX && g_sf[i].used) i++;
+    unsigned i = 0; while (i < SF_MAX && (g_sf[i].used || g_sf[i].stop_busy)) i++;
     if (i == SF_MAX) die("sf: more than %d host service sessions", SF_MAX);
     strlcpy(g_sf[i].name, name, sizeof g_sf[i].name); g_sf[i].used = 1; g_sf[i].domain = domain; g_sf[i].seen = 0; g_sf[i].answer = answer;
-    g_sf[i].ctx = ctx; g_sf[i].close = close;
+    g_sf[i].ctx = ctx; g_sf[i].close = close; g_sf[i].stop = stop; g_sf[i].teardown = teardown; g_sf[i].stop_busy = 0;
     pthread_mutex_unlock(&g_sf_mu);
     return SF_H0 + i;
 }
-uint32_t sf_session(const char *name, sf_answer answer, void *ctx, void (*close)(void *)) { return sf_new(name, 0, answer, ctx, close); }
+static uint32_t sf_new(const char *name, int domain, sf_answer answer, void *ctx, void (*close)(void *)) { return sf_new_ex(name, domain, answer, ctx, close, NULL, NULL); }
+uint32_t sf_session(const char *name, sf_answer answer, void *ctx, void (*close)(void *)) { return sf_new_ex(name, 0, answer, ctx, close, NULL, NULL); }
+uint32_t sf_session_lifecycle(const char *name, sf_answer answer, void *ctx, void (*close)(void *), void (*stop)(void *), void (*teardown)(void *)) {
+    return sf_new_ex(name, 0, answer, ctx, close, stop, teardown);
+}
 
 // The Switch 2's camera (a USB camera, for GameChat's video). nn::camera::sdk::CreateCameraContext asks the graphics system's user session (gsv) for a session to the camera service and
 // gives it to the caller as a UniqueNativeHandle (a 32-bit handle; SDK 22.2.0 sdk+0x2c42c0 writes it), with 0x3af3 when the SDK has no gsv session, which the host never opens. The game then
@@ -139,7 +145,13 @@ HLE_FORCE("_ZN2nn2sf4hipc20ConnectToHipcServiceEPNS_3svc6HandleEPKc", "connect t
 HLE_FORCE("_ZN2nn2sf4hipc24CloseClientSessionHandleENS_3svc6HandleE", "close a session (kernel handle) → the host session", void, h_sf_Close, uint32_t h) {
     int i = sf_slot(h);
     if (i < 0) { LOG("[RED] sf: CloseClientSessionHandle on %#x, not a host session", h); return; }
-    pthread_mutex_lock(&g_sf_mu); void (*close)(void *) = g_sf[i].close; void *ctx = g_sf[i].ctx; g_sf[i].used = 0; g_sf[i].close = NULL; g_sf[i].ctx = NULL; pthread_mutex_unlock(&g_sf_mu);
+    pthread_mutex_lock(&g_sf_mu);
+    if (!g_sf[i].used) { pthread_mutex_unlock(&g_sf_mu); return; }
+    g_sf[i].used = 0;
+    while (g_sf[i].stop_busy) pthread_cond_wait(&g_sf_cv, &g_sf_mu);
+    void (*close)(void *) = g_sf[i].close; void *ctx = g_sf[i].ctx;
+    g_sf[i].close = NULL; g_sf[i].stop = NULL; g_sf[i].teardown = NULL; g_sf[i].ctx = NULL;
+    pthread_mutex_unlock(&g_sf_mu);
     if (close) close(ctx);   // the session's own state ends with it (an audio renderer stops rendering)
 }
 // Control requests: the pointer buffer is the server's receive buffer for X descriptors (none: the host reads them in place), the domain conversion makes the session's object 1, a duplicate
@@ -192,8 +204,8 @@ HLE_FORCE("_ZN2nn2sf4hipc15SendSyncRequestENS_3svc6HandleEPvm", "send a request 
     size_t hin = cm + (dom ? 16 : 0);
     if (hin + 16 > size || data + ndw * 4 > size) { LOG("[RED] sf: %s: request of %u data words does not fit %llu bytes", g_sf[i].name, ndw, (unsigned long long)size); return 0xe401u; }
     uint32_t magic = *(uint32_t *)(base + hin), ver = *(uint32_t *)(base + hin + 4), cmd = *(uint32_t *)(base + hin + 8);
-    static int trace = -1; if (trace < 0) trace = getenv("DM_SF_TRACE") && atoi(getenv("DM_SF_TRACE"));
-    if (trace) { char hx[3 * 0x80 + 1] = ""; for (unsigned k = 0; k < 0x80 && k < size; k++) snprintf(hx + 3 * k, 4, "%02x ", base[k]); LOG("sf: %s request: %s", g_sf[i].name, hx); }
+    if (g_sf_trace < 0) g_sf_trace = getenv("DM_SF_TRACE") && atoi(getenv("DM_SF_TRACE"));
+    if (g_sf_trace) { char hx[3 * 0x80 + 1] = ""; for (unsigned k = 0; k < 0x80 && k < size; k++) snprintf(hx + 3 * k, 4, "%02x ", base[k]); LOG("sf: %s request: %s", g_sf[i].name, hx); }
     if (type == 2) return 0xf601u;   // HIPC Close: the session ends, and the kernel answers the closed-session result (SDK 21's client sends one for a session it is done with: Star Fox's camera session)
     if (type != 4 && type != 6) { LOG("[RED] sf: %s: HIPC message type %u not served", g_sf[i].name, type); return 0xe401u; }
     if (dtype == 2) { memset(base, 0, 16); return RES_OK; }   // a domain object closed: nothing to answer
@@ -211,7 +223,7 @@ HLE_FORCE("_ZN2nn2sf4hipc15SendSyncRequestENS_3svc6HandleEPvm", "send a request 
     }
     Result res = g_sf[i].answer ? g_sf[i].answer(&q) : RES_OK;
     if (q.out_move && dom) { LOG("[RED] sf: %s: command %u returns an object in a domain, which the host does not serve", g_sf[i].name, q.cmd); q.out_move = 0; res = 0xe401u; }
-    if (first || trace) LOG("sf: %s object %u command %u (%u data words in): %s%s%s", g_sf[i].name, obj, cmd, ndw, res ? "fails" : g_sf[i].answer ? "success" : "success, zeroed output",
+    if (first || g_sf_trace) LOG("sf: %s object %u command %u (%u data words in): %s%s%s", g_sf[i].name, obj, cmd, ndw, res ? "fails" : g_sf[i].answer ? "success" : "success, zeroed output",
                             q.out_copy ? ", a copied handle" : "", q.out_move ? ", a moved session" : "");
     // The response: no descriptors. The special header (its handle counts) and the handles come right after the HIPC header, when there are any; the CMIF part starts at the next
     // 16-byte boundary (+0x10 with none or one handle), the domain's out header first in a domain. Everything after it up to the buffer's end reads as zero
@@ -227,4 +239,40 @@ HLE_FORCE("_ZN2nn2sf4hipc15SendSyncRequestENS_3svc6HandleEPvm", "send a request 
         else memcpy(base + out + 16, q.out, q.out_len);   // the output data after SFCO
     }
     return RES_OK;
+}
+void dm_sf_stop_all(void) {
+    for (int i = 0; i < SF_MAX; i++) {
+        pthread_mutex_lock(&g_sf_mu);
+        if (!g_sf[i].used || !g_sf[i].stop) { pthread_mutex_unlock(&g_sf_mu); continue; }
+        void (*stop_fn)(void *) = g_sf[i].stop;
+        void *ctx = g_sf[i].ctx;
+        g_sf[i].stop_busy++;
+        pthread_mutex_unlock(&g_sf_mu);
+        stop_fn(ctx);
+        pthread_mutex_lock(&g_sf_mu);
+        g_sf[i].stop_busy--;
+        pthread_cond_broadcast(&g_sf_cv);
+        pthread_mutex_unlock(&g_sf_mu);
+    }
+}
+void dm_sf_teardown(void) {
+    for (;;) {
+        void (*teardown_fn)(void *) = NULL;
+        void *ctx = NULL;
+        int found = 0;
+        pthread_mutex_lock(&g_sf_mu);
+        for (int i = 0; i < SF_MAX; i++) {
+            if (!g_sf[i].used) continue;
+            teardown_fn = g_sf[i].teardown;
+            ctx = g_sf[i].ctx;
+            memset(&g_sf[i], 0, sizeof g_sf[i]);
+            found = 1;
+            break;
+        }
+        pthread_mutex_unlock(&g_sf_mu);
+        if (!found) break;
+        if (teardown_fn) teardown_fn(ctx);
+    }
+    __atomic_store_n(&g_nsd_env, -1, __ATOMIC_RELAXED);
+    g_sf_trace = -1;
 }

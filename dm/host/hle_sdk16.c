@@ -86,6 +86,7 @@ static pthread_mutex_t font_mu = PTHREAD_MUTEX_INITIALIZER;
 #define FONT_TYPES 6
 static const char *const font_file[FONT_TYPES] = {"standard.ttf", "chinese_simplified.ttf", "chinese_simplified_ext.ttf", "chinese_traditional.ttf", "korean.ttf", "nintendo_ext.ttf"};
 static font_t font_by_type[FONT_TYPES];   // what each type is served: its own file, or the standard font's mapping
+static int font_done[FONT_TYPES];
 static font_t font_open_type(int type) {   // font_mu held; an empty font_t: the type takes the standard font
     if (type == 5) {
         font_t f = font_open(getenv("DM_SHARED_FONT_EXT"), font_file[5]);
@@ -101,14 +102,24 @@ static font_t font_open_type(int type) {   // font_mu held; an empty font_t: the
     return f;
 }
 static font_t font_get(int type) {
-    static int done[FONT_TYPES];
     if (type < 0 || type >= FONT_TYPES) type = 0;
     pthread_mutex_lock(&font_mu);
-    if (!done[0]) { done[0] = 1; font_by_type[0] = font_open_type(0); }
-    if (!done[type]) { done[type] = 1; font_t f = font_open_type(type); font_by_type[type] = f.p ? f : font_by_type[0]; }
+    if (!font_done[0]) { font_done[0] = 1; font_by_type[0] = font_open_type(0); }
+    if (!font_done[type]) { font_done[type] = 1; font_t f = font_open_type(type); font_by_type[type] = f.p ? f : font_by_type[0]; }
     font_t f = font_by_type[type];
     pthread_mutex_unlock(&font_mu);
     return f;
+}
+void dm_sdk16_teardown(void) {
+    pthread_mutex_lock(&font_mu);
+    uint8_t *p0 = font_by_type[0].p;
+    for (int i = 1; i < FONT_TYPES; i++) {
+        if (font_by_type[i].p && font_by_type[i].p != p0) munmap(font_by_type[i].p, font_by_type[i].n);
+    }
+    if (p0) munmap(p0, font_by_type[0].n);
+    memset(font_by_type, 0, sizeof font_by_type);
+    memset(font_done, 0, sizeof font_done);
+    pthread_mutex_unlock(&font_mu);
 }
 // ScalableFontEngine::LoadFont takes the TTF itself, so a game that imports Decode (and gets the header, font_skip below) but hands the address straight to LoadFont gets it past the header:
 //   The Legend of Zelda: Echoes of Wisdom (1.1.0, SDK 20.5.1) records shared fonts as type 0, calls no Decode for them, and with the header LoadFont failed with 403 and SetFont with 301 on every font,
@@ -292,13 +303,15 @@ void dm_host_helper_qos(qos_class_t q);   // hle_thread.c
 typedef struct vsync_event { void *ev; uint64_t binding; struct vsync_event *next; } vsync_event_t;
 static pthread_mutex_t g_vs_mu = PTHREAD_MUTEX_INITIALIZER;
 static vsync_event_t *g_vs_events;
+static _Atomic int g_vs_stop;
+void dm_vsync_stop_all(void) { atomic_store(&g_vs_stop, 1); }
 static int vsync_tick(vsync_event_t *v) {   // 0: the event is gone and this thread has left the table
-    if (hle_signal_system_event_binding(v->binding)) return 1;
+    if (!atomic_load(&g_vs_stop) && hle_signal_system_event_binding(v->binding)) return 1;
     pthread_mutex_lock(&g_vs_mu);
     vsync_event_t **p = &g_vs_events; while (*p && *p != v) p = &(*p)->next;
     if (*p) *p = v->next;
     pthread_mutex_unlock(&g_vs_mu);
-    LOG("vi: vsync event %p destroyed by the game, its thread ends", v->ev);
+    if (!atomic_load(&g_vs_stop)) LOG("vi: vsync event %p destroyed by the game, its thread ends", v->ev);
     return 0;
 }
 __attribute__((weak)) int mtl_link_wait_vsync(uint64_t *seen, uint64_t timeout_ns) { (void)seen; (void)timeout_ns; return 0; }   // nvn_mtl.m

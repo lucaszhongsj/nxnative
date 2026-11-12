@@ -42,10 +42,13 @@ PATCHED=${PATCHED:-$W/build/patched_$PKG}; ROMFS=${ROMFS:-$W/data/$PKG/RomFS}; M
 PREPARE_XCODE=NO; [ "${1:-}" != --prepare-xcode ] || PREPARE_XCODE=YES
 FRAMEWORK=${DM_FRAMEWORK:-0}   # 1: the game's modules live in DmGame.framework (route C); 0: in the executable, as always
 # Route C's shell (DM_FRAMEWORK_ONLY=<folder>): only this game's framework, self-contained, for build_shell.sh to embed (no app, no IPA)
-FRAMEWORK_ONLY=${DM_FRAMEWORK_ONLY:-}; FW_NAME=DmGame
+FRAMEWORK_ONLY=${DM_FRAMEWORK_ONLY:-}; FW_NAME=${DM_FRAMEWORK_NAME:-DmGame}
 if [ -n "$FRAMEWORK_ONLY" ]; then
   [ "$PREPARE_XCODE" != YES ] || die "DM_FRAMEWORK_ONLY builds the game framework for the shell; it cannot be combined with --prepare-xcode"
-  FRAMEWORK=1; FW_NAME=DmGame$(echo "$GAME" | tr 'a-z' 'A-Z')   # unique in the shell's Frameworks/, where several games sit side by side
+  FRAMEWORK=1
+  if [ -z "${DM_FRAMEWORK_NAME:-}" ]; then
+    FW_NAME=DmGame$(echo "$GAME" | tr 'a-z' 'A-Z')${DM_CHAIN_INDEX:+_${DM_CHAIN_INDEX}}   # unique in the shell's Frameworks/, where several games sit side by side
+  fi
 fi
 OUT_IPA=${1:-$(dirname "$W")/$(gp ipa)}; O=$W/build/ios/pkg; DD=$O/dd
 XCODE_DD=${DM_XCODE_DERIVED_DATA:-$W/build/ios/xcode-dd}
@@ -226,6 +229,10 @@ if [ "$FRAMEWORK" = 1 ]; then
   python3 tools/gen_manifest.py Gen/framework/game.manifest.json --game "$GAME" --name "$DM_DISPLAY_NAME" \
     --display-version "$DM_APP_VERSION" --package-version "${PKG:-}" --modules "$MODS" ${NRO_TABLE:+--nro-table "$NRO_TABLE"} \
     --chain "b-$V" --romfs-marker "$MARKER" --romfs-identity "$ROMFS_ID" --framework-name "$FW_NAME" --loader "$FW_LOADER" --profile "$GD/game.tsv" > /dev/null || die "game manifest (gen_manifest.py)"
+  DM_NS_TAG=$(python3 tools/gen_objc_namespace.py --print-tag ${DM_NS_TAG:+--tag "$DM_NS_TAG"} --game "$GAME" --framework-name "$FW_NAME" ${DM_CHAIN_INDEX:+--chain-index "$DM_CHAIN_INDEX"} \
+    --header Gen/framework/objc_namespace.h --exports Gen/framework/exported_symbols.txt \
+    "$DM/host" "$DM/gfx" "$DM/ios/Sources" "$DM/ios/framework") || die "framework ObjC namespace"
+  [ ! -f Gen/dm.xcconfig ] || printf 'DM_NS_TAG = %s\n' "$DM_NS_TAG" >> Gen/dm.xcconfig || die "framework namespace xcconfig"
   printf 'OTHER_LDFLAGS = $(inherited) %s\n' "$F" > Gen/framework.xcconfig || die "framework link flags"
   t "framework: Gen/framework (modules $MODS, profile.tsv, game.manifest.json)"
 fi
@@ -270,6 +277,7 @@ if [ -n "$FRAMEWORK_ONLY" ]; then
   mkdir -p "$O" "$FRAMEWORK_ONLY" || die "mkdir $FRAMEWORK_ONLY"
   xcodebuild -project DmIOS.xcodeproj -target DmShellGame -configuration Release -sdk iphoneos \
     CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY= PRODUCT_NAME="$FW_NAME" PRODUCT_BUNDLE_IDENTIFIER="$DM_BUNDLE_ID.game" \
+    ${DM_NS_TAG:+DM_NS_TAG="$DM_NS_TAG"} \
     DM_XCODE_OUTPUT_ROOT="$DD" SYMROOT="$DD/Build/Products" OBJROOT="$DD/Build/Intermediates.noindex" build > "$O/build-framework.log" 2>&1 \
     || { grep -E 'error:' "$O/build-framework.log" | head -20; die "xcodebuild, log $O/build-framework.log"; }
   BUILT=$DD/Build/Products/Release-iphoneos/$FW_NAME.framework

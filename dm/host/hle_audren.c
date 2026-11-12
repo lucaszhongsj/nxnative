@@ -76,10 +76,10 @@ size_t dm_audren_work_size(const uint8_t *p, uint32_t revision) {
 
 // An SDK without the renderer in the process (SDK 1.3.1, Rayman Legends: Definitive Edition: no ExecuteAudioRendererRendering, only CreateAudioRendererManagerByHipc) is only the client of
 // audren:u, which the host serves (hle_audren_sv.c). Its work size, open and close go to the SDK as the game called them: the SDK's own client talks to the service
+static int g_ar_in_process_v = -1;
 static int ar_in_process(void) {
-    static int v = -1;
-    if (v < 0) { v = guest_sym("_ZN2nn5audio29ExecuteAudioRendererRenderingENS0_19AudioRendererHandleE") != NULL; if (!v) LOG("audren: the SDK has no renderer of its own: its client talks to audren:u, served by the host"); }
-    return v;
+    if (g_ar_in_process_v < 0) { g_ar_in_process_v = guest_sym("_ZN2nn5audio29ExecuteAudioRendererRenderingENS0_19AudioRendererHandleE") != NULL; if (!g_ar_in_process_v) LOG("audren: the SDK has no renderer of its own: its client talks to audren:u, served by the host"); }
+    return g_ar_in_process_v;
 }
 static size_t ar_service_work_size(const uint8_t *p) {
     uint32_t revision = *(const uint32_t *)(p + 0x34);
@@ -633,3 +633,27 @@ HLE_FORCE("_ZN2nn5audio38AcquireAudioDeviceNotificationForInputEPNS_2os11SystemE
 // SDK 7 names of the two above (Super Mario Odyssey): the device-switch event and the active channel count
 HLE_FORCE("_ZN2nn5audio36AcquireAudioDeviceSwitchNotificationEPNS_2os11SystemEventE", "output device switch notification (SDK 7 name): bound, never signaled", void, h_ad_Notify7, void *ev) { hle_bind_system_event(ev, 0); }
 HLE_FORCE("_ZN2nn5audio21GetActiveChannelCountEv", "output channel count (SDK 7 name): 2", int, h_ad_Channels7, void) { return 2; }
+
+void dm_audren_stop_all(void) {
+    for (int i = 0; i < AR_MAX; i++) {
+        atomic_store(&g_ar[i].open, 0);
+        if (g_ar[i].handle[0]) {
+            pthread_mutex_lock(&g_ar[i].cq_mu);
+            pthread_cond_broadcast(&g_ar[i].cq_cv);
+            pthread_mutex_unlock(&g_ar[i].cq_mu);
+        }
+    }
+}
+void dm_audren_teardown_post(void) {
+    for (int i = 0; i < AR_MAX; i++) {
+        if (g_ar[i].handle[0]) {
+            void *owned = objmap_del(g_ar[i].handle[0]);
+            free(owned);
+            free(g_ar[i].render_tt);
+            g_ar[i].render_tt = NULL;
+            g_ar[i].handle[0] = NULL;
+            g_ar[i].sys = NULL;
+        }
+    }
+    g_ar_in_process_v = -1;
+}

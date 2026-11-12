@@ -105,6 +105,18 @@ int main(void) { @autoreleasepool {
         settle();
         CHECK(waiting() == 1, "its heap waits once the snapshot is freed");
     }
-    mtl_sub_commit(); mtl_drain(); free(mem);
+    {
+        tex_t g = target(&pool, 95009, 0, 640, 360); mtl_tex_init(&g);
+        id<MTLTexture> tg = tex_mtl(&g);
+        CHECK(tg && tg.heap != nil, "target before teardown gets a heap");
+        tg = nil; mtl_tex_release(&g); mtl_alias_drop_pool(&pool); settle();
+        CHECK(waiting() == 1, "one heap waits before dm_gfx_teardown");
+        tex_t h = target(&pool, 95010, 8 << 20, 640, 360); mtl_tex_init(&h);
+        CHECK(tex_mtl(&h) != nil, "live target exists at dm_gfx_teardown");
+    }
+    mtl_sub_commit(); mtl_drain();
+    dm_gfx_teardown();
+    CHECK(waiting() == 0 && g_rh == NULL && g_rh_bytes == 0, "dm_gfx_teardown frees waiting and live recycled heaps");
+    free(mem);
     printf("t_rt_recycle: %d checks, %d failed\n", checks, failed); return failed != 0;
 } }

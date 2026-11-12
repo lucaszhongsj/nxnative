@@ -475,7 +475,7 @@ static id<MTLRenderPipelineState> geo_mesh_pso_for(NvProg *pr, id<MTLFunction> f
         for (int i = 0; i < 8; i++) m.colorAttachments[i] = d.colorAttachments[i];
         m.depthAttachmentPixelFormat = d.depthAttachmentPixelFormat; m.stencilAttachmentPixelFormat = d.stencilAttachmentPixelFormat;
         const char *vk = vs->key, *fk = fs ? fs->key : "-", *gk = g_geo_mesh.lean->key; pso_key kk = k;
-        dispatch_async(pp_bg_queue(), ^{
+        bg_async(pp_bg_queue(), ^{
             NSError *e = nil; uint64_t t0 = bp_now();
             id<MTLRenderPipelineState> p = [g_dev newRenderPipelineStateWithMeshDescriptor:m options:MTLPipelineOptionNone reflection:nil error:&e];
             MLOG("%sgeometry mesh pipeline: vertex %s fragment %s kernel %s, %.1f ms in the background%s%s", p ? "" : "[RED] ", vk, fk, gk, (bp_now() - t0) / 1e6, p ? "" : ": ", p ? "" : e.localizedDescription.UTF8String);
@@ -611,10 +611,17 @@ static uint64_t g_mtk_n, g_mtk_wait;
 static nvn_hmap g_pso_mtk = {.klen = sizeof(pso_key)};   // only the submit thread uses it: prewarm workers build pipelines (mtk_build) and the submit thread claims them (warm_claim)
 // A mesh pipeline must have a fragment function, where a vertex one need not (validateWithDevice). A task / mesh program with no pixel shader draws depth only (Ocarina of Time's foliage shadows).
 // Noted for Metal 4 (fn4_note) so that such a pipeline goes through the compiler and the archive like the others
+static id<MTLFunction> g_mtk_nop_fn; static int g_mtk_nop_done;
 static id<MTLFunction> mtk_nop_fragment(void) {
-    static id<MTLFunction> fn; static dispatch_once_t once;
-    dispatch_once(&once, ^{ NSError *e = nil; id<MTLLibrary> l = [g_dev newLibraryWithSource:@"fragment void dm_mesh_nop() {}" options:nil error:&e];
-        fn = fn4_note([l newFunctionWithName:@"dm_mesh_nop"], l, @"dm_mesh_nop", nil); if (!fn) MLOG("[RED] the empty fragment function did not compile: %s", e.localizedDescription.UTF8String); });
+    static os_unfair_lock lock = OS_UNFAIR_LOCK_INIT;
+    os_unfair_lock_lock(&lock);
+    if (!g_mtk_nop_done) {
+        g_mtk_nop_done = 1;
+        NSError *e = nil; id<MTLLibrary> l = [g_dev newLibraryWithSource:@"fragment void dm_mesh_nop() {}" options:nil error:&e];
+        g_mtk_nop_fn = fn4_note([l newFunctionWithName:@"dm_mesh_nop"], l, @"dm_mesh_nop", nil); if (!g_mtk_nop_fn) MLOG("[RED] the empty fragment function did not compile: %s", e.localizedDescription.UTF8String);
+    }
+    id<MTLFunction> fn = g_mtk_nop_fn;
+    os_unfair_lock_unlock(&lock);
     return fn;
 }
 // The Metal 4 descriptor of a native mesh pipeline, whole: no base with open colour state, as a game has some hundred of them, each with functions of its own. Its depth / stencil
@@ -718,18 +725,25 @@ static unsigned gpu_cores(void) {
 #endif
     return n;
 }
+static os_unfair_lock g_mesh_scr_lk = OS_UNFAIR_LOCK_INIT;
+static uint64_t g_mesh_scr_addr;
+static uint32_t *g_mesh_scr_head;
+static __strong id<MTLBuffer> g_mesh_scr_buf;
 static uint32_t *mesh_scratch(uint64_t *gpu) {
-    static uint64_t addr; static uint32_t *head; static __strong id<MTLBuffer> buf; static dispatch_once_t once;
-    dispatch_once(&once, ^{
+    os_unfair_lock_lock(&g_mesh_scr_lk);
+    if (!g_mesh_scr_buf) {
         unsigned cores = gpu_cores(), want = cores ? cores * 96 * 2 : TARGET_OS_OSX ? 8192 : 2048, n = 1024;
         while (n < want && n < DMSH_MESH_SCRATCH_SLICES) n <<= 1;
-        buf = [g_dev newBufferWithLength:DMSH_MESH_SCRATCH_HEAD + (size_t)n * DMSH_MESH_SCRATCH_STRIDE options:MTLResourceStorageModeShared];
-        if (!buf) MDIE("failed to create the mesh scratch buffer (%u slices)", n);
-        head = buf.contents; head[DMSH_MESH_SCRATCH_MASK] = n - 1; head[DMSH_MESH_SCRATCH_DONE] = (uint32_t)atomic_load(&g_done);
-        res_add(buf); res_commit(); addr = buf.gpuAddress;
-        atomic_store(&g_mesh_scr, head);   // post_complete keeps DONE from now on (one it missed before this is only a later reclaim)
+        g_mesh_scr_buf = [g_dev newBufferWithLength:DMSH_MESH_SCRATCH_HEAD + (size_t)n * DMSH_MESH_SCRATCH_STRIDE options:MTLResourceStorageModeShared];
+        if (!g_mesh_scr_buf) { os_unfair_lock_unlock(&g_mesh_scr_lk); MDIE("failed to create the mesh scratch buffer (%u slices)", n); }
+        g_mesh_scr_head = g_mesh_scr_buf.contents; g_mesh_scr_head[DMSH_MESH_SCRATCH_MASK] = n - 1; g_mesh_scr_head[DMSH_MESH_SCRATCH_DONE] = (uint32_t)atomic_load(&g_done);
+        res_add(g_mesh_scr_buf); res_commit(); g_mesh_scr_addr = g_mesh_scr_buf.gpuAddress;
+        atomic_store(&g_mesh_scr, g_mesh_scr_head);   // post_complete keeps DONE from now on (one it missed before this is only a later reclaim)
         MLOG("mesh scratch: %u slices of %u bytes for the mesh shaders whose stage memory is a device slice (%u GPU cores%s)", n, DMSH_MESH_SCRATCH_STRIDE, cores, cores ? "" : ", not read");
-    });
+    }
+    uint64_t addr = g_mesh_scr_addr;
+    uint32_t *head = g_mesh_scr_head;
+    os_unfair_lock_unlock(&g_mesh_scr_lk);
     *gpu = addr;
     return head;
 }
@@ -1065,8 +1079,9 @@ static int geo_prep(NvProg *pr, const p_draw *dw0, const p_draw_idx *di0, geo_jo
     return 1;
 }
 // The index compaction's pipelines: count, parallel scan, write, fused small draw, legacy scan (geo_pack.metal); NULL when they cannot be built (logged)
+static id<MTLComputePipelineState> g_geo_pack[5];   // count, parallel scan, write, fused small draw, legacy scan
 static id<MTLComputePipelineState> __strong *geo_pack_psos(void) {
-    static id<MTLComputePipelineState> pack[5];
+    id<MTLComputePipelineState> __strong *pack = g_geo_pack;
     if (!pack[4]) { NSError *e = nil; id<MTLLibrary> lib = host_lib("geo_pack", &e);
         const char *fn[5] = {"geo_pack_count", "geo_pack_scan", "geo_pack_write", "geo_pack_small", "geo_pack_scan_legacy"};
         for (int i = 0; i < 5 && lib; i++) if (!(pack[i] = [g_dev newComputePipelineStateWithFunction:[lib newFunctionWithName:@(fn[i])] error:&e])) break;
@@ -1097,18 +1112,19 @@ static uint64_t geo_gpu_kernels(NvProg *pr, NvShader *__strong *gs_out, NvShader
     return 3ull * GEO_CAPTURE_WORDS * 4 + inv * (emits ? emits * gs->geo_stride * 4 + gs->geo_index_stride * 4 + emits * words * 4 + 5 : 0);
 }
 static uint64_t g_geo_iota, g_geo_iota_n;   // the identity map (0, 1, 2, ...), grown on demand and kept
+static NSMutableArray<id<MTLBuffer>> *g_geo_iota_maps;
 static int geo_prep_gpu(NvProg *pr, NvShader *vs, NvShader *gs, NvShader *reader, uint32_t max_tris, uint32_t first_instance, geo_job *j) {
     *j = (geo_job){.pr = pr, .vs = vs, .gs = gs, .reader = reader, .dw = {.prim = 4, .instances = 1, .base_instance = (int32_t)first_instance}};
     id<MTLRenderPipelineState> capture = geo_capture_pso(vs); if (!capture) return 0;
     uint64_t nv = 3ull * max_tris, inv = MAX(gs->geo_invocations, 1u), groups = (uint64_t)max_tris * inv;
     if (!max_tris || groups > UINT32_MAX) return 0;
     if (g_geo_iota_n < nv) {
-        static NSMutableArray<id<MTLBuffer>> *maps; uint64_t n = MAX(nv, 3ull << 16);
+        uint64_t n = MAX(nv, 3ull << 16);
         id<MTLBuffer> b = [g_dev newBufferWithLength:n * 4 options:MTLResourceStorageModeShared];
         if (!b) return 0;
         uint32_t *p = b.contents; for (uint64_t i = 0; i < n; i++) p[i] = (uint32_t)i;
-        if (!maps) maps = [NSMutableArray array];
-        [maps addObject:b]; res_add(b); g_geo_iota = b.gpuAddress; g_geo_iota_n = n;   // older, smaller ones are kept (and resident): work in flight may still read them
+        if (!g_geo_iota_maps) g_geo_iota_maps = [NSMutableArray array];
+        [g_geo_iota_maps addObject:b]; res_add(b); g_geo_iota = b.gpuAddress; g_geo_iota_n = n;   // older, smaller ones are kept (and resident): work in flight may still read them
     }
     uint32_t emits = gs->geo_index_stride ? gs->geo_vertices : 0;
     uint64_t input_size = nv * GEO_CAPTURE_WORDS * 4;
@@ -1327,4 +1343,35 @@ static void geo_draw_(NvProg *pr, const p_draw *dw0, const p_draw_idx *di0, uint
     if (ce) enc_c_end(ce);
     args_dirty_all(); g_enc_pso = nil; g_enc_dss = nil; g_ed.ok = 0;
     geo_raster(j0, n == 1);
+}
+static void geo_teardown(void) {
+    while (g_geo_ix_first) geo_ix_drop(g_geo_ix_first);
+    nvn_hm_clear(&g_geo_ix, NULL);
+    os_unfair_lock_lock(&g_pso_mesh_lock);
+    nvn_hm_clear(&g_pso_mesh, hm_rel);
+    g_pso_mesh_building = nil;
+    os_unfair_lock_unlock(&g_pso_mesh_lock);
+    nvn_hm_clear(&g_pso_mtk, hm_rel);
+    g_geo_mesh_last = (typeof(g_geo_mesh_last)){0};
+    g_geo_mesh_runfn = nil;
+    g_geo_mesh = (typeof(g_geo_mesh)){0};
+    g_mrun = (typeof(g_mrun)){0};
+    g_mtk = (typeof(g_mtk)){0};
+    g_mtk_nop_fn = nil; g_mtk_nop_done = 0;
+    g_geo_program = nil;
+    for (int i = 0; i < 3; i++) g_geo_lean_k[i] = nil;
+    for (int i = 0; i < 5; i++) g_geo_pack[i] = nil;
+    g_geo_iota_maps = nil; g_geo_iota = 0; g_geo_iota_n = 0;
+    for (int i = 0; i < GEO_RUN; i++) g_geo_run[i] = (geo_job){0};
+    g_geo_nrun = 0;
+    os_unfair_lock_lock(&g_mesh_scr_lk);
+    g_mesh_scr_buf = nil; g_mesh_scr_addr = 0; g_mesh_scr_head = NULL;
+    atomic_store(&g_mesh_scr, NULL);
+    os_unfair_lock_unlock(&g_mesh_scr_lk);
+    os_unfair_lock_lock(&g_gcp_lk);
+    memset(g_gcp, 0, sizeof g_gcp);
+    memset(g_gcp_pair, 0, sizeof g_gcp_pair);
+    g_gcp_npair = 0;
+    g_geo_why = 0;
+    os_unfair_lock_unlock(&g_gcp_lk);
 }

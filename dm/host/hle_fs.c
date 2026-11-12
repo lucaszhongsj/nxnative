@@ -75,8 +75,8 @@ static void save_test_init(void) {
     g_save_kill_n = k && !strncmp(k, "write:", 6) ? atoi(k + 6) : 0;
     if (f && !strncmp(f, "write:", 6)) { g_save_fail_n = atoi(f + 6); const char *c = strchr(f + 6, ':'); g_save_fail_e = c ? atoi(c + 1) : ENOSPC; }
 }
-static pthread_rwlock_t g_txn_lock[MAX_MOUNT];
-static pthread_once_t g_txn_lock_once = PTHREAD_ONCE_INIT;
+static pthread_rwlock_t g_txn_lock[MAX_MOUNT] __attribute__((section("__DATA,__dm_keep")));
+static pthread_once_t g_txn_lock_once __attribute__((section("__DATA,__dm_keep"))) = PTHREAD_ONCE_INIT;
 static void txn_locks_init(void) { for (int i = 0; i < MAX_MOUNT; i++) pthread_rwlock_init(&g_txn_lock[i], NULL); }
 static void txn_unlock(pthread_rwlock_t **m) { if (*m) pthread_rwlock_unlock(*m); }
 // Write failures are refused per transaction: on the real device save space is reserved when the save is created, overwrites cannot fail, and the game does not check the return values of WriteFile / SetFileSize either, it Commits as usual after a failure
@@ -1464,3 +1464,23 @@ HLE_FORCE("_ZN2nn2fs18IsSaveDataExistingERKNS_7account3UidE", "fsp-srv; save dat
 HLE_FORCE("_ZN2nn2fs26SetPriorityOnCurrentThreadENS0_8PriorityE", "fsp-srv; file read priority, ignored by the host", void, h_fs_SetPrio, int prio) { (void)prio; }
 HLE_FORCE("_ZN2nn2fs6detail18IsEnabledAccessLogEj", "fsp-srv; access log always off (returns bool)", unsigned, h_fs_AccessLogMask, unsigned mask) { (void)mask; return 0; }
 HLE_FORCE("_ZN2nn2fs6detail18IsEnabledAccessLogEv", "fsp-srv; access log always off (returns bool)", unsigned, h_fs_AccessLog, void) { return 0; }
+
+void dm_fs_teardown(void) {
+    pthread_mutex_lock(&g_lock);
+    for (int fd = 3; fd < 65536; fd++) {
+        if (g_fmode[fd]) {
+            close(fd);
+            g_fmode[fd] = 0;
+            atomic_store(&g_ftxn[fd], 0);
+        }
+    }
+    for (int i = 0; i < g_nmnt; i++) {
+        if (g_mnt[i].img) {
+            romfs_image_close(g_mnt[i].img);
+            g_mnt[i].img = NULL;
+        }
+    }
+    memset(g_mnt, 0, sizeof g_mnt);
+    g_nmnt = 0;
+    pthread_mutex_unlock(&g_lock);
+}

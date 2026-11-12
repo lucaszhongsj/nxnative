@@ -67,7 +67,8 @@ HLE_FORCE("_ZN5movie9Extractor13SetDataSourceEPKc", "movie demuxer: the host doe
 #define MD_FMT_PCM16 1
 #define MD_PCM_CAP (8192 * 8 * 2)   // bytes per audio output: a Vorbis packet gives at most 4096 samples per channel (blocksize 8192), 8 channels at most
 
-typedef struct {
+typedef struct mdec {
+    struct mdec *next_all;
     pthread_mutex_t mu;                          // guards the queues and slots below
     int type, fmt, mode, nout;                   // nout: output slots, MD_NOUT_VIDEO for video, MD_NOUT_AAC for AAC, MD_NOUT for Vorbis (see the constructor)
     int out_align;                               // SDK 3's GetOutputBufferSize puts an alignment in its second output where later SDKs put the mode; 0 = the mode (h_movie_Decoder3)
@@ -214,11 +215,13 @@ static void md_event(mdec_t *d, int i) {   // 0 input 1 output 2 format 3 error
 void *dm_guest_thread_spawn(void (*fn)(void *), void *arg, int prio, size_t stack_size);
 void dm_host_lock(pthread_mutex_t *m);   // hle_thread.c
 static pthread_mutex_t g_dfmu = PTHREAD_MUTEX_INITIALIZER; static pthread_cond_t g_dfcv = PTHREAD_COND_INITIALIZER;
-static struct { void *d; int ev; uint64_t due; } g_dfq[64]; static int g_ndfq, g_dfthr;
+static struct { void *d; int ev; uint64_t due; } g_dfq[64]; static int g_ndfq, g_dfthr, g_df_stop;
+static void *g_df_tt;
+static mdec_t *g_mdec_all;
 static void md_defer_body(void *arg);
 static void md_defer_at(void *d, int ev, uint64_t due) {
     dm_host_lock(&g_dfmu);
-    if (!g_dfthr) { g_dfthr = 1; dm_guest_thread_spawn(md_defer_body, NULL, 16, 64 << 10); }
+    if (!g_dfthr && !g_df_stop) { g_dfthr = 1; g_df_tt = dm_guest_thread_spawn(md_defer_body, NULL, 16, 64 << 10); }
     for (int i = 0; i < g_ndfq; i++) if (g_dfq[i].d == d && g_dfq[i].ev == ev && g_dfq[i].due <= due) { pthread_mutex_unlock(&g_dfmu); return; }   // already due by then
     if (g_ndfq < 64) g_dfq[g_ndfq++] = (__typeof__(g_dfq[0])){d, ev, due};
     else LOG("[RED] movie: deferred event queue full, dropping one");
@@ -234,18 +237,19 @@ static void md_defer_drop(void *d) {
 static void md_defer_body(void *arg) {
     (void)arg;
     dm_host_lock(&g_dfmu);
-    for (;;) {
+    while (!g_df_stop) {
         uint64_t now = now_ns(), next = 0; int k = -1;
         for (int i = 0; i < g_ndfq && k < 0; i++) { if (g_dfq[i].due <= now) k = i; else if (!next || g_dfq[i].due < next) next = g_dfq[i].due; }
         if (k >= 0) {
             mdec_t *d = g_dfq[k].d; int e = g_dfq[k].ev;
             memmove(g_dfq + k, g_dfq + k + 1, (size_t)(--g_ndfq - k) * sizeof *g_dfq);
-            if (d->started) md_event(d, e);   // not after Stop: the game takes its events apart right after Stop (a Stop within 2 ms of a Flush let the deferred signal hit events being torn down)
+            if (d->started && !g_df_stop) md_event(d, e);   // not after Stop: the game takes its events apart right after Stop (a Stop within 2 ms of a Flush let the deferred signal hit events being torn down)
             continue;
         }
         if (!next) pthread_cond_wait(&g_dfcv, &g_dfmu);
         else { uint64_t w = next - now; struct timespec ts = { (time_t)(w / 1000000000u), (long)(w % 1000000000u) }; pthread_cond_timedwait_relative_np(&g_dfcv, &g_dfmu, &ts); }
     }
+    pthread_mutex_unlock(&g_dfmu);
 }
 // log the first 12 calls one by one, then every 2^k-th (DM_MOVIE_TRACE=1: every call, with the calling thread and the decoder: Unity drives a movie's audio and video decoders from one thread)
 static int md_trace_all(void) { static int on = -1; if (on < 0) on = getenv("DM_MOVIE_TRACE") != NULL; return on; }
@@ -625,6 +629,7 @@ HLE_FORCE("_ZN5movie7DecoderC1ENS_11DecoderTypeENS_19DecoderOutputFormatENS_11De
     pthread_attr_t a; pthread_attr_init(&a); pthread_attr_setstacksize(&a, 1 << 20);
     if (pthread_create(&d->wk, &a, md_worker, d)) die("movie: failed to create the decoder thread");
     pthread_attr_destroy(&a);
+    pthread_mutex_lock(&g_dfmu); d->next_all = g_mdec_all; g_mdec_all = d; pthread_mutex_unlock(&g_dfmu);
     self[1] = d;
     LOG("[movie] decoder %p: type %d output %d mode %d priority %d", (void *)self, type, fmt, mode, prio);
 }
@@ -648,16 +653,13 @@ HLE_FORCE("_ZN5movie7DecoderC2ENS_11DecoderTypeENS_19DecoderOutputFormatENS_11De
           void **self, int type, int fmt, int mode) { h_movie_Decoder4(self, type, fmt, mode); }
 HLE_FORCE("_ZN5movie7DecoderC2ENS_11DecoderTypeENS_19DecoderOutputFormatE", "movie decoder (SDK 3, base-object constructor): host implementation", void, h_movie_Decoder3_C2,
           void **self, int type, int fmt) { h_movie_Decoder3(self, type, fmt); }
-static void md_free(void **self) {
-    mdec_t *d = md_of(self); if (!d) return;
-    // The pump thread first, before its pending signals are dropped, the decoder thread is told to quit and any buffer is freed: a pump still running queues signals for
-    // this decoder (md_defer_at), and one queued after the drop would reach the deferred thread after free(d)
+static void md_destroy_obj(mdec_t *d) {
     if (d->pk_on) { pthread_mutex_lock(&d->pkm); d->pk_quit = 1; pthread_cond_signal(&d->pkc); pthread_mutex_unlock(&d->pkm); pthread_join(d->pk, NULL); }
     md_defer_drop(d);
+    pthread_mutex_lock(&g_dfmu);
+    for (mdec_t **pp = &g_mdec_all; *pp; pp = &(*pp)->next_all) if (*pp == d) { *pp = d->next_all; break; }
+    pthread_mutex_unlock(&g_dfmu);
     if (!MD_AUDIO(d)) dm_movie_stopped(d);
-    self[1] = NULL;
-    LOG("[movie] decoder %p destroyed: %lu packets in, %lu frames out; decoded %llu packets, average %.2f ms per packet, longest %.2f ms", (void *)self, d->ncall[7], d->ncall[8],
-        (unsigned long long)d->dec_n, d->dec_n ? d->dec_ns / 1e6 / d->dec_n : 0.0, d->dec_max / 1e6);
     dm_host_lock(&d->dmu); md_job(d, MDJ_QUIT); pthread_mutex_unlock(&d->dmu);
     pthread_join(d->wk, NULL);
     for (int i = 0; i < MD_NIN; i++) free(d->in[i]);
@@ -665,6 +667,13 @@ static void md_free(void **self) {
     free(d->bgra); free(d->vhdr[0]); free(d->vhdr[1]); free(d->hold);
     pthread_mutex_destroy(&d->pkm); pthread_cond_destroy(&d->pkc);
     pthread_mutex_destroy(&d->mu); pthread_mutex_destroy(&d->dmu); pthread_mutex_destroy(&d->wmu); pthread_cond_destroy(&d->wcv); free(d);
+}
+static void md_free(void **self) {
+    mdec_t *d = md_of(self); if (!d) return;
+    self[1] = NULL;
+    LOG("[movie] decoder %p destroyed: %lu packets in, %lu frames out; decoded %llu packets, average %.2f ms per packet, longest %.2f ms", (void *)self, d->ncall[7], d->ncall[8],
+        (unsigned long long)d->dec_n, d->dec_n ? d->dec_ns / 1e6 / d->dec_n : 0.0, d->dec_max / 1e6);
+    md_destroy_obj(d);
 }
 HLE_FORCE("_ZN5movie7DecoderD2Ev", "movie decoder destructor: frees the host object", void, h_movie_DecD2, void **self) { md_free(self); }
 // complete-object destructor (D1): Metroid Dread calls it directly (main+0x225a08); without the take-over the SDK destroys the host object as a DecoderImpl and crashes
@@ -994,3 +1003,21 @@ HLE_FORCE("_ZN5movie7Decoder24ReleaseOutputBufferIndexEi", "movie decoder: relea
     return 0;
 }
 HLE_FORCE("_ZN5movie7Decoder12GetLastErrorEv", "movie decoder: last error (none)", int, h_movie_LastErr, void **self) { (void)self; return 0; }
+
+void dm_movie_stop_all(void) {
+    pthread_mutex_lock(&g_dfmu);
+    g_df_stop = 1;
+    g_ndfq = 0;
+    pthread_cond_broadcast(&g_dfcv);
+    pthread_mutex_unlock(&g_dfmu);
+}
+void dm_movie_teardown_post(void) {
+    while (g_mdec_all) md_destroy_obj(g_mdec_all);
+    pthread_mutex_lock(&g_md_slots_mu);
+    memset(g_md_slots, 0, sizeof g_md_slots);
+    pthread_mutex_unlock(&g_md_slots_mu);
+    free(g_df_tt);
+    g_df_tt = NULL;
+    g_dfthr = 0;
+    g_df_stop = 0;
+}

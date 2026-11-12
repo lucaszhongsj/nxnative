@@ -18,6 +18,7 @@
 #include "hle.h"
 #include <math.h>
 #include <stdatomic.h>
+#include <time.h>
 
 void *dm_guest_thread_spawn(void (*fn)(void *), void *arg, int prio, size_t stack_size);
 void dm_guest_thread_join(void *tt);
@@ -27,6 +28,7 @@ void dm_pcmout_start(void *k);
 int dm_pcmout_append(void *k, void *b);
 void *dm_pcmout_released(void *k);
 void dm_pcmout_wait(void *k, int ms);
+void dm_pcmout_wake(void *k);
 size_t dm_audren_work_size(const uint8_t *p, uint32_t revision);   // hle_audren.c: the service's work buffer budget
 
 enum { HDR = 0x40, BEH_IN = 0x10, BEH_OUT = 0xb0, MP_IN = 0x20, MP_OUT = 0x10, CR_IN = 0x70, V_IN = 0x170, V_OUT = 0x10, FX_IN = 0xc0, FX_OUT = 0x10, MIX_IN = 0x930,
@@ -54,6 +56,7 @@ typedef struct {
     int started; uint32_t time_limit;
     uint32_t ev_r, ev_w;
     _Atomic int open; void *thread;
+    pthread_cond_t stop_cv; void *pcmout; int render_active;
     _Atomic uint64_t frames, loud;
     unsigned red;                            // one-time red lines (bits)
     double up_pos; float up_last[2];         // the output's resampling to 48 kHz
@@ -61,6 +64,7 @@ typedef struct {
     int16_t pcm[NBUF][FRAME_MAX * 3 * 2]; aout_buf bufs[NBUF];
 } sv_rnd;
 
+static int g_sv_logged;
 static uint32_t rd32(const uint8_t *p) { uint32_t v; memcpy(&v, p, 4); return v; }
 static uint64_t rd64(const uint8_t *p) { uint64_t v; memcpy(&v, p, 8); return v; }
 static float rdf(const uint8_t *p) { float v; memcpy(&v, p, 4); return v; }
@@ -327,7 +331,7 @@ static Result sv_update(sv_rnd *r, const uint8_t *in, size_t in_len, uint8_t *ou
     for (int i = 0; i < nmp; i++, o += MP_OUT) { uint32_t st = rd32(mps + (size_t)i * MP_IN + 0x10); wr32(o, st == 4 ? 5 : st == 2 ? 3 : 0); }
     for (int i = 0; i < nvo; i++, o += V_OUT) { const sv_voice *v = &r->voice[i]; if (v->inuse) { wr64(o, v->played); wr32(o + 8, v->consumed); } }
     for (int i = 0; i < nfx; i++, o += FX_OUT) { const uint8_t *e = r->fx + (size_t)i * FX_IN; o[0] = e[0] ? (e[2] ? 3 : 4) : 0; }
-    static int logged; if (!logged++) LOG("audren:u: first update: %d memory pools, %d voices, %d channel resources, %d effects, %d mixes, %d sinks, splitters %#x bytes, answer %#zx", nmp, nvo, r->ncr, nfx, r->nmix, nsk, spl, need);
+    if (!g_sv_logged++) LOG("audren:u: first update: %d memory pools, %d voices, %d channel resources, %d effects, %d mixes, %d sinks, splitters %#x bytes, answer %#zx", nmp, nvo, r->ncr, nfx, r->nmix, nsk, spl, need);
     pthread_mutex_unlock(&r->mu);
     return RES_OK;
 }
@@ -350,15 +354,27 @@ static void sv_to_48k(sv_rnd *r, int16_t *dst) {   // a renderer below 48 kHz (3
 }
 static void sv_render_main(void *arg) {
     sv_rnd *r = arg;
+    if (!atomic_load(&r->open)) {
+        pthread_mutex_lock(&r->mu);
+        r->render_active = 0;
+        pthread_cond_broadcast(&r->stop_cv);
+        pthread_mutex_unlock(&r->mu);
+        return;
+    }
     void *out = dm_pcmout_open(2);
     aout_buf *free_list[NBUF]; int nfree = NBUF, n = sv_out_frames(r);
     for (int i = 0; i < NBUF; i++) { r->bufs[i] = (aout_buf){.ptr = r->pcm[i], .cap = sizeof r->pcm[i], .size = 0}; free_list[i] = &r->bufs[i]; }
-    dm_pcmout_start(out);
+    pthread_mutex_lock(&r->mu);
+    r->pcmout = out;
+    int start_ok = atomic_load(&r->open);
+    pthread_mutex_unlock(&r->mu);
+    if (start_ok) dm_pcmout_start(out);
     LOG("audren:u: render thread started (%d Hz, %d samples per frame, paced by the output)", r->rate, r->samples);
     while (atomic_load(&r->open)) {
         while (!nfree) {
             aout_buf *b = dm_pcmout_released(out);
             if (b) { free_list[nfree++] = b; break; }
+            if (!atomic_load(&r->open)) break;
             dm_pcmout_wait(out, 10);
             if (!atomic_load(&r->open)) break;
         }
@@ -376,17 +392,53 @@ static void sv_render_main(void *arg) {
         if (!dm_pcmout_append(out, b)) free_list[nfree++] = b;
         if (started) hle_signal_event_handle(r->ev_w);
     }
+    pthread_mutex_lock(&r->mu);
+    r->pcmout = NULL;
+    pthread_mutex_unlock(&r->mu);
     dm_pcmout_close(out);
+    pthread_mutex_lock(&r->mu);
+    r->render_active = 0;
+    pthread_cond_broadcast(&r->stop_cv);
+    pthread_mutex_unlock(&r->mu);
 }
 
 // ---------- the sessions ----------
+static void sv_free_host(sv_rnd *r) {
+    free(r->voice); free(r->cr); free(r->fx); free(r->mix); free(r->sink); free(r->mb);
+    pthread_cond_destroy(&r->stop_cv);
+    pthread_mutex_destroy(&r->mu);
+    free(r);
+}
+static void sv_stop(void *ctx) {
+    sv_rnd *r = ctx;
+    atomic_store(&r->open, 0);
+    pthread_mutex_lock(&r->mu);
+    if (r->pcmout) dm_pcmout_wake(r->pcmout);
+    struct timespec dl;
+    clock_gettime(CLOCK_REALTIME, &dl);
+    dl.tv_nsec += 250 * 1000000L;
+    if (dl.tv_nsec >= 1000000000L) { dl.tv_sec++; dl.tv_nsec -= 1000000000L; }
+    while (r->render_active && !pthread_cond_timedwait(&r->stop_cv, &r->mu, &dl)) {}
+    pthread_mutex_unlock(&r->mu);
+}
 static void sv_close(void *ctx) {
     sv_rnd *r = ctx;
     atomic_store(&r->open, 0);
+    pthread_mutex_lock(&r->mu);
+    if (r->pcmout) dm_pcmout_wake(r->pcmout);
+    pthread_mutex_unlock(&r->mu);
     if (r->thread) dm_guest_thread_join(r->thread);
     LOG("audren:u: renderer closed after %llu frames", (unsigned long long)atomic_load(&r->frames));
-    free(r->voice); free(r->cr); free(r->fx); free(r->mix); free(r->sink); free(r->mb);
-    pthread_mutex_destroy(&r->mu); free(r);
+    sv_free_host(r);
+}
+static void sv_teardown_post(void *ctx) {
+    sv_rnd *r = ctx;
+    if (r->pcmout) { free(r->pcmout); r->pcmout = NULL; }
+    r->render_active = 0;
+    free(r->thread);
+    r->thread = NULL;
+    g_sv_logged = 0;
+    sv_free_host(r);
 }
 static Result sv_renderer(sf_req *q) {
     sv_rnd *r = q->ctx;
@@ -425,6 +477,7 @@ static Result sf_audren(sf_req *q) {
     sv_rnd *r = calloc(1, sizeof *r);
     if (!r) return RES_FAIL;
     pthread_mutex_init(&r->mu, NULL);
+    pthread_cond_init(&r->stop_cv, NULL);
     memcpy(r->param, q->in, PARAM);
     r->rate = rate; r->samples = samples; r->nmixbuf = (int)rd32(q->in + 8); r->time_limit = 100;
     r->ev_r = hle_new_event(&r->ev_w);
@@ -432,8 +485,10 @@ static Result sf_audren(sf_req *q) {
     LOG("audren:u: OpenAudioRenderer %d Hz, %d samples per frame, %d mix buffers, %d sub mixes, %d voices, %d sinks, %d effects, %d splitters, revision %.4s, work buffer %#llx",
         rate, samples, r->nmixbuf, (int)rd32(q->in + 0xc), (int)rd32(q->in + 0x10), (int)rd32(q->in + 0x14), (int)rd32(q->in + 0x18), (int)rd32(q->in + 0x24),
         (const char *)q->in + 0x30, (unsigned long long)rd64(q->in + 0x38));
+    r->render_active = 1;
     r->thread = dm_guest_thread_spawn(sv_render_main, r, 9, 0x10000);
-    q->out_move = sf_session("audren:r", sv_renderer, r, sv_close);
+    if (!r->thread) { pthread_mutex_lock(&r->mu); r->render_active = 0; pthread_mutex_unlock(&r->mu); }
+    q->out_move = sf_session_lifecycle("audren:r", sv_renderer, r, sv_close, sv_stop, sv_teardown_post);
     return RES_OK;
 }
 SF_SERVICE("audren:u", sf_audren);

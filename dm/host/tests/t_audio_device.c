@@ -214,6 +214,28 @@ static void blocked_start(void *out) {
     assert(unit.disposals == 1);
     dispatch_semaphore_signal(start_allowed);
     assert(signaled(device_stopped, 1) && signaled(device_disposed, 2) && unit.disposals == 2);
+
+    // dm_audio_stop_all() while Start is blocked in the driver also hands disposal to the start worker,
+    // and disposes idle/running units immediately when no start is in flight.
+    uint32_t out2[16] = {0}; uint8_t prm2[16]; h_au_InitParam(prm2);
+    assert(h_au_OpenDef0(out2, prm2) == RES_OK);
+    assert(!pthread_create(&guest, NULL, guest_start, out2));
+    assert(signaled(guest_returned, 2) && signaled(start_entered, 2));
+    pthread_join(guest, NULL);
+    dm_audio_stop_all();
+    assert(unit.disposals == 2);
+    dispatch_semaphore_signal(start_allowed);
+    assert(signaled(device_stopped, 1) && signaled(device_disposed, 2) && unit.disposals == 3);
+    object = (typeof(object)){0};
+    g_suspended = 0;
+
+    uint32_t out3[16] = {0};
+    assert(h_au_OpenDef0(out3, prm2) == RES_OK);
+    dm_audio_stop_all();
+    assert(signaled(device_disposed, 2) && unit.disposals == 4);
+    object = (typeof(object)){0};
+    g_suspended = 0;
+
     dispatch_release(device_disposed); device_disposed = NULL;
     dispatch_release(guest_closed);
     dispatch_release(device_stopped);
@@ -266,7 +288,7 @@ int main(void) {
     // Failure after listener registration follows the same cleanup path as Close.
     unit.device = 1; unit.rate = 48000; unit.init_error = kAudioUnitErr_FailedInitialization;
     aout failed = {.ch = 2};
-    assert(au_create(&failed) == kAudioUnitErr_FailedInitialization && !failed.au && unit.disposals == 3);
+    assert(au_create(&failed) == kAudioUnitErr_FailedInitialization && !failed.au && unit.disposals == 5);
     puts("audio device: buffer configuration, blocked start, callback handoff, retry and lifecycle passed");
     return 0;
 }

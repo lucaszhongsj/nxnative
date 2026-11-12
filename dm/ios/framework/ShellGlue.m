@@ -19,13 +19,17 @@ void front_ios_focus_event(int ev);
 
 __attribute__((used, visibility("default"))) const int dm_glue_version = DM_GLUE_VERSION;
 
-static char **g_argv; static int g_argc; static int g_boot_ok;
+static char **g_argv __attribute__((section("__DATA,__dm_keep")));
+static int g_argc __attribute__((section("__DATA,__dm_keep")));
+static int g_boot_ok;
 
 __attribute__((used, visibility("default")))
 const char *dm_glue_start_game(const char *const *argv, int argc, const void *game_image) {
     if (argc < 2 || !game_image) return "The game's start arguments are incomplete.";
     front_hud_env();   // before the early loading below can make a device (main.m's order)
     dm_set_game_image_header(game_image);
+    for (int i = 0; i < g_argc; i++) free(g_argv[i]);
+    free(g_argv);
     g_argc = argc; g_argv = calloc((size_t)argc + 1, sizeof(char *));
     for (int i = 0; i < argc; i++) g_argv[i] = strdup(argv[i]);
     dm_host_preload_start(g_argc, g_argv);   // module tables, relocation and take-over in the background while the game view comes up
@@ -52,7 +56,7 @@ void dm_glue_focus_event(int ev) {
 // ---- what front_ios.m takes from main.m and Launcher.swift ----
 static void *boot_thread(void *p) {
     (void)p;
-    static char alt[65536]; stack_t ss = {.ss_sp = alt, .ss_size = sizeof alt}; sigaltstack(&ss, 0);   // crash printing must work on the host thread too
+    void crash_thread_init(void); crash_thread_init();   // crash printing must work on the host thread too (freed on pthread_exit)
     int rc = dm_main(g_argc, g_argv);
     fprintf(stderr, "boot: dm_main returned %d\n", rc);
     return NULL;

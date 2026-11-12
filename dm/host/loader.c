@@ -19,7 +19,10 @@ int g_nmod;
 // Stable module addresses live in g_mod; lookup order follows activation, including unload/reload.
 static module_t **g_loaded; static int g_nloaded, g_mod_capacity;
 static pthread_rwlock_t g_modules_mu = PTHREAD_RWLOCK_INITIALIZER;
-pthread_key_t g_key18, g_keytls, g_keytlr, g_keygate;
+pthread_key_t g_key18 __attribute__((section("__DATA,__dm_keep")));
+pthread_key_t g_keytls __attribute__((section("__DATA,__dm_keep")));
+pthread_key_t g_keytlr __attribute__((section("__DATA,__dm_keep")));
+pthread_key_t g_keygate __attribute__((section("__DATA,__dm_keep")));
 enum { KEY_K18, KEY_KTLS, KEY_KTLR, KEY_KGATE, KEY_N };
 
 uint64_t resolve_import(module_t *m, const char *name);
@@ -33,8 +36,10 @@ static pthread_key_t key_value(unsigned i) {
     }
 }
 static void create_keys(void) {
-    if (pthread_key_create(&g_key18, NULL) || pthread_key_create(&g_keytls, NULL) ||
-        pthread_key_create(&g_keytlr, NULL) || pthread_key_create(&g_keygate, NULL)) die("cannot create the host key");
+    if (!g_key18) {
+        if (pthread_key_create(&g_key18, NULL) || pthread_key_create(&g_keytls, NULL) ||
+            pthread_key_create(&g_keytlr, NULL) || pthread_key_create(&g_keygate, NULL)) die("cannot create the host key");
+    }
     LOG("key numbers K18=%lu KTLS=%lu KTLR=%lu KGATE=%lu", g_key18, g_keytls, g_keytlr, g_keygate);
 }
 
@@ -906,4 +911,36 @@ void run_module_inits(void) {
         LOG("%s: DT_INIT +%#llx (init_array %llu entries)", m->name, m->init, m->init_arraysz / 8);
         ((void (*)(void))(m->base + m->init))();
     }
+}
+
+void dm_modules_teardown(void) {
+    for (int i = 0; i < g_nmod; i++) {
+        module_t *m = &g_mod[i];
+        free(m->symh); m->symh = NULL;
+        free(m->pristine); m->pristine = NULL;
+        if (!m->base || !m->size) continue;
+        uint64_t pre = m->patch_off < 0 ? (uint64_t)-m->patch_off : 0;
+        uint8_t *start = m->base - pre;
+        size_t total = (size_t)(pre + m->size);
+        if (!g_jit_base || start < g_jit_base || start >= g_jit_base + g_jit_span) {
+#if TARGET_OS_IPHONE
+            vm_deallocate(mach_task_self(), (vm_address_t)start, total);
+#else
+            munmap(start, total);
+#endif
+        }
+        m->base = NULL; m->size = 0; m->loaded = 0;
+    }
+    if (g_jit_base && g_jit_span) {
+#if TARGET_OS_IPHONE
+        vm_deallocate(mach_task_self(), (vm_address_t)g_jit_base, (vm_size_t)g_jit_span);
+#else
+        munmap(g_jit_base, (size_t)g_jit_span);
+#endif
+        g_jit_base = NULL; g_jit_span = 0;
+    }
+    free(g_mod); g_mod = NULL;
+    free(g_loaded); g_loaded = NULL;
+    g_nmod = 0; g_nloaded = 0; g_mod_capacity = 0;
+    dm_fps_state = NULL; g_fps_mod = NULL;
 }

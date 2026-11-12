@@ -596,3 +596,34 @@ int own_check_locked(char *why, size_t n) {
     CFRelease(live); CFRelease(ghost);
     return ok;
 }
+
+static void hm_rel_own(void *v) { if (v) CFRelease(v); }
+static void tex_pin_free(void *v) { tex_pin *p = v; if (!p) return; if (p->object) CFRelease(p->object); free(p); }
+
+void own_teardown(void) {
+    pthread_mutex_lock(&g_smu);
+    nvn_hm_clear(&g_by_serial, hm_rel_own);
+    nvn_hm_clear(&g_by_serial_held, NULL);
+    nvn_hm_clear(&g_ghost, hm_rel_own);
+    nvn_hm_clear(&g_ghost_held, NULL);
+    nvn_hm_clear(&g_ghost_use, free);
+    g_ghost_lru = g_ghost_mru = NULL;
+    g_ghost_puts = 0;
+    nvn_hm_clear(&g_tex_live, NULL);
+    nvn_hm_clear(&g_tex_pins, tex_pin_free);
+    nvn_hm_clear(&g_tex_pin_objects, NULL);
+    nvn_hm_clear(&g_retire_wait, hm_rel_own);
+    nvn_hm_clear(&g_alias, hm_rel_own);
+    nvn_hm_clear(&g_alias_cells, free);
+    nvn_hm_clear(&g_alias_seen, NULL);
+    if (g_alias_set) { CFRelease(g_alias_set); g_alias_set = NULL; }
+    g_alias_evicted = g_alias_taken = 0;
+    os_unfair_lock_lock(&g_snote_lk);
+    memset(g_snote, 0, sizeof g_snote);
+    g_nsnote = 0;
+    memset(g_ser_log, 0, sizeof g_ser_log);
+    atomic_store(&g_ser_gen, 1);
+    os_unfair_lock_unlock(&g_snote_lk);
+    pthread_mutex_unlock(&g_smu);
+    nvn_hm_clear(&g_prog_pins, free);
+}

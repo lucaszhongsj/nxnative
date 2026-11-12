@@ -164,3 +164,4 @@ void own_alias_put_locked(const alias_key *k, id o, uint64_t seen);   // o under
 int own_alias_del_locked(const alias_key *k);                          // 1 when k had an entry (retired), 0
 uint32_t own_alias_take_over_locked(const alias_key *k);               // the takeover alone. → how many went
 int own_check_locked(char *why, size_t n);   // the invariants: 1, or 0 with the first difference in why
+void own_teardown(void);                     // iOS shell teardown: release and reset every owner table

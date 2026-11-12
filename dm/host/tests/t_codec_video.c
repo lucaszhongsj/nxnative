@@ -15,6 +15,7 @@
 
 uint64_t now_ns(void) { return 1; }
 __thread _Atomic int dm_host_work;   // hle_thread.c
+void dm_host_lock(pthread_mutex_t *m) { pthread_mutex_lock(m); }
 void dm_host_helper_qos(qos_class_t q) { (void)q; }   // hle_thread.c: the decoder's thread keeps the default class in the unit test
 static struct { void *ev; int bound, set; pthread_t by; } g_ev[16];   // by: the thread that signalled it last
 static pthread_mutex_t g_ev_mu = PTHREAD_MUTEX_INITIALIZER;   // the decoder's thread signals and clears events too

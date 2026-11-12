@@ -71,42 +71,42 @@ static const struct { const char *build; uint32_t clamp, publish, floor0, floor1
     {"3c10ec35c5ef4c3686b4053afb0e58e7", 0x9bf568, 0x9bf578, 0x9bf528, 0x9bf534, 0x128e068, 0x192be00},
     {"98397a10419894652f372d4dc1b6fc2c", 0x9c0928, 0x9c0938, 0x9c08e8, 0x9c08f4, 0x128f130, 0x192d600},
 };
+static int g_dr_state = -1, g_dr_dynamic, g_dr_row;
+static uint8_t *g_dr_base;
 static void dynamic_resolution_tick(void) {
-    static int state = -1, dynamic, row;
-    static uint8_t *base;
-    if (state < 0) {
-        state = 0;
+    if (g_dr_state < 0) {
+        g_dr_state = 0;
         for (int i = 0; i < g_nmod; i++) if (!strcmp(g_mod[i].name, "main"))
-            for (int k = 0; k < (int)(sizeof k_nier_dr / sizeof *k_nier_dr); k++) if (!strcmp(g_mod[i].build_id, k_nier_dr[k].build)) { base = g_mod[i].base; row = k; }
-        if (!base) return;
+            for (int k = 0; k < (int)(sizeof k_nier_dr / sizeof *k_nier_dr); k++) if (!strcmp(g_mod[i].build_id, k_nier_dr[k].build)) { g_dr_base = g_mod[i].base; g_dr_row = k; }
+        if (!g_dr_base) return;
         const char *e=getenv("DM_DYNAMIC_RESOLUTION");
         if (e && strcmp(e,"0") && strcmp(e,"1")) LOG("[RED] DM_DYNAMIC_RESOLUTION=%s: must be 0 or 1; keeping full resolution",e);
-        dynamic=e && !strcmp(e,"1");
-        if (dynamic) {
+        g_dr_dynamic=e && !strcmp(e,"1");
+        if (g_dr_dynamic) {
             uint32_t clamp = 0, publish = 0;
             uint64_t floors[2] = {0};
-            if (!rd((uint64_t)(base + k_nier_dr[row].clamp), &clamp, 4) || !rd((uint64_t)(base + k_nier_dr[row].publish), &publish, 4) ||
-                !rd((uint64_t)(base + k_nier_dr[row].floor0), &floors[0], 8) || !rd((uint64_t)(base + k_nier_dr[row].floor1), &floors[1], 8) ||
+            if (!rd((uint64_t)(g_dr_base + k_nier_dr[g_dr_row].clamp), &clamp, 4) || !rd((uint64_t)(g_dr_base + k_nier_dr[g_dr_row].publish), &publish, 4) ||
+                !rd((uint64_t)(g_dr_base + k_nier_dr[g_dr_row].floor0), &floors[0], 8) || !rd((uint64_t)(g_dr_base + k_nier_dr[g_dr_row].floor1), &floors[1], 8) ||
                 clamp != 0x1e254c80u || publish != 0x54000489u ||
                 floors[0] != 0x72a7f00c5280000cull || floors[1] != 0x72a7f00c5280000cull) {
                 LOG("[RED] dynamic resolution needs a verified native scale/UV rewrite; keeping full resolution");
-                dynamic = 0;
+                g_dr_dynamic = 0;
             }
         }
-        state=1;
-        LOG("main: NieR dynamic resolution %s (DM_DYNAMIC_RESOLUTION)",dynamic?"on; native controller, 70–100% scale":"off; full resolution");
+        g_dr_state=1;
+        LOG("main: NieR dynamic resolution %s (DM_DYNAMIC_RESOLUTION)",g_dr_dynamic?"on; native controller, 70–100% scale":"off; full resolution");
     }
-    if (!state) return;
+    if (!g_dr_state) return;
     uint32_t cur[2];
-    uint64_t a = (uint64_t)(base + k_nier_dr[row].minimum);
+    uint64_t a = (uint64_t)(g_dr_base + k_nier_dr[g_dr_row].minimum);
     if (!rd(a, cur, sizeof cur)) return;
-    uint32_t minimum = dynamic ? 0x3f333333u : 0x3f800000u;
+    uint32_t minimum = g_dr_dynamic ? 0x3f333333u : 0x3f800000u;
     if (cur[0] != minimum) {
         uint32_t *p = (uint32_t *)(uintptr_t)a;
         dm_guest_write_prepare(p, 4);
         __atomic_store_n(p, minimum, __ATOMIC_RELAXED);
     }
-    if (!dynamic && cur[1] != 0x3f800000u) {
+    if (!g_dr_dynamic && cur[1] != 0x3f800000u) {
         uint32_t *p = (uint32_t *)(uintptr_t)(a + 4);
         dm_guest_write_prepare(p, 4);
         __atomic_store_n(p, 0x3f800000u, __ATOMIC_RELAXED);
@@ -171,15 +171,16 @@ static void fb_find(void) {
     LOG("main: Frostbite %s at main+%#llx (ForceSimRate +%#x, MaxSimFps +%#x), type info main+%#llx, %d instance caches", cls, (unsigned long long)rec, fb.off_rate, fb.off_max,
         (unsigned long long)fb.ti, fb.ncache);
 }
+static int g_fb_nlog;
 static void fb_tick(int target, const char *src) {
-    static int nlog; uint64_t ti = (uint64_t)(uintptr_t)(fb.base + fb.ti);
+    uint64_t ti = (uint64_t)(uintptr_t)(fb.base + fb.ti);
     for (int j = 0; j < fb.ncache; j++) {
         uint64_t inst = 0, tinfo = 0; int32_t rate; float max;
         if (!rd((uint64_t)(uintptr_t)(fb.base + fb.cache[j]), &inst, sizeof inst) || !inst || !rd(inst + 8, &tinfo, sizeof tinfo) || tinfo != ti) continue;   // not made yet, or another word
         if (!rd(inst + fb.off_rate, &rate, sizeof rate) || !rd(inst + fb.off_max, &max, sizeof max)) continue;
         if (rate != target) { int32_t *p = (int32_t *)(uintptr_t)(inst + fb.off_rate); dm_guest_write_prepare(p, sizeof *p); __atomic_store_n(p, target, __ATOMIC_RELAXED); }
         if (max != (float)target) { float w = (float)target, *p = (float *)(uintptr_t)(inst + fb.off_max); dm_guest_write_prepare(p, sizeof *p); __atomic_store_n((uint32_t *)p, *(uint32_t *)&w, __ATOMIC_RELAXED); }
-        if ((rate != target || max != (float)target) && nlog < 8) { nlog++; LOG("main: Frostbite simulation rate ForceSimRate %d, MaxSimFps %g → %d (%s)", rate, max, target, src); }
+        if ((rate != target || max != (float)target) && g_fb_nlog < 8) { g_fb_nlog++; LOG("main: Frostbite simulation rate ForceSimRate %d, MaxSimFps %g → %d (%s)", rate, max, target, src); }
         return;
     }
 }
@@ -215,18 +216,19 @@ static int ue_rows(const module_t *m, lock_t *out, int *missing) {
 // takes the count only through the setter, so writing the level's count does not change the interval the game asks for: the host's present cap does (hle_nvn.c), as for
 // every engine limit here; the write keeps what the game reads back (QualitySettings.vSyncCount) the same as what it shows
 static struct { uint8_t *base; uint64_t ptr; uint32_t idx, arr, size, vsync; } uq;
+static int g_unity_vsync_nlog;
 static void unity_vsync_tick(int target, const char *src) {
-    static int nlog; uint64_t obj = 0, arr = 0; int32_t lvl; uint32_t cur, want = target > 60 ? 1 : 60 / (uint32_t)target;
+    uint64_t obj = 0, arr = 0; int32_t lvl; uint32_t cur, want = target > 60 ? 1 : 60 / (uint32_t)target;
     if (!rd((uint64_t)(uintptr_t)(uq.base + uq.ptr), &obj, sizeof obj) || !obj) return;   // not made yet
     if (!rd(obj + uq.idx, &lvl, sizeof lvl) || lvl < 0 || lvl > 64 || !rd(obj + uq.arr, &arr, sizeof arr) || !arr) return;
     uint64_t a = arr + (uint64_t)lvl * uq.size + uq.vsync;
     if (!rd(a, &cur, sizeof cur) || cur == want || cur < 1 || cur > 4) return;   // already set, or 0: the game paces by targetFrameRate instead
     uint32_t *p = (uint32_t *)(uintptr_t)a; dm_guest_write_prepare(p, sizeof *p); __atomic_store_n(p, want, __ATOMIC_RELAXED);
-    if (nlog < 8) { nlog++; LOG("main: Unity QualitySettings.vSyncCount (level %d) %u → %u vsyncs (%d fps; %s)", lvl, cur, want, target, src); }
+    if (g_unity_vsync_nlog < 8) { g_unity_vsync_nlog++; LOG("main: Unity QualitySettings.vSyncCount (level %d) %u → %u vsyncs (%d fps; %s)", lvl, cur, want, target, src); }
 }
 // The running main's engine limiters, found once: by the first present (dm_fps_lock_tick) or by the graphics layer's present cap, which may ask first (dm_fps_lock_engine, from the acquire)
 static lock_t ue[4], target_lock, monolith_lock, unity_tfr; static const lock_t *rows[MAX_LOCKS]; static int nrow, nier, ue_missing; static uint8_t *base; static uint32_t display;
-static pthread_once_t g_found = PTHREAD_ONCE_INIT;
+static int g_fpslock_found; static pthread_mutex_t g_fpslock_mu = PTHREAD_MUTEX_INITIALIZER;
 static void lock_find(void) {
     for (int i = 0; i < g_nmod; i++) if (!strcmp(g_mod[i].name, "main")) {
         if (g_mod[i].native_fps_blocked) { LOG("[RED] main: native frame target disabled: a required timing correction did not match"); continue; }
@@ -255,33 +257,67 @@ static void lock_find(void) {
 // Frostbite's simulation rate, found by name).
 // Without one, and without a frame step state page, nothing makes the game follow the cap, so the graphics layer keeps the game's own present interval (hle_nvn.c fps_present_cap):
 // presenting at a cap the game does not step by runs a fixed-step game fast or slow (Tears of the Kingdom 1.4.2 at 2x with DM_FPS_TARGET=60)
-int dm_fps_lock_engine(void) { pthread_once(&g_found, lock_find); return nrow || nier || fb.n || uq.base; }
+static int g_fps_tick_state = -2, g_fps_tick_nlog[MAX_LOCKS], g_fps_tick_target, g_fps_tick_high, g_nier_nlog;
+static const char *g_fps_tick_src;
+static void fpslock_ensure_found(void) {
+    pthread_mutex_lock(&g_fpslock_mu);
+    if (!g_fpslock_found) { lock_find(); g_fpslock_found = 1; }
+    pthread_mutex_unlock(&g_fpslock_mu);
+}
+void dm_fpslock_teardown(void);
+int dm_fps_lock_engine(void) {
+    fpslock_ensure_found();
+    return nrow || nier || fb.n || uq.base;
+}
+void dm_fpslock_teardown(void) {
+    pthread_mutex_lock(&g_fpslock_mu);
+    g_fpslock_found = 0;
+    memset(ue, 0, sizeof ue);
+    target_lock = (lock_t){0};
+    monolith_lock = (lock_t){0};
+    unity_tfr = (lock_t){0};
+    memset(rows, 0, sizeof rows);
+    nrow = nier = ue_missing = 0;
+    base = NULL;
+    display = 0;
+    memset(&fb, 0, sizeof fb);
+    memset(&uq, 0, sizeof uq);
+    g_fb_nlog = g_unity_vsync_nlog = g_nier_nlog = 0;
+    g_fps_tick_state = -2;
+    memset(g_fps_tick_nlog, 0, sizeof g_fps_tick_nlog);
+    g_fps_tick_target = g_fps_tick_high = 0;
+    g_fps_tick_src = NULL;
+    g_dr_state = -1;
+    g_dr_dynamic = g_dr_row = 0;
+    g_dr_base = NULL;
+    pthread_mutex_unlock(&g_fpslock_mu);
+}
 int nvn_fps_high_now(void);   // hle_nvn.c
 void dm_fps_lock_tick(void) {
     dynamic_resolution_tick();   // separate from the FPS cap
-    static int state = -2, nlog[MAX_LOCKS], target, high; static const char *src;
-    if (state == -1) return;
-    if (state == -2) {
-        state = -1; pthread_once(&g_found, lock_find);
+    if (g_fps_tick_state == -1) return;
+    if (g_fps_tick_state == -2) {
+        g_fps_tick_state = -1; fpslock_ensure_found();
         if (!nrow && !nier && !fb.n && !uq.base && !ue_missing) return;
-        const char *e = getenv("DM_FPS_TARGET"); int t = e ? atoi(e) : dm_profile()->fps_target; src = e ? "DM_FPS_TARGET" : "game profile fps_target";
+        const char *e = getenv("DM_FPS_TARGET"); int t = e ? atoi(e) : dm_profile()->fps_target; g_fps_tick_src = e ? "DM_FPS_TARGET" : "game profile fps_target";
         if (t != 0 && t != 30 && t != 60 && t != 120) { LOG("[RED] DM_FPS_TARGET=%s: must be 0, 30, 60 or 120; leaving the game's frame limit", e); t = 0; }
         if (t == 120 && DM_GAME_FPS_MAX < 120) { LOG("[RED] DM_FPS_TARGET=120: this game's speed at 120 fps is not checked (profile fps_max); running at 60"); t = 60; }
-        high = t == 120;
+        g_fps_tick_high = t == 120;
         if (t && ue_missing) LOG("[RED] main: Unreal %s not found by the rewriter (ue_cvar.py NAMES; game profile ue_fps_cvar): the game's own frame limit stays", DM_GAME_UE_FPS_CVAR);
         if (!nrow && !nier && !fb.n && !uq.base) return;
-        if (!t) { for (int r = 0; r < nrow; r++) LOG("main: %s left as the game sets it (%s)", rows[r]->what, src); if (nier) LOG("main: NieR frame interval left as the game sets it (%s)", src);
-                  if (fb.n) LOG("main: Frostbite simulation rate left as the game sets it (%s)", src); if (uq.base) LOG("main: Unity vSyncCount left as the game sets it (%s)", src); return; }
-        target = t; state = 0;
+        if (!t) { for (int r = 0; r < nrow; r++) LOG("main: %s left as the game sets it (%s)", rows[r]->what, g_fps_tick_src); if (nier) LOG("main: NieR frame interval left as the game sets it (%s)", g_fps_tick_src);
+                  if (fb.n) LOG("main: Frostbite simulation rate left as the game sets it (%s)", g_fps_tick_src); if (uq.base) LOG("main: Unity vSyncCount left as the game sets it (%s)", g_fps_tick_src); return; }
+        g_fps_tick_target = t; g_fps_tick_state = 0;
     }
-    if (high) target = nvn_fps_high_now();   // 120 while frames fit, else 60: the game's step stays what the screen shows (hle_nvn.c fps_high)
+    int target = g_fps_tick_target; const char *src = g_fps_tick_src; int *nlog = g_fps_tick_nlog;
+    if (g_fps_tick_high) target = nvn_fps_high_now();   // 120 while frames fit, else 60: the game's step stays what the screen shows (hle_nvn.c fps_high)
     if (nier) {
         // NieR:Automata US/EU 1.0.3 (3c10ec35c5ef4c3686b4053afb0e58e7):
         // - [base + 0x192be00] points to the NVN graphics device object whose +0x9c160 holds the present interval (1 = 60 FPS, 2 = 30 FPS),
         //   and base + 0x192c304 (+0x504) holds the requested interval mode (0 = 60 FPS, 1 = 30 FPS).
         // Resolution policy is applied independently above, so 30/60 FPS does
         // not implicitly enable or disable the native resolution controller.
-        uint64_t p = 0; static int nlog_nier;
+        uint64_t p = 0;
         uint32_t want = target > 60 ? 1 : (uint32_t)(60 / target), want_mode = want - 1, cur_mode = 0;
         if (rd((uint64_t)(uintptr_t)(base + display + 0x504), &cur_mode, sizeof cur_mode) && cur_mode != want_mode && (cur_mode == 0 || cur_mode == 1)) {
             uint32_t *dst = (uint32_t *)(uintptr_t)(base + display + 0x504);
@@ -293,7 +329,7 @@ void dm_fps_lock_tick(void) {
             if (rd(a, &cur, sizeof cur) && cur != want && (cur == 1 || cur == 2)) {
                 uint32_t *dst = (uint32_t *)(uintptr_t)a;
                 dm_guest_write_prepare(dst, sizeof *dst); __atomic_store_n(dst, want, __ATOMIC_RELAXED);
-                if (nlog_nier++ < 8) LOG("main: NieR frame interval %u → %u (%d fps; %s)", cur, want, target, src);
+                if (g_nier_nlog++ < 8) LOG("main: NieR frame interval %u → %u (%d fps; %s)", cur, want, target, src);
             }
         }
     }

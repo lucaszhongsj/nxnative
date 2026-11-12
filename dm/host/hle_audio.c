@@ -49,7 +49,10 @@ typedef struct {
 // started a silent sink, then Start started a second one over the same single-consumer queues (or the AudioUnit beside it); a Stop racing a suspend joined a sink that never existed
 #define AOMAX 8
 static aout *g_aos[AOMAX];
-static pthread_mutex_t g_aos_lock = PTHREAD_MUTEX_INITIALIZER;
+static pthread_mutex_t g_aos_lock __attribute__((section("__DATA,__dm_keep"))) = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t g_aos_cv __attribute__((section("__DATA,__dm_keep"))) = PTHREAD_COND_INITIALIZER;
+static pthread_t g_wd_th;
+static int g_wd_on;
 static int g_suspended;
 static aout *ao(const void *g) { aout *a = objmap_get(g); if (!a) die("AudioOut %p was not created by the host", g); return a; }
 // the call site as "module+offset"; "host" when the host itself calls (in-process audio renderer)
@@ -354,8 +357,12 @@ static void stats_drain(void) {
 static void *au_watchdog(void *p) {
     (void)p; uint64_t last = now_ns();
     for (;;) {
-        usleep(WD_TICK_MS * 1000);
+        struct timespec ts; clock_gettime(CLOCK_REALTIME, &ts);
+        ts.tv_nsec += WD_TICK_MS * 1000000L;
+        if (ts.tv_nsec >= 1000000000L) { ts.tv_sec++; ts.tv_nsec -= 1000000000L; }
         pthread_mutex_lock(&g_aos_lock);
+        if (g_suspended != 2) pthread_cond_timedwait(&g_aos_cv, &g_aos_lock, &ts);
+        if (g_suspended == 2) { pthread_mutex_unlock(&g_aos_lock); break; }
         uint64_t t = now_ns(), gap = t - last; last = t;
         for (int i = 0; i < AOMAX; i++) {
             aout *a = g_aos[i]; if (!a || !a->au) continue;
@@ -392,7 +399,6 @@ static void *au_watchdog(void *p) {
     }
     return NULL;
 }
-static void au_watchdog_start(void) { pthread_t t; if (!pthread_create(&t, NULL, au_watchdog, NULL)) pthread_detach(t); }
 
 // AudioOutParameter = { int32 sampleRate; uint16 channelCount; uint16 _r; ... }, 0 = system default (48 kHz / 2 channels)
 HLE_FORCE("_ZN2nn5audio27InitializeAudioOutParameterEPNS0_17AudioOutParameterE", "audio output parameter defaults", void, h_au_InitParam, uint8_t *p) { memset(p, 0, 8); }
@@ -432,8 +438,10 @@ static Result au_open_at(void *g, void *ev, const char *name, const uint8_t *par
     int slot = -1; for (int i = 0; i < AOMAX; i++) if (!g_aos[i]) { slot = i; break; }
     if (slot < 0) die("more than %d AudioOuts open at once", AOMAX);
     g_aos[slot] = a;
+    if (use_au && !g_wd_on && g_suspended != 2) {
+        g_wd_on = !pthread_create(&g_wd_th, NULL, au_watchdog, NULL);
+    }
     pthread_mutex_unlock(&g_aos_lock);
-    if (use_au) { static pthread_once_t wd = PTHREAD_ONCE_INIT; pthread_once(&wd, au_watchdog_start); }
     au_info(g, ch, STATE_STOPPED);
     return RES_OK;
 }
@@ -786,4 +794,32 @@ void dm_audio_reset(void) {
     }
     LOG("audio outputs set up again after the media services reset");
     pthread_mutex_unlock(&g_aos_lock);
+}
+void dm_audio_stop_all(void) {
+    aout *stopped[AOMAX] = {0};
+    pthread_t wd_th; int join_wd = 0;
+    pthread_mutex_lock(&g_aos_lock);
+    g_suspended = 2;
+    pthread_cond_broadcast(&g_aos_cv);
+    if (g_wd_on) { wd_th = g_wd_th; g_wd_on = 0; join_wd = 1; }
+    for (int i = 0; i < AOMAX; i++) {
+        aout *a = g_aos[i]; if (!a) continue;
+        g_aos[i] = NULL;
+        au_halt(a);
+        if (a->backend == BK_NULL) null_stop(a);
+        stopped[i] = a;
+    }
+    pthread_mutex_unlock(&g_aos_lock);
+    if (join_wd) pthread_join(wd_th, NULL);
+    for (int i = 0; i < AOMAX; i++) if (stopped[i]) {
+        aout *a = stopped[i];
+        atomic_store_explicit(&a->notify_run, 0, memory_order_release);
+        dispatch_semaphore_signal(a->notify_sem);
+        pthread_join(a->notify_th, NULL);
+        pthread_mutex_lock(&g_aos_lock);
+        int in_flight = a->start_phase == AU_CANCELED;
+        a->closed = in_flight; a->reset_pending = 0;
+        pthread_mutex_unlock(&g_aos_lock);
+        if (!in_flight) aout_free(a);
+    }
 }

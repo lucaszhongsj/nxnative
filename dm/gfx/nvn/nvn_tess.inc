@@ -342,3 +342,8 @@ static void tess_draw(NvProg *pr, const p_draw *dw0, const p_draw_idx *di0) {
         ds->tess_md & 8 ? " cw" : "", tess_max(), tess_level() ? ", every level fixed" : "", di ? "indexed" : "arrays");
     if (g_tess_draws == 400 || g_tess_draws == 4000 || g_tess_draws % 40000 == 0) tess_stats_log();
 }
+static void tess_teardown(void) {
+    g_tess_kpso = nil; g_tess_gpso = nil; g_tess_stats = nil; g_tess_kfail = 0;
+    g_tess_buf = g_tess_info = 0; g_tess_count = 0; g_tess_ind = 0;
+    g_tess_draws = g_tess_patches = g_tess_refused = 0;
+}
