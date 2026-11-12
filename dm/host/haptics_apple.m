@@ -383,6 +383,9 @@ static void default_controller(int p, GCDeviceHaptics *h, NSTimeInterval retryAf
     add_engine(p, -1, @"controller default", ^CHHapticEngine *(NSError **e) { (void)e; return [h createEngineWithLocality:GCHapticsLocalityDefault]; });
     channels[p].lastObject.retryAfter = retryAfter;
 }
+static GCHapticsLocality const kJoyConLeftLocality = (GCHapticsLocality)@"JoyCon (L)";
+static GCHapticsLocality const kJoyConRightLocality = (GCHapticsLocality)@"JoyCon (R)";
+
 static void configure(int p, GCController *controller, GCHapticsLocality locality) {
     for (DmRumbleChannel *c in channels[p]) [c stop];
     channels[p] = [NSMutableArray new];
@@ -394,10 +397,25 @@ static void configure(int p, GCController *controller, GCHapticsLocality localit
     if (controller) {
         GCDeviceHaptics *h = controller.haptics;
         NSSet *localities = h.supportedLocalities;
-        if (locality && [localities containsObject:locality]) {
-            NSString *label = [locality isEqualToString:GCHapticsLocalityLeftHandle] ? @"controller left handle" :
+        GCHapticsLocality singleLoc = nil;
+        NSString *singleLabel = nil;
+        if (locality) {
+            if ([localities containsObject:locality]) {
+                singleLoc = locality;
+                singleLabel = [locality isEqualToString:GCHapticsLocalityLeftHandle] ? @"controller left handle" :
                               ([locality isEqualToString:GCHapticsLocalityRightHandle] ? @"controller right handle" : @"controller handle");
-            add_engine(p, -1, label, ^CHHapticEngine *(NSError **e) { (void)e; return [h createEngineWithLocality:locality]; });
+            } else if ([locality isEqualToString:GCHapticsLocalityLeftHandle] && [localities containsObject:kJoyConLeftLocality]) {
+                singleLoc = kJoyConLeftLocality;
+                singleLabel = @"controller left Joy-Con";
+            } else if ([locality isEqualToString:GCHapticsLocalityRightHandle] && [localities containsObject:kJoyConRightLocality]) {
+                singleLoc = kJoyConRightLocality;
+                singleLabel = @"controller right Joy-Con";
+            }
+        }
+        BOOL handles = [localities containsObject:GCHapticsLocalityLeftHandle] && [localities containsObject:GCHapticsLocalityRightHandle];
+        BOOL joycons = !handles && [localities containsObject:kJoyConLeftLocality] && [localities containsObject:kJoyConRightLocality];
+        if (singleLoc) {
+            add_engine(p, -1, singleLabel, ^CHHapticEngine *(NSError **e) { (void)e; return [h createEngineWithLocality:singleLoc]; });
             __weak NSArray *route = channels[p];
             for (DmRumbleChannel *c in channels[p]) c.fallback = ^(NSTimeInterval retryAfter) {
                 if (!route || channels[p] != route) return;
@@ -407,9 +425,11 @@ static void configure(int p, GCController *controller, GCHapticsLocality localit
                 dm_haptics_route(p, 1);
                 fprintf(stderr, "haptics: player %d retrying with the default controller locality\n", p + 1);
             };
-        } else if ([localities containsObject:GCHapticsLocalityLeftHandle] && [localities containsObject:GCHapticsLocalityRightHandle]) {
-            add_engine(p, 0, @"controller left handle", ^CHHapticEngine *(NSError **e) { (void)e; return [h createEngineWithLocality:GCHapticsLocalityLeftHandle]; });
-            add_engine(p, 1, @"controller right handle", ^CHHapticEngine *(NSError **e) { (void)e; return [h createEngineWithLocality:GCHapticsLocalityRightHandle]; });
+        } else if (!locality && (handles || joycons)) {
+            GCHapticsLocality leftLoc = handles ? GCHapticsLocalityLeftHandle : kJoyConLeftLocality;
+            GCHapticsLocality rightLoc = handles ? GCHapticsLocalityRightHandle : kJoyConRightLocality;
+            add_engine(p, 0, handles ? @"controller left handle" : @"controller left Joy-Con", ^CHHapticEngine *(NSError **e) { (void)e; return [h createEngineWithLocality:leftLoc]; });
+            add_engine(p, 1, handles ? @"controller right handle" : @"controller right Joy-Con", ^CHHapticEngine *(NSError **e) { (void)e; return [h createEngineWithLocality:rightLoc]; });
             // Advertised handle localities can still fail to start. Fall back to the standard
             // controller engine, once, rather than keeping two unusable helper connections.
             __weak NSArray *route = channels[p];
@@ -421,9 +441,10 @@ static void configure(int p, GCController *controller, GCHapticsLocality localit
                 dm_haptics_route(p, 1);
                 fprintf(stderr, "haptics: player %d retrying with the default controller locality\n", p + 1);
             };
-            // A server without advanced players gets one engine for both handles (see applyLevel), except for a DualSense: plain players on its
-            // left and right handle engines are felt apart (PR #986: Bluetooth, macOS 26.7.1), so each handle keeps its engine and its own level
-            if (![controller.productCategory isEqualToString:GCProductCategoryDualSense]) for (DmRumbleChannel *c in channels[p]) c.merge = ^{
+            // A server without advanced players gets one engine for both handles (see applyLevel), except for a DualSense or paired Joy-Cons:
+            // plain players on the DualSense's handle engines are felt apart (PR #986), and JoyCon (L) / JoyCon (R) are two separate Bluetooth
+            // controllers whose motors are routed per npad when split into JoyLeft and JoyRight
+            if (handles && ![controller.productCategory isEqualToString:GCProductCategoryDualSense]) for (DmRumbleChannel *c in channels[p]) c.merge = ^{
                 if (!route || channels[p] != route) return;
                 for (DmRumbleChannel *old in channels[p]) [old stop];
                 channels[p] = [NSMutableArray new];
