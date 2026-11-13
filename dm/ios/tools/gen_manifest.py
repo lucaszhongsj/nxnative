@@ -93,6 +93,10 @@ def manifest(args):
         data['console'] = console   # the shell marks a Switch 2 game and warns about its memory (LNPANDY/NX2Apple#696)
     if args.built_by:
         data['built_by'] = args.built_by
+    if args.built_at:
+        if not re.match(r'^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$', args.built_at):
+            raise SystemExit(f'[RED] gen_manifest: --built-at {args.built_at!r} is not UTC ISO-8601 (YYYY-MM-DDTHH:MM:SSZ)')
+        data['built_at'] = args.built_at
     return data
 
 
@@ -116,6 +120,7 @@ def main(argv=None):
                     help='FR: a module container whose host is the app (M1); FH: the framework carries its own host (the shell, #451)')
     ap.add_argument('--profile', help='the game\'s dm/games/<title ID>/game.tsv: console in the manifest comes from its first line')
     ap.add_argument('--built-by', help='who built it, for a log line (optional; a device or tool name)')
+    ap.add_argument('--built-at', default='', help='UTC ISO-8601 build timestamp (YYYY-MM-DDTHH:MM:SSZ, optional)')
     args = ap.parse_args(argv)
     data = manifest(args)
     out = Path(args.out)

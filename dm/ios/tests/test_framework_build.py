@@ -104,14 +104,25 @@ class ManifestTests(unittest.TestCase):
 
     def test_values_the_schema_cannot_carry_are_refused(self):
         cases = [('--game', '1234'), ('--modules', ''), ('--modules', 'main_sdk'), ('--chain', 'fixture'),
-                 ('--romfs-identity', 'not-an-identity')]
+                 ('--romfs-identity', 'not-an-identity'), ('--built-at', '2026-11-13')]
         for flag, value in cases:
             with self.subTest(flag=flag, value=value):
                 base = [sys.executable, str(REPO / 'dm/ios/tools/gen_manifest.py'), '/dev/null', '--game', GAME, '--name', 'x',
                         '--display-version', '1', '--package-version', 'v0', '--modules', 'main', '--chain', 'b-1',
                         '--romfs-marker', 'marker', '--romfs-identity', 'DMROMFSID1 title=x size=1 index=2']
-                base[base.index(flag) + 1] = value
+                if flag in base:
+                    base[base.index(flag) + 1] = value
+                else:
+                    base += [flag, value]
                 self.assertNotEqual(subprocess.run(base, capture_output=True).returncode, 0)
+
+    def test_optional_built_at_is_omitted_by_default_and_kept_when_given(self):
+        result, without_ts = self.manifest()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertNotIn('built_at', without_ts)
+        result, with_ts = self.manifest('--built-at', '2026-11-13T16:30:00Z')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(with_ts['built_at'], '2026-11-13T16:30:00Z')
 
 
 class ProjectTemplateTests(unittest.TestCase):
