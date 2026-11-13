@@ -24,7 +24,57 @@ int dm_guest_as_contains(uintptr_t a);   // hle_svc.c
 #define BS_GUARD 16384u
 static pthread_key_t g_bs_key __attribute__((section("__DATA,__dm_keep")));
 static pthread_once_t g_bs_once __attribute__((section("__DATA,__dm_keep"))) = PTHREAD_ONCE_INIT;
-static void bs_free(void *top) { if (top) munmap((uint8_t *)top - BS_SIZE - BS_GUARD, BS_SIZE + BS_GUARD); }
+typedef struct bs_retired { void *base; struct bs_retired *next; } bs_retired_t;
+static pthread_mutex_t g_bs_mu __attribute__((section("__DATA,__dm_keep"))) = PTHREAD_MUTEX_INITIALIZER;
+static bs_retired_t *g_bs_retired __attribute__((section("__DATA,__dm_keep")));
+
+// Drain deferred bigstacks once we are no longer executing inside them.
+static void bs_drain_retired(void) {
+    uintptr_t sp = (uintptr_t)__builtin_frame_address(0);
+    bs_retired_t *ready = NULL;
+    pthread_mutex_lock(&g_bs_mu);
+    bs_retired_t **pp = &g_bs_retired;
+    while (*pp) {
+        bs_retired_t *n = *pp;
+        uintptr_t base = (uintptr_t)n->base;
+        if (sp >= base && sp < base + BS_SIZE + BS_GUARD) {
+            pp = &n->next;
+            continue;
+        }
+        *pp = n->next;
+        n->next = ready;
+        ready = n;
+    }
+    pthread_mutex_unlock(&g_bs_mu);
+    while (ready) {
+        bs_retired_t *next = ready->next;
+        munmap(ready->base, BS_SIZE + BS_GUARD);
+        free(ready);
+        ready = next;
+    }
+}
+
+static void bs_free(void *top) {
+    if (!top) return;
+    uint8_t *base = (uint8_t *)top - BS_SIZE - BS_GUARD;
+    uintptr_t sp = (uintptr_t)__builtin_frame_address(0);
+    // Defer unmapping if pthread_exit runs the TLS destructor on the bigstack itself.
+    if (sp >= (uintptr_t)base && sp < (uintptr_t)top) {
+        bs_retired_t *n = malloc(sizeof(*n));
+        if (n) {
+            n->base = base;
+            pthread_mutex_lock(&g_bs_mu);
+            n->next = g_bs_retired;
+            g_bs_retired = n;
+            pthread_mutex_unlock(&g_bs_mu);
+        }
+        return;
+    }
+    munmap(base, BS_SIZE + BS_GUARD);
+    bs_drain_retired();
+}
+
+void dm_bigstack_teardown(void) { bs_drain_retired(); }
 static void bs_init(void) { if (pthread_key_create(&g_bs_key, bs_free)) die("big stack pthread_key_create"); }
 
 // sp inside the guest address block -> the top of this thread's host stack (16-byte aligned); otherwise 0 (no switch)

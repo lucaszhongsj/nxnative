@@ -222,7 +222,12 @@ static void dev_init_once(void) {
         GLOG("Metal device %s; %d shader table entries", g_dev.name.UTF8String, g_nsh);
     }
 }
-static void dev_init(void) { static pthread_once_t once = PTHREAD_ONCE_INIT; pthread_once(&once, dev_init_once); }
+static pthread_mutex_t g_dev_mu = PTHREAD_MUTEX_INITIALIZER;
+static void dev_init(void) {
+    pthread_mutex_lock(&g_dev_mu);
+    if (!g_dev) dev_init_once();
+    pthread_mutex_unlock(&g_dev_mu);
+}
 
 // ---------- Command buffers ----------
 // Transient memory (converted indices, staging for blits, large uniform blocks): bump allocation in 4 MB shared buffers, each reused once the command buffer that last used it completed
@@ -1428,7 +1433,15 @@ GLB(glClientWaitSync, GLenum, void *sy, GLbitfield flags, uint64_t timeout_ns) {
     }
     if (!timeout_ns) return GL_TIMEOUT_EXPIRED;
     uint64_t ms = timeout_ns / 1000000;
-    return [g_ev waitUntilSignaledValue:s->serial timeoutMS:ms ? ms : 1] ? GL_CONDITION_SATISFIED : GL_TIMEOUT_EXPIRED;
+    if (!ms) ms = 1;
+    for (;;) {
+        dm_teardown_check_current_thread();
+        uint64_t step = ms > 10 ? 10 : ms;
+        if ([g_ev waitUntilSignaledValue:s->serial timeoutMS:step]) return GL_CONDITION_SATISFIED;
+        if (dm_teardown_is_parking()) dm_teardown_check_current_thread();
+        if (ms <= step) return GL_TIMEOUT_EXPIRED;
+        ms -= step;
+    }
 }
 GL(glGenVertexArrays, void, GLsizei n, GLuint *out) { for (GLsizei i = 0; i < n; i++) out[i] = name_new((void ***)&g_vaos, &g_nvaos, &g_capvaos, sizeof(vao_t)); }
 GL(glDeleteVertexArrays, void, GLsizei n, const GLuint *v) { for (GLsizei i = 0; i < n; i++) if (v[i] && v[i] < g_nvaos && g_vaos[v[i]]) { free(g_vaos[v[i]]); g_vaos[v[i]] = NULL; if (S.vao == v[i]) S.vao = 0; } }
@@ -2127,37 +2140,47 @@ EGL(eglCreateWindowSurface, EGLSurface, EGLDisplay d, EGLConfig cfg, void *win, 
     return (EGLSurface)(uintptr_t)3;
 }
 EGL(eglDestroySurface, EGLBoolean, EGLDisplay d, EGLSurface s) { (void)d; (void)s; return EGL_TRUE; }
+static pthread_t g_mc_th;
+static int g_mc_known, g_mc_sized;
+
 EGL(eglMakeCurrent, EGLBoolean, EGLDisplay d, EGLSurface dr, EGLSurface rd, EGLContext c) {
     (void)d; (void)rd;
-    static pthread_t th; static int known, sized;
-    if (c && dr) { pthread_t me = pthread_self(); if (!known || !pthread_equal(th, me)) { th = me; known = 1; OLOG("context current on a new thread"); } }
+    if (c && dr) { pthread_t me = pthread_self(); if (!g_mc_known || !pthread_equal(g_mc_th, me)) { g_mc_th = me; g_mc_known = 1; OLOG("context current on a new thread"); } }
     // a context's viewport and scissor box start as its first drawable's size (LÖVE reads them back at start)
-    if (c && dr && !sized && g_win.made) { sized = 1; if (!S.vp[2] && !S.vp[3]) { S.vp[2] = S.sc[2] = g_win.w; S.vp[3] = S.sc[3] = g_win.h; } }
+    if (c && dr && !g_mc_sized && g_win.made) { g_mc_sized = 1; if (!S.vp[2] && !S.vp[3]) { S.vp[2] = S.sc[2] = g_win.w; S.vp[3] = S.sc[3] = g_win.h; } }
     return EGL_TRUE;
 }
 EGL(eglSwapInterval, EGLBoolean, EGLDisplay d, EGLint n) { (void)d; if (n != S.swap_interval) { GLOG("swap interval %d", n); S.swap_interval = n; } return EGL_TRUE; }
 static uint64_t g_next_swap;   // pacing without the display link: the earliest time of the next swap
 EGL(eglSwapBuffers, EGLBoolean, EGLDisplay d, EGLSurface s) {
     (void)d; (void)s;
+    dm_teardown_check_current_thread();
     dm_gfx_enter();
+    int vs = 1;
+    int next_k = 0;
     @autoreleasepool {
         if (!g_win.made) { int w, h; dm_vi_layer_size(&w, &h); win_make(w > 0 ? w : 1280, h > 0 ? h : 720); }
         if (g_pend_clear.bits) clears_flush();
         uint64_t v = cb_commit();
-        int vs = S.swap_interval < 1 ? 1 : S.swap_interval > 4 ? 4 : S.swap_interval;
+        vs = S.swap_interval < 1 ? 1 : S.swap_interval > 4 ? 4 : S.swap_interval;
         int k = g_win.cur;
         g_win.ticket[k] = mtl_present_ext(g_win.serial[k], vs / 60.0, (__bridge void *)g_ev, v, NULL);
-        g_win.cur = (k + 1) % NWIN;
-        if (g_win.ticket[g_win.cur]) mtl_present_wait(g_win.ticket[g_win.cur]);   // its previous present has been shown, so drawing into it again is safe
-        // Paced by the display link when it runs, as the Vulkan layer's acquire: the swap interval in vsyncs
-        uint64_t period = 1000000000ull * vs / 60, now = now_ns();
-        if (S.swap_interval > 0 && mtl_link_active() && mtl_link_wait_tick(vs, 2 * period)) g_next_swap = now_ns() + period;
-        else if (S.swap_interval > 0) {
-            if (g_next_swap > now) { uint64_t w = g_next_swap - now; struct timespec ts = {(time_t)(w / 1000000000ull), (long)(w % 1000000000ull)}; nanosleep(&ts, NULL); }
-            now = now_ns(); g_next_swap = g_next_swap && now < g_next_swap + period ? g_next_swap + period : now + period;
-        }
+        next_k = (k + 1) % NWIN;
+        g_win.cur = next_k;
     }
+    // Release the graphics suspend gate right after GPU commit/present so blocking waits never stall dm_gfx_suspend(1).
     dm_gfx_leave();
+    dm_teardown_check_current_thread();
+    if (g_win.ticket[next_k]) mtl_present_wait(g_win.ticket[next_k]);   // its previous present has been shown, so drawing into it again is safe
+    dm_teardown_check_current_thread();
+    // Paced by the display link when it runs, as the Vulkan layer's acquire: the swap interval in vsyncs
+    uint64_t period = 1000000000ull * vs / 60, now = now_ns();
+    if (S.swap_interval > 0 && mtl_link_active() && mtl_link_wait_tick(vs, 2 * period)) g_next_swap = now_ns() + period;
+    else if (S.swap_interval > 0) {
+        if (g_next_swap > now) { uint64_t w = g_next_swap - now; struct timespec ts = {(time_t)(w / 1000000000ull), (long)(w % 1000000000ull)}; nanosleep(&ts, NULL); }
+        now = now_ns(); g_next_swap = g_next_swap && now < g_next_swap + period ? g_next_swap + period : now + period;
+    }
+    dm_teardown_check_current_thread();
     frame_end();
     return EGL_TRUE;
 }
@@ -2249,10 +2272,17 @@ void dm_gl_teardown(void) { @autoreleasepool {
     g_nclr_cache = 0;
 
     for (int i = 0; i < NWIN; i++) { g_win.col[i] = nil; g_win.serial[i] = g_win.ticket[i] = 0; }
-    g_win.ds = nil; g_win.made = 0;
+    g_win.ds = nil; g_win.made = 0; g_win.cur = 0; g_win.w = 0; g_win.h = 0;
 
     for (int i = 0; i < g_nsh; i++) { free(g_sh[i].a); free(g_sh[i].u); free(g_sh[i].t); }
     free(g_sh); g_sh = NULL; g_nsh = 0;
+
+    memset(&P, 0, sizeof P);
+    memset(&g_pend_clear, 0, sizeof g_pend_clear);
+    memset(&g_mc_th, 0, sizeof g_mc_th);
+    g_mc_known = g_mc_sized = 0;
+    g_next_swap = 0;
+    g_frames = 0;
 
     g_lib = nil; g_util = nil;
     g_samp0 = nil;

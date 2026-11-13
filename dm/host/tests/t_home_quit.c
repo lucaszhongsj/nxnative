@@ -191,6 +191,15 @@ int main(void) {
     CHECK(!strcmp(hq_in_app_name(0), "system") && !strcmp(hq_in_app_name(1), "app") && !strcmp(hq_in_app_name(-1), "unavailable"), "the setting's words");
     CHECK(!strcmp(hq_in_app_name(0x7fffffffffffffffL), "off"), "disabled is off");
 
+    // - + + (View + Menu) chord acts identically to Home when both are held together.
+    CHECK(!hq_pad_home(0, 0, 0) && !hq_pad_home(0, 1, 0) && !hq_pad_home(0, 0, 1), "single minus or plus alone does not trigger quit");
+    CHECK(hq_pad_home(1, 0, 0) && hq_pad_home(0, 1, 1) && hq_pad_home(1, 1, 0), "Home or minus+plus chord triggers quit");
+    q = (home_quit){0};
+    CHECK(hq_step(&q, 1.0, hq_pad_home(0, 1, 1), 0, 0) == HQ_HOLDING, "- + + held: hold starts");
+    CHECK(hq_step(&q, 2.9, hq_pad_home(0, 1, 1), 0, 0) == HQ_HOLDING, "- + + held 1.9 s: still holding");
+    CHECK(hq_step(&q, 3.0, hq_pad_home(0, 1, 1), 0, 0) == HQ_PROMPT, "- + + held 2.0 s: prompt opens");
+    CHECK(hq_step(&q, 3.2, hq_pad_home(0, 0, 0), 1, 0) == HQ_QUIT, "A confirms quit after - + + prompt");
+
     printf("t_home_quit: %d checks, %d failed\n", checks, fails);
     return fails != 0;
 }

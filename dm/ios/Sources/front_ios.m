@@ -584,6 +584,7 @@ static void save_sync_background(void) {
 }
 
 static _Atomic int g_quitting;
+static _Atomic uint64_t g_quit_epoch __attribute__((section("__DATA,__dm_keep")));
 void front_ios_focus_event(int ev) {
     if (!g_layer || atomic_load(&g_quitting)) return;
     switch (ev) {
@@ -600,7 +601,7 @@ void front_ios_focus_event(int ev) {
 
 // ---- Quit to the launcher (LNPANDY/NX2Apple#421) ----
 // Two ways open the quit prompt (quit_prompt.h) over the game: Quit at the end of the in-game menu (the gear at the top centre, GameMenu.swift, which stays while
-// a controller hides the other touch controls), and holding a controller's Home button for 2 seconds (home_quit.h, as on the Mac; the indicator at the top fills
+// a controller hides the other touch controls), and holding a controller's Home button or both - + + (View + Menu) for 2 seconds (home_quit.h, as on the Mac; the indicator at the top fills
 // while it is held). A tap on Quit or A quits, a tap on Cancel or outside the card, B or a new press of Home closes it. While it is open the game is told it lost
 // the focus, as the Switch's HOME menu does, and gets no touch or controller input.
 // Quitting ends the process: one game runs per process (dm_profile() and the host's early loading run once, the shell's ShellMain.m), so the engine cannot hand
@@ -655,7 +656,7 @@ static void quit_buttons(int *home, int *a, int *b, GCController *__strong *hold
     *home = *a = *b = 0;
     for (GCController *c in GCController.controllers) {
         GCExtendedGamepad *g = c.extendedGamepad; if (!g) continue;
-        if (g.buttonHome.isPressed) { *home = 1; if (!*holder) *holder = c; }
+        if (hq_pad_home(g.buttonHome.isPressed, g.buttonOptions.isPressed, g.buttonMenu.isPressed)) { *home = 1; if (!*holder) *holder = c; }
         *a |= g.buttonA.isPressed; *b |= g.buttonB.isPressed;
     }
 }
@@ -721,9 +722,22 @@ static void front_ios_teardown(void) {
         g_root = nil;
     }
     g_layer = nil;
+    atomic_fetch_add(&g_quit_epoch, 1);
     atomic_store(&g_quitting, 0);
 }
 // The prompt's quit: the cloud saves go out (as when the app goes to the background), then in the shell the host tears down its threads, GPU resources and 5 GB address space and returns the window to the library, or in a single-game app the host ends as on a SIGTERM. Off the main queue: both wait
+static void quit_now(void);
+
+// Return to the shell cleanly when a hosted game exits on its own (dm_main return, svcExitProcess, svcBreak).
+void dm_shell_quit_from_guest(const char *why) {
+    if (atomic_load(&g_quitting) || !g_layer) return;
+    uint64_t epoch = atomic_load(&g_quit_epoch);
+    LOG("front end: guest exit triggers shell return (%s)", why ? why : "unknown");
+    dispatch_async(dispatch_get_main_queue(), ^{
+        if (atomic_load(&g_quit_epoch) == epoch && g_layer) quit_now();
+    });
+}
+
 static void quit_now(void) {
     if (atomic_exchange(&g_quitting, 1)) return;
     dm_shell_return_fn shell_return = (dm_shell_return_fn)dlsym(RTLD_DEFAULT, "dm_shell_return_to_library");

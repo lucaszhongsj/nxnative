@@ -147,6 +147,11 @@ static inline void hq_text_line(const char *text, int i, const char *def, char *
     memcpy(out, s, n); out[n] = 0;
 }
 
+// Holding either the controller's Home button or both - and + (View and Menu) together opens the quit prompt.
+static inline int hq_pad_home(int home, int minus, int plus) {
+    return home != 0 || (minus != 0 && plus != 0);
+}
+
 // GameController's Home button setting for apps (GCControllerHomeButtonSettingInAppAction, macOS 27) as the word the log line names it by:
 // "system" (the system keeps Home whatever the app asks), "app" (the app decides), "off" (the system does nothing with Home in apps),
 // "unavailable" (could not be read)

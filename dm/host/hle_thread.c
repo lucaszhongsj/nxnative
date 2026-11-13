@@ -294,6 +294,16 @@ void dm_teardown_check_current_thread(void) {
     g_lock();
     teardown_exit_locked(t);
 }
+int dm_teardown_is_guest_thread(void) {
+    return pthread_getspecific(g_keythr) != NULL;
+}
+void dm_teardown_park_self(void) {
+    while (pthread_getspecific(g_keythr)) {
+        dm_teardown_check_current_thread();
+        struct timespec ts = { 0, 1000000 };
+        nanosleep(&ts, NULL);
+    }
+}
 static thr_t *pick(int kind, uint64_t a) {
     thr_t *b = NULL;
     for (thr_t *t = g_wait; t; t = t->next) {

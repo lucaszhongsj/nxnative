@@ -57,8 +57,12 @@ void dm_glue_focus_event(int ev) {
 static void *boot_thread(void *p) {
     (void)p;
     void crash_thread_init(void); crash_thread_init();   // crash printing must work on the host thread too (freed on pthread_exit)
+    void dm_host_set_shell_quit(void (*fn)(const char *));
+    void dm_shell_quit_from_guest(const char *why);
+    dm_host_set_shell_quit(dm_shell_quit_from_guest);
     int rc = dm_main(g_argc, g_argv);
     fprintf(stderr, "boot: dm_main returned %d\n", rc);
+    dm_shell_quit_from_guest("dm_main returned");
     return NULL;
 }
 void front_ios_boot(void) {   // front_ios.m, once the game view exists

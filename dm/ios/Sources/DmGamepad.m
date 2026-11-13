@@ -169,6 +169,8 @@ static void pads_start(void);   // Physical controllers, below
     CAShapeLayer *_ring, *_knob;                   // the left stick (the right one is not drawn)
     CALayer *_hint; CATextLayer *_hintText; NSString *_hintWords;   // the 3D layout's right-stick hint: words only, once per launch (see "The right-stick hint")
     DmMenuButton *_menu;                           // opens the in-game menu (GameMenu.swift)
+    UIView *_padHint; CAShapeLayer *_padHintBg;    // controller quit hint below _menu: shown once per launch with keycap pills, fades with _menu
+    NSString *_padHintWords; BOOL _padHintShown;
     unsigned _menuGen;                             // generation counter for the controller-idle menu fade timer
     BOOL _menuOpen;                                // the in-game menu is currently presented
     UIImpactFeedbackGenerator *_touchFeedback;       // one short feedback per touch-control press edge
@@ -245,6 +247,14 @@ static BOOL fullOnly(int b) { return b == B_LS || b == B_RS || b >= B_LEFT; }   
         __weak DmGamepad *weakSelf = self;
         [_menu addAction:[UIAction actionWithHandler:^(UIAction *a) { (void)a; [weakSelf reset]; }] forControlEvents:UIControlEventMenuActionTriggered];   // the menu opens: release every key and touch first
         [self addSubview:_menu];
+        const char *padQuit = getenv("DM_PAD_QUIT_HINT");   // the shell passes the player's language with {-} and {+}; empty turns it off
+        _padHintWords = padQuit ? [NSString stringWithUTF8String:padQuit] : @"Hold {-} and {+} to quit";
+        _padHint = [UIView new]; _padHint.userInteractionEnabled = NO; _padHint.hidden = YES; _padHint.alpha = 0;
+        _padHintBg = [CAShapeLayer layer];
+        _padHintBg.fillColor = k_idle.CGColor; _padHintBg.strokeColor = k_line.CGColor; _padHintBg.lineWidth = 1.5;
+        _padHintBg.shadowColor = UIColor.blackColor.CGColor; _padHintBg.shadowOpacity = 0.2; _padHintBg.shadowRadius = 3; _padHintBg.shadowOffset = CGSizeMake(0, 1);
+        [_padHint.layer addSublayer:_padHintBg];
+        [self addSubview:_padHint];
         const char *hint = getenv("DM_TOUCH_HINT");   // the shell passes the player's language; empty turns the hint off
         _hintWords = hint ? [NSString stringWithUTF8String:hint] : @"Right stick: drag here";
         _hint = [CALayer layer]; _hint.backgroundColor = [UIColor colorWithWhite:0 alpha:0.5].CGColor; _hint.opacity = 0; _hint.hidden = YES;
@@ -544,6 +554,8 @@ static void placeLabel(CATextLayer *t, CGPoint c, CGFloat fs) {
     in.frame = _knob.bounds; in.path = ip; CGPathRelease(ip);
     [CATransaction commit];
     [self placeHint];
+    if (!_padHint.hidden) [self placePadHint];
+    else if (_padOff && !_layout.onTV && !_menuOpen && ![self voiceOverRunning] && !_padHintShown && _padHintWords.length && !CGRectIsEmpty(self.bounds)) [self wakeMenu];
     [self refresh];
 }
 
@@ -633,7 +645,7 @@ static void read_pad(GCExtendedGamepad *g) {
     dm_pad_set_player(p, m, axis(g.leftThumbstick.xAxis.value), axis(g.leftThumbstick.yAxis.value), axis(g.rightThumbstick.xAxis.value), axis(g.rightThumbstick.yAxis.value));
 }
 // Home and Capture: without this iOS takes them as system gestures (Home opens the Games overlay, Capture a screenshot); the app gives them no function
-static void pad_keep_system_buttons(GCController *c) {   // Home held for 2 s opens the quit prompt (front_ios.m): iOS 27 respects the claim when the Home button setting for apps lets the app decide
+static void pad_keep_system_buttons(GCController *c) {   // Home (or holding both - + + / View + Menu for 2 s) opens the quit prompt (front_ios.m): iOS 27 respects Home claims when the Home button setting for apps lets the app decide
     for (NSString *b in @[GCInputButtonHome, GCInputButtonShare]) c.physicalInputProfile.buttons[b].preferredSystemGestureState = GCSystemGestureStateDisabled;
     c.extendedGamepad.buttonHome.pressedChangedHandler = ^(GCControllerButtonInput *b, float v, BOOL down) { (void)b; (void)v; (void)down; front_ios_quit_poll(); };
 }
@@ -693,23 +705,126 @@ static BOOL pads_slotted(GCController *gone) {
     dispatch_async(dispatch_get_main_queue(), ^{ cp_poll(); });   // a controller came or went while the controller applet's prompt is up
     return waiting || pad_slot_mask(&g_slots) != 0;   // a controller waiting for its first press hides the touch gamepad too
 }
+- (void)hidePadHintNow {
+    [_padHint.layer removeAllAnimations];
+    _padHint.alpha = 0; _padHint.hidden = YES;
+}
+- (void)placePadHint {
+    if (CGRectIsEmpty(self.bounds) || !_padHintWords.length) return;
+    NSMutableArray<NSString *> *parts = [NSMutableArray array];
+    NSMutableArray<NSNumber *> *isCap = [NSMutableArray array];
+    NSCharacterSet *ws = NSCharacterSet.whitespaceAndNewlineCharacterSet;
+    NSUInteger pos = 0, len = _padHintWords.length;
+    while (pos < len) {
+        NSRange rMinus = [_padHintWords rangeOfString:@"{-}" options:0 range:NSMakeRange(pos, len - pos)];
+        NSRange rPlus = [_padHintWords rangeOfString:@"{+}" options:0 range:NSMakeRange(pos, len - pos)];
+        NSRange next = (rMinus.location <= rPlus.location) ? rMinus : rPlus;
+        if (next.location == NSNotFound) {
+            NSString *tail = [[_padHintWords substringFromIndex:pos] stringByTrimmingCharactersInSet:ws];
+            if (tail.length) { [parts addObject:tail]; [isCap addObject:@NO]; }
+            break;
+        }
+        if (next.location > pos) {
+            NSString *seg = [[_padHintWords substringWithRange:NSMakeRange(pos, next.location - pos)] stringByTrimmingCharactersInSet:ws];
+            if (seg.length) { [parts addObject:seg]; [isCap addObject:@NO]; }
+        }
+        [parts addObject:(next.location == rMinus.location ? @"−" : @"+")];
+        [isCap addObject:@YES];
+        pos = NSMaxRange(next);
+    }
+    if (!parts.count) return;
+
+    CGFloat u = self.u;
+    CGFloat minX = self.safeAreaInsets.left + 8.0, maxX = self.bounds.size.width - self.safeAreaInsets.right - 8.0;
+    CGFloat availW = MAX(maxX - minX, 120.0);
+    CGFloat fs = fmin(fmax(12.5 * u, 11.0), 16.0);
+    CGFloat su = 1.0, h = 0, padX = 0, gap = 0, capW = 0, capH = 0, boxW = 0;
+    UIFont *textFont = nil;
+    NSMutableArray<NSNumber *> *widths = [NSMutableArray arrayWithCapacity:parts.count];
+    for (int pass = 0; pass < 2; pass++) {
+        su = fs / 12.5;
+        h = round(28.0 * su); padX = round(12.0 * su); gap = round(4.5 * su);
+        capW = round(22.0 * su); capH = round(17.0 * su);
+        textFont = [UIFont systemFontOfSize:fs weight:UIFontWeightSemibold];
+        [widths removeAllObjects];
+        CGFloat contentW = 0;
+        for (NSUInteger i = 0; i < parts.count; i++) {
+            CGFloat w = isCap[i].boolValue ? capW : ceil([parts[i] sizeWithAttributes:@{NSFontAttributeName: textFont}].width);
+            [widths addObject:@(w)];
+            contentW += w + (i > 0 ? gap : 0);
+        }
+        boxW = contentW + 2.0 * padX;
+        if (boxW <= availW || pass == 1) break;
+        fs = fmax(floor(fs * availW / boxW * 2.0) / 2.0, 9.5);
+    }
+
+    [[_padHint.subviews copy] makeObjectsPerformSelector:@selector(removeFromSuperview)];
+    for (CALayer *sub in [_padHint.layer.sublayers copy]) if (sub != _padHintBg) [sub removeFromSuperlayer];
+
+    CGFloat mr = self.geo->swapR; CGPoint mc = self.menuCenter;
+    CGFloat x = round(mc.x - boxW / 2.0);
+    if (x < minX) x = minX;
+    if (x + boxW > maxX) x = MAX(minX, maxX - boxW);
+    CGFloat y = round(mc.y + mr + 7.0 * u);
+
+    [CATransaction begin]; [CATransaction setDisableActions:YES];
+    _padHint.frame = CGRectMake(x, y, boxW, h);
+    _padHintBg.frame = _padHint.bounds;
+    setPath(_padHintBg, CGPathCreateWithRoundedRect(_padHint.bounds, h / 2.0, h / 2.0, NULL));
+
+    UIFont *capFont = [UIFont systemFontOfSize:fs weight:UIFontWeightBold];
+    UIColor *capFill = [UIColor colorWithWhite:1 alpha:0.12], *capStroke = [UIColor colorWithWhite:1 alpha:0.42];
+    CGFloat cx = padX;
+    for (NSUInteger i = 0; i < parts.count; i++) {
+        CGFloat w = widths[i].doubleValue;
+        if (isCap[i].boolValue) {
+            CGRect cr = CGRectMake(cx, round((h - capH) / 2.0), capW, capH);
+            CAShapeLayer *cap = [CAShapeLayer layer];
+            cap.fillColor = capFill.CGColor; cap.strokeColor = capStroke.CGColor; cap.lineWidth = 1.0;
+            CGPathRef cp = CGPathCreateWithRoundedRect(cr, capH / 2.0, capH / 2.0, NULL);
+            cap.path = cp; CGPathRelease(cp);
+            [_padHint.layer addSublayer:cap];
+            UILabel *kl = [[UILabel alloc] initWithFrame:cr];
+            kl.font = capFont; kl.textColor = k_text; kl.textAlignment = NSTextAlignmentCenter; kl.text = parts[i];
+            [_padHint addSubview:kl];
+        } else {
+            UILabel *lbl = [[UILabel alloc] initWithFrame:CGRectMake(cx, 0, w, h)];
+            lbl.font = textFont; lbl.textColor = k_text; lbl.text = parts[i];
+            [_padHint addSubview:lbl];
+        }
+        cx += w + gap;
+    }
+    [CATransaction commit];
+}
 - (void)wakeMenu {
     unsigned gen = ++_menuGen;
     [_menu.layer removeAllAnimations];
     _menu.hidden = NO; _menu.alpha = 1;
-    if (!_padOff || _layout.onTV || _menuOpen || [self voiceOverRunning]) return;
+    if (!_padOff || _layout.onTV || _menuOpen || [self voiceOverRunning]) { [self hidePadHintNow]; return; }
+    if (!_padHintShown && _padHintWords.length && !CGRectIsEmpty(self.bounds)) {
+        _padHintShown = YES;
+        [self placePadHint];
+        [_padHint.layer removeAllAnimations];
+        _padHint.hidden = NO; _padHint.alpha = 1;
+        LOG("front end: controller quit hint shown");
+    }
     __weak DmGamepad *weak = self;
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(K_MENU_IDLE * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
         DmGamepad *s = weak;
         if (!s || s->_menuGen != gen || !s->_padOff || s->_layout.onTV || s->_menuOpen || [s voiceOverRunning]) return;
         if ([s reduceMotionEnabled]) {
             s->_menu.alpha = 0; s->_menu.hidden = YES;
+            [s hidePadHintNow];
             return;
         }
         [UIView animateWithDuration:0.3 delay:0 options:UIViewAnimationOptionBeginFromCurrentState | UIViewAnimationOptionAllowUserInteraction animations:^{
             s->_menu.alpha = 0;
+            if (!s->_padHint.hidden) s->_padHint.alpha = 0;
         } completion:^(BOOL finished) {
-            if (finished && s->_menuGen == gen && s->_padOff && !s->_layout.onTV && !s->_menuOpen && ![s voiceOverRunning]) s->_menu.hidden = YES;
+            if (finished && s->_menuGen == gen && s->_padOff && !s->_layout.onTV && !s->_menuOpen && ![s voiceOverRunning]) {
+                s->_menu.hidden = YES;
+                s->_padHint.hidden = YES;
+            }
         }];
     });
 }
@@ -722,6 +837,7 @@ static BOOL pads_slotted(GCController *gone) {
     if (_padOff && _layout.onTV) {
         ++_menuGen; [_menu.layer removeAllAnimations];
         _menu.alpha = 1; _menu.hidden = YES;
+        [self hidePadHintNow];
     } else {
         [self wakeMenu];
     }

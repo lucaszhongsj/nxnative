@@ -1,6 +1,7 @@
 // Big-stack entry (hle_bigstack.c, hle.h HLE_FORCE): a take-over called on a small guest stack runs on the thread's host stack with its register and stack arguments intact, and dm_bigstack_caller
 // gives back the game's call site both after a switch and straight through off the guest block (the audio Start / Stop / Close log it, PR #721)
 #include "../hle.h"
+#include <pthread.h>
 #include <stdio.h>
 #include <string.h>
 #include <sys/mman.h>
@@ -43,6 +44,13 @@ __asm__(".text\n.p2align 2\n.globl _call_args\n_call_args:\n"
         "    blr x16\n"
         "    mov sp, x29\n    ldp x29, x30, [sp], #16\n    ret\n");
 
+HLE_FORCE("_ZN4test10exit_on_bsEm", "unit test", uint64_t, exit_on_bs, uint64_t unused) {
+    (void)unused;
+    // Call pthread_exit while executing directly inside the thread's bigstack.
+    pthread_exit((void *)(uintptr_t)99);
+    return 0;
+}
+
 // call_on(a, b, d, top, fn): calls fn(a, b, d) with sp = top (0: on this stack) and x17 left as garbage; _call_on_site is the return address the call leaves, the "game's call site"
 uint64_t call_on(uint64_t a, uint64_t b, double d, uintptr_t top, const void *fn);
 extern const char call_on_site[];
@@ -53,6 +61,18 @@ __asm__(".text\n.p2align 2\n.globl _call_on\n_call_on:\n"
         "    blr x3\n"
         ".globl _call_on_site\n_call_on_site:\n"
         "    mov sp, x29\n    ldp x29, x30, [sp], #16\n    ret\n");
+
+static void *exit_worker(void *p) {
+    (void)p;
+    call_on(0, 0, 0.0, g_hi, exit_on_bs_bs);
+    return NULL;
+}
+
+static void *plain_worker(void *p) {
+    (void)p;
+    call_on(1, 2, 0.0, g_hi, probe_bs);
+    return (void *)(uintptr_t)77;
+}
 
 static int checks, fails;
 #define CHECK(c, msg) do { checks++; if (!(c)) { fails++; fprintf(stderr, "FAIL: %s\n", msg); } } while (0)
@@ -95,6 +115,15 @@ int main(void) {
     CHECK(r == 42, "the logging take-over returned on its own stack");
     CHECK(g_fp && dm_guest_as_contains(g_fp), "the logging take-over itself ran on the guest stack");
     CHECK(!strcmp(got, "[dm] big-stack test line 41 from a guest stack 2.50\n"), "the log line written from 1 KB of guest stack");
+
+    // Teardown exiting a thread from inside its own bigstack must defer munmap instead of SIGSEGVing.
+    pthread_t th1, th2; void *ret1 = NULL, *ret2 = NULL;
+    CHECK(pthread_create(&th1, NULL, exit_worker, NULL) == 0, "spawn bigstack-exit thread");
+    CHECK(pthread_join(th1, &ret1) == 0 && (uintptr_t)ret1 == 99, "pthread_exit inside bigstack did not crash");
+    // A subsequent normal thread exit off bigstack plus teardown cleanly drains deferred stacks.
+    CHECK(pthread_create(&th2, NULL, plain_worker, NULL) == 0, "spawn normal thread after bigstack exit");
+    CHECK(pthread_join(th2, &ret2) == 0 && (uintptr_t)ret2 == 77, "normal thread after bigstack exit succeeded");
+    dm_bigstack_teardown();
 
     printf("big-stack entry: %d/%d checks %s\n", checks - fails, checks, fails ? "✗" : "✓");
     return fails != 0;

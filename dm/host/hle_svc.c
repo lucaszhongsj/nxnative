@@ -895,12 +895,22 @@ static void *regions_thread(void *arg) {
 }
 
 int svc_thread(int num, uint64_t *regs);   // hle_thread.c: thread and synchronization kind
+// Weak fallbacks allow single-file SVC unit tests (t_heap_size, t_svc_memory, t_layout_runtime) to link without hle_lifecycle.c / hle_thread.c.
+__attribute__((weak)) void dm_host_shutdown(const char *why) { (void)why; _exit(0); }
+__attribute__((weak)) int dm_host_has_shell_quit(void) { return 0; }
+__attribute__((weak)) void dm_teardown_park_self(void) { _exit(0); }
 
 uint64_t svc_dispatch(int num, uint64_t *regs, uint64_t orig_addr) {
     { void hlecount_svc(int); hlecount_svc(num); }   // DM_HLECOUNT: svc counts by number
     mem_init();
     if (svc_thread(num, regs)) return regs[0];
     switch (num) {
+    case 0x07: {  // ExitProcess(): terminate current process (returns to shell when hosted)
+        LOG("svcExitProcess");
+        dm_host_shutdown("svcExitProcess");
+        dm_teardown_park_self();
+        return 0;
+    }
     case 0x01: {  // SetHeapSize(out_addr*, size)  → x1 = heap base
         size_t size = regs[1];
         // Larger than the heap region: ResultOutOfMemory (0xD001), as Horizon's KPageTable::SetHeapSize returns. nn::os::SetMemoryHeapSize turns only that, 103 and LimitReached into
@@ -1119,6 +1129,11 @@ uint64_t svc_dispatch(int num, uint64_t *regs, uint64_t orig_addr) {
         LOG("Break#%d reason=%#llx Result=%#x svc at %s+%#llx", ++nb, regs[0], res, mm ? mm->name : "?", orig_addr);
         dm_backtrace(regs[29]);
         if (regs[0] & 0x80000000ull) return 0;   // notification only, can continue
+        if (dm_host_has_shell_quit()) {
+            dm_host_shutdown("svcBreak");
+            dm_teardown_park_self();
+            return 0;
+        }
         _exit(42);
     }
     case 0x1E: guest_clock_read_wait(); regs[0] = 0; regs[1] = guest_ticks(); return 0;   // GetSystemTick

@@ -42,6 +42,7 @@ typedef struct {
     _Atomic uint64_t cb_n;             // device callbacks of this output (the watchdog's evidence that the device still plays it)
     uint64_t wd_n, wd_t;               // watchdog: callback count last seen and when it last moved (under g_aos_lock)
     int stalled, retry_ms; uint64_t retry_at;   // the device stopped calling back (or would not start): the silent sink stands in and the watchdog retries the AudioUnit at retry_at, backing off
+    const void *guest_key;             // key in objmap (guest AudioOut* or dm_pcmout_open's key), cleared on close / stop_all
 } aout;
 
 // Registry of open outputs: suspended / resumed all at once by the front-end lifecycle (going to background).
@@ -433,6 +434,7 @@ static Result au_open_at(void *g, void *ev, const char *name, const uint8_t *par
     // The helper finishes (and is joined) before lifecycle/watchdog readers can find this output.
     // Keep construction outside g_aos_lock: joining the helper can yield the guest core.
     if (use_au) au_open(a);
+    a->guest_key = g;
     objmap_put(g, a);
     pthread_mutex_lock(&g_aos_lock);
     int slot = -1; for (int i = 0; i < AOMAX; i++) if (!g_aos[i]) { slot = i; break; }
@@ -501,9 +503,12 @@ static void au_stop_at(void *g, void *lr) {   // lr NULL: the stop inside Close,
 }
 HLE_FORCE("_ZN2nn5audio12StopAudioOutEPNS0_8AudioOutE", "stop playback", void, h_au_Stop, void *g) { au_stop_at(g, dm_bigstack_caller(__builtin_return_address(0))); }
 static void au_close(void *g, void *lr) {
-    au_note(ao(g), "Close", lr);
+    aout *a = objmap_get(g);
+    if (!a) return;
+    au_note(a, "Close", lr);
     au_stop_at(g, NULL);
-    aout *a = objmap_del(g);
+    objmap_del(g);
+    a->guest_key = NULL;
     atomic_store_explicit(&a->notify_run, 0, memory_order_release);
     dispatch_semaphore_signal(a->notify_sem);
     pthread_join(a->notify_th, NULL);
@@ -758,6 +763,10 @@ void *dm_pcmout_open(int ch) {
 }
 // Wait until the output releases a block, at most ms milliseconds (spurious returns are fine: the caller checks dm_pcmout_released again)
 void dm_pcmout_wait(void *k, int ms) { dispatch_semaphore_wait(ao(k)->rel_sem, dispatch_time(DISPATCH_TIME_NOW, (int64_t)ms * 1000000)); }
+void dm_pcmout_wake(void *k) {
+    aout *a = k ? objmap_get(k) : NULL;
+    if (a && a->rel_sem) dispatch_semaphore_signal(a->rel_sem);
+}
 void dm_pcmout_start(void *k) { au_start_at(k, NULL); }
 void dm_pcmout_close(void *k) { au_close(k, NULL); free(k); }   // stop, take it out of the registry (frees its AOMAX slot), free it and its key
 int dm_pcmout_append(void *k, void *b) { return (int)h_au_Append(k, b); }
@@ -813,6 +822,7 @@ void dm_audio_stop_all(void) {
     if (join_wd) pthread_join(wd_th, NULL);
     for (int i = 0; i < AOMAX; i++) if (stopped[i]) {
         aout *a = stopped[i];
+        if (a->guest_key) { objmap_del(a->guest_key); a->guest_key = NULL; }
         atomic_store_explicit(&a->notify_run, 0, memory_order_release);
         dispatch_semaphore_signal(a->notify_sem);
         pthread_join(a->notify_th, NULL);

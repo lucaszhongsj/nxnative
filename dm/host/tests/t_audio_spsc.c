@@ -117,8 +117,51 @@ static int stop_pending(void) {
     printf("Stop releases partial/pending buffers in order, signals and preserves pre-start buffers: %s\n",failed?"FAIL":"PASS");
     atomic_store(&g_sig,0); return failed;
 }
+
+typedef struct {
+    void *out;
+    _Atomic int entered;
+    _Atomic int stop;
+    _Atomic int closed;
+} pcmout_wait_ctx;
+
+static void *pcmout_wait_worker(void *p) {
+    pcmout_wait_ctx *c = p;
+    atomic_store(&c->entered, 1);
+    while (!atomic_load(&c->stop)) dm_pcmout_wait(c->out, 5000);
+    dm_pcmout_close(c->out);
+    atomic_store(&c->closed, 1);
+    return NULL;
+}
+
+static int pcmout_teardown_while_waiting(void) {
+    pcmout_wait_ctx c = { .out = dm_pcmout_open(2) };
+    if (!c.out) return 1;
+    pthread_t th;
+    if (pthread_create(&th, NULL, pcmout_wait_worker, &c)) return 1;
+    while (!atomic_load(&c.entered)) sched_yield();
+    usleep(20000);
+    uint64_t t0 = now_ns();
+    atomic_store(&c.stop, 1);
+    dm_pcmout_wake(c.out);
+    pthread_join(th, NULL);
+    uint64_t elapsed_ms = (now_ns() - t0) / 1000000ull;
+    dm_audio_stop_all();
+    g_suspended = 0;
+
+    // Also verify idempotency if dm_audio_stop_all ran first before a concurrent dm_pcmout_close.
+    void *out2 = dm_pcmout_open(2);
+    if (!out2) return 1;
+    dm_audio_stop_all();
+    dm_pcmout_close(out2);
+    g_suspended = 0;
+    int failed = !atomic_load(&c.closed) || elapsed_ms >= 500;
+    printf("pcmout wake + teardown while waiting (%llu ms): %s\n", (unsigned long long)elapsed_ms, failed ? "FAIL" : "PASS");
+    return failed;
+}
 int main(void) {
     if (stop_pending()) return 1;
+    if (pcmout_teardown_while_waiting()) return 1;
     char out[64], ev[64]; uint8_t prm[16];
     test_ctx t = {0};
     t.bufs = calloc(NBUF, sizeof *t.bufs); t.data = calloc(NBUF, sizeof *t.data); t.sizes = calloc(NBUF, sizeof *t.sizes); t.scratch = malloc(512);
