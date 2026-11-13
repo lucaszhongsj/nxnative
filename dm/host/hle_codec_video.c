@@ -699,3 +699,56 @@ HLE_FORCE("_ZN2nn6syncpt3sdk21DestroySyncPointEventEPNS1_18SyncPointEventTypeE",
     static void (*destroy)(void *); if (!destroy && !(destroy = guest_sym("_ZN2nn2os18DestroySystemEventEPNS0_15SystemEventTypeE"))) die("nn::os::DestroySystemEvent missing");
     destroy(e); SPT(e)->magic = 0;
 }
+
+void dm_codec_video_stop_all(void) {
+    dm_host_mutex_lock(&g_cv_mu);
+    for (int i = 0; i < 16; i++) {
+        cv_dec *d = g_cv[i];
+        if (!d) continue;
+        dm_host_mutex_lock(&d->mu);
+        d->quit = 1;
+        pthread_cond_signal(&d->work);
+        pthread_mutex_unlock(&d->mu);
+    }
+    pthread_mutex_unlock(&g_cv_mu);
+}
+void dm_codec_video_teardown_post(void) {
+    cv_dec *list[16] = {0};
+    dm_host_mutex_lock(&g_cv_mu);
+    for (int i = 0; i < 16; i++) {
+        list[i] = g_cv[i];
+        g_cv[i] = NULL;
+    }
+    memset(g_cv_pools, 0, sizeof g_cv_pools);
+    pthread_mutex_unlock(&g_cv_mu);
+    for (int i = 0; i < 16; i++) {
+        cv_dec *d = list[i];
+        if (!d) continue;
+        dm_host_mutex_lock(&d->mu);
+        d->quit = 1;
+        pthread_cond_signal(&d->work);
+        pthread_mutex_unlock(&d->mu);
+        pthread_join(d->th, NULL);
+        if (d->codec != CV_H264 && d->codec != CV_AV1 && d->vpx_ok) vpx_codec_destroy(&d->vpx);
+        if (d->avc) mavc_free(d->avc);
+        if (d->av1) mav1_free(d->av1);
+        for (int j = 0; j < d->nheld; j++) vpx_img_free(d->held[j]);
+        for (uint32_t k = 0; k < d->qcount; k++) free(d->q[(d->qhead + k) % CV_HOLD].data);
+        free(d->csd);
+        d->magic = 0;
+        pthread_cond_destroy(&d->work);
+        pthread_mutex_destroy(&d->mu);
+        free(d);
+    }
+    dm_host_mutex_lock(&g_cv_mu);
+    for (int k = 0; k < BLANK_MAX; k++) {
+        if (g_blank[k].mem) {
+            munmap(g_blank[k].mem, g_blank[k].size);
+            memset(&g_blank[k], 0, sizeof g_blank[k]);
+        }
+    }
+    pthread_mutex_unlock(&g_cv_mu);
+    pthread_mutex_lock(&g_spt_mu);
+    memset(g_spt, 0, sizeof g_spt);
+    pthread_mutex_unlock(&g_spt_mu);
+}

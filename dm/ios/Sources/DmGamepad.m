@@ -856,7 +856,9 @@ void dm_gamepad_reset(void) {   // On resign active: release everything (a key h
     if (g_merge) dm_pad_set(0, 0, 0, 0, 0);
     else for (int p = 0; p < DM_PLAYERS; p++) if (g_held[p]) dm_pad_set_player(p, 0, 0, 0, 0, 0);
 }
+__attribute__((weak)) void dm_switch2_teardown(void);
 void dm_gamepad_teardown(void) {
+    if (dm_switch2_teardown) dm_switch2_teardown();
     if (g_motion) {
         [g_motion stopAccelerometerUpdates];
         [g_motion stopDeviceMotionUpdates];

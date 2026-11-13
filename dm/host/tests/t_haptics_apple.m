@@ -624,5 +624,53 @@ int main(void) { @autoreleasepool {
     assert(gain == 1 && rumble_min == 0 && dm_haptics_apple_controller_intensity(0.4f) == 0.4f);
     dm_haptics_apple_shutdown();
     dm_haptics_apple_teardown();
+    // Stale delayed timer enqueued before teardown must remain a no-op both while torn down and after re-init
+    dm_haptics_apple_init();
+    __block unsigned staleNativeCalls = 0;
+    dm_haptics_apple_output(0, @"stale-timer-owner", ^(dm_haptic_state state, float level) { (void)state; (void)level; ++staleNativeCalls; });
+    drain();
+    unsigned baselineCalls = staleNativeCalls;
+    send_pair(0.6f, 0); drain();
+    assert(staleNativeCalls == baselineCalls + 1 && timers.count > 0);
+    NSArray<TestTimer *> *pendingTimers = [timers copy];
+    [timers removeAllObjects];
+    dm_haptics_apple_teardown();
+    unsigned callsAfterTeardown = staleNativeCalls;
+    for (TestTimer *timer in pendingTimers) timer.block();
+    assert(staleNativeCalls == callsAfterTeardown);
+    // Simulate restore_framework_data() rolling non-__dm_keep globals back to initial state across shell relaunch;
+    // only g_haptics_gen in __DATA,__dm_keep keeps stale timers from colliding with matching outputGeneration/epoch.
+    memset(outputGeneration, 0, sizeof outputGeneration);
+    dm_haptics_apple_init();
+    __block unsigned nextGameCalls = 0;
+    dm_haptics_apple_output(0, @"next-game-owner", ^(dm_haptic_state state, float level) { (void)state; (void)level; ++nextGameCalls; });
+    drain();
+    send_pair(0.3f, 0); drain();
+    [timers removeAllObjects];
+    unsigned callsBeforeStale = nextGameCalls;
+    dispatch_sync(queue, ^{
+        for (TestTimer *timer in pendingTimers) timer.block();
+    });
+    assert(nextGameCalls == callsBeforeStale);
+    assert(staleNativeCalls == callsAfterTeardown);
+    // Stale delayed engine-stop timers queued during halt must not touch the old engine after teardown or re-init.
+    TestController *plainTail = [TestController new];
+    plainTail.haptics = [TestHaptics new];
+    plainTail.haptics.noAdvanced = YES;
+    dm_haptics_apple_controller(0, (id)plainTail); drain();
+    send_pair(0.6f, 0); drain();
+    TestEngine *oldEngine = plainTail.haptics.engines.lastObject;
+    [timers removeAllObjects];
+    dm_haptics_apple_teardown();
+    NSArray<TestTimer *> *haltTimers = [timers copy];
+    [timers removeAllObjects];
+    assert(haltTimers.count > 0);
+    int stopsAtTeardown = oldEngine.stops;
+    for (TestTimer *timer in haltTimers) timer.block();
+    assert(oldEngine.stops == stopsAtTeardown);
+    dm_haptics_apple_init();
+    for (TestTimer *timer in haltTimers) timer.block();
+    assert(oldEngine.stops == stopsAtTeardown);
+    dm_haptics_apple_teardown();
     puts("Apple haptics: channels, pulses, idle release, startup handlers, engine replacement, backoff, stale callbacks, plain players, the DualSense's handles, level cutoff and the DualShock 4 route passed");
 } }

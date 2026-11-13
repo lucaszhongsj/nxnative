@@ -13,6 +13,7 @@
 #endif
 #include <math.h>
 #include <pthread.h>
+#include <stdatomic.h>
 #include <time.h>
 
 @interface DmRumbleChannel : NSObject
@@ -37,6 +38,8 @@
 @end
 
 static dispatch_queue_t queue;
+static _Atomic uint64_t g_haptics_gen __attribute__((section("__DATA,__dm_keep")));
+static _Atomic int g_haptics_down __attribute__((section("__DATA,__dm_keep")));
 static NSMutableArray<DmRumbleChannel *> *channels[DM_PLAYERS];
 static GCController *controllers[DM_PLAYERS];
 static GCHapticsLocality controllerLocalities[DM_PLAYERS];
@@ -128,8 +131,9 @@ static void report(NSError *e, NSString *target, const char *stage) {
         self.pattern = nil; self.previous = nil; self.level = (dm_haptic_level){0, 0};
         NSTimeInterval left = self.engine ? self.pulseEnd - self.engine.currentTime : 0;
         if (left > 0) {
-            __weak DmRumbleChannel *weak = self; CHHapticEngine *engine = self.engine;
+            __weak DmRumbleChannel *weak = self; CHHapticEngine *engine = self.engine; uint64_t hgen = atomic_load(&g_haptics_gen);
             dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)((left + 0.05) * NSEC_PER_SEC)), queue, ^{
+                if (atomic_load(&g_haptics_down) || atomic_load(&g_haptics_gen) != hgen) return;
                 DmRumbleChannel *c = weak; if (c && c.engine == engine && c.pattern) return;   // a new effect took the engine meanwhile
                 @try { [engine stopWithCompletionHandler:nil]; }
                 @catch (NSException *x) { if (c && c.engine == engine) [c stoppedEngine:x stage:"stop engine"]; }   // one no channel holds is gone anyway
@@ -147,9 +151,10 @@ static void report(NSError *e, NSString *target, const char *stage) {
     NSTimeInterval at = MAX(self.engine.currentTime, self.pulseEnd);
     if (!next || ![next startAtTime:at error:error]) return NO;
     self.previous = self.pattern; self.pattern = next; self.pulseEnd = at + PULSE;
-    __weak DmRumbleChannel *weak = self; uint64_t generation = self.generation;
+    __weak DmRumbleChannel *weak = self; uint64_t generation = self.generation; uint64_t hgen = atomic_load(&g_haptics_gen);
     NSTimeInterval wait = MAX(0, self.pulseEnd - PULSE_LEAD - self.engine.currentTime);
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(wait * NSEC_PER_SEC)), queue, ^{
+        if (atomic_load(&g_haptics_down) || atomic_load(&g_haptics_gen) != hgen) return;
         DmRumbleChannel *c = weak;
         if (!c || c.generation != generation || c.pattern != next || c.level.intensity == 0) return;   // stopped, replaced or silent
         [c guarded:"pulse" work:^{ NSError *e = nil; if (![c pulse:&e]) [c failed:e stage:"pulse"]; }];
@@ -178,8 +183,12 @@ static void report(NSError *e, NSString *target, const char *stage) {
     }
     __weak DmRumbleChannel *weak = self;
     uint64_t generation = ++self.generation;
+    uint64_t hgen = atomic_load(&g_haptics_gen);
     void (^reset)(void) = ^{
-        dispatch_async(queue, ^{
+        dispatch_queue_t q = queue;
+        if (!q || atomic_load(&g_haptics_down) || atomic_load(&g_haptics_gen) != hgen) return;
+        dispatch_async(q, ^{
+            if (atomic_load(&g_haptics_down) || atomic_load(&g_haptics_gen) != hgen) return;
             DmRumbleChannel *c = weak; if (!c || c.generation != generation) return;
             [c stop];
             dm_haptics_clear(c.player);   // queued effects from before an interruption cannot restart
@@ -250,8 +259,9 @@ static void report(NSError *e, NSString *target, const char *stage) {
     if (!self.simple) ((id<CHHapticAdvancedPatternPlayer>)self.pattern).isMuted = NO;
     if (level.intensity == 0) {
         // Reuse a warm player for nearby pulses, then release idle hardware. This never times out an active effect.
-        __weak DmRumbleChannel *weak = self;
+        __weak DmRumbleChannel *weak = self; uint64_t hgen = atomic_load(&g_haptics_gen);
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, NSEC_PER_SEC), queue, ^{
+            if (atomic_load(&g_haptics_down) || atomic_load(&g_haptics_gen) != hgen) return;
             DmRumbleChannel *c = weak; if (c && c.silenceGeneration == silence) [c stop];
         });
     }
@@ -351,18 +361,23 @@ static void native_stop(int p) {
     outputGeneration[p]++;
     if (nativeOutputs[p]) nativeOutputs[p]((dm_haptic_state){.player=p}, gain);
 }
-static void native_apply(dm_haptic_state s, uint64_t generation) {
+static void native_apply(dm_haptic_state s, uint64_t generation, uint64_t hgen) {
     int p=s.player;
+    if (atomic_load(&g_haptics_down) || atomic_load(&g_haptics_gen) != hgen) return;
     if (!nativeOutputs[p] || generation != outputGeneration[p] || s.epoch != dm_haptics_epoch(p)) return;
     nativeOutputs[p](s,gain);
     if (s.motor[0].amplitude_low || s.motor[0].amplitude_high || s.motor[1].amplitude_low || s.motor[1].amplitude_high)
-        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 40*NSEC_PER_MSEC),queue,^{ native_apply(s,generation); });
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 40*NSEC_PER_MSEC),queue,^{ native_apply(s,generation,hgen); });
 }
 static void apply(dm_haptic_state s) {
-    dispatch_async(queue, ^{ @autoreleasepool {
+    dispatch_queue_t q = queue;
+    uint64_t hgen = atomic_load(&g_haptics_gen);
+    if (!q || atomic_load(&g_haptics_down)) return;
+    dispatch_async(q, ^{ @autoreleasepool {
+        if (atomic_load(&g_haptics_down) || atomic_load(&g_haptics_gen) != hgen) return;
         if (s.epoch != dm_haptics_epoch(s.player)) return;
         if (sinks[s.player]) { sink_apply(s); return; }   // the player is in range, as channels[] below assumes (hle_haptics.c)
-        if (nativeOutputs[s.player]) { native_apply(s,++outputGeneration[s.player]); return; }
+        if (nativeOutputs[s.player]) { native_apply(s,++outputGeneration[s.player],hgen); return; }
         NSArray<DmRumbleChannel *> *out = channels[s.player];
 #if !TARGET_OS_IPHONE
         if ([out.firstObject isKindOfClass:DmDs4Channel.class]) { ds4_apply(s); return; }
@@ -529,12 +544,16 @@ static void suspend(unsigned reason, BOOL on) {
 }
 void dm_haptics_apple_focus(int active) { if(queue) suspend(DM_HAPTICS_UNFOCUSED,!active); }
 void dm_haptics_apple_shutdown(void) {
+    atomic_store(&g_haptics_down, 1);
+    atomic_fetch_add(&g_haptics_gen, 1);
+    dm_haptics_init(NULL, 0);
     if (queue) suspend(DM_HAPTICS_INACTIVE, YES);
 }
 static int g_haptics_inited;
 static int g_haptics_atexit __attribute__((section("__DATA,__dm_keep")));
 static id g_haptics_obs[5];
 void dm_haptics_apple_teardown(void) {
+    dm_haptics_apple_shutdown();
     NSNotificationCenter *nc = NSNotificationCenter.defaultCenter;
     for (int i = 0; i < 5; i++) {
         if (g_haptics_obs[i]) {
@@ -579,6 +598,8 @@ void dm_haptics_apple_init(void) {
         pthread_mutex_unlock(&routeLock);
         return;
     }
+    atomic_fetch_add(&g_haptics_gen, 1);
+    atomic_store(&g_haptics_down, 0);
     g_haptics_inited = 1;
     gain = 1;
     rumble_min = 0;

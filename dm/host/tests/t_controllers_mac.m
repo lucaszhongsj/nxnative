@@ -185,6 +185,7 @@ void dm_motion_set_joy(int p, int side, const float a[3], const float r[3], uint
 void dm_motion_clear_joy(int p, int side) { assert(p >= 0 && p < DM_PLAYERS && (side == 0 || side == 1)); ++joy_motion_clears[p][side]; }
 void dm_haptics_apple_set_sink(int p, void (*s)(const dm_haptic_state *)) { (void)p; (void)s; }
 int dm_switch2_start(const dm_switch2_front *f) { (void)f; return 0; }
+void dm_switch2_teardown(void) {}
 void dm_switch2_active(int a) { (void)a; }
 void dm_switch2_rumble(const dm_haptic_state *s) { (void)s; }
 static dm_motion motions[DM_PLAYERS]; static int motion_present[DM_PLAYERS];

@@ -118,6 +118,7 @@ static NSMutableDictionary<NSNumber *, id<MTLRenderPipelineState>> *g_draw_tex_p
 static id<MTLFunction> g_draw_tex_vf, g_draw_tex_ff;
 static id<MTL4ArgumentTable> g_draw_tex_at;
 static int g_draw_tex_failed;
+static _Atomic uint64_t g_defer_gen __attribute__((section("__DATA,__dm_keep")));
 static dispatch_group_t g_bg_group __attribute__((section("__DATA,__dm_keep")));
 static dispatch_once_t g_bg_group_once __attribute__((section("__DATA,__dm_keep")));
 static inline dispatch_group_t bg_group(void) {
@@ -697,13 +698,18 @@ static int defer_drain(void) { int back = 0; @autoreleasepool {
 // oe::PopNotificationMessage and submits nothing, while its streaming threads remade a run of about 10 MB of a virtual pool 70 times a second (vrun_set). Each old buffer waited for
 // the next submission's fence, and GPU allocated went from 11 to 20 GB in 12 s, with 6.7 GB of swap in 20 s (PR #1392). Entries handed back while g_smu was busy are tried again 10 ms later
 static _Atomic int g_defer_queued;
+static void defer_kick_gen(uint64_t gen);
 static void defer_kick(void) {
-    if (atomic_load(&g_gfx_teardown) || atomic_exchange(&g_defer_queued, 1)) return;
+    defer_kick_gen(atomic_load(&g_defer_gen));
+}
+static void defer_kick_gen(uint64_t gen) {
+    if (atomic_load(&g_gfx_teardown) || atomic_load(&g_defer_gen) != gen || atomic_exchange(&g_defer_queued, 1)) return;
     bg_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{ @autoreleasepool {
         atomic_store(&g_defer_queued, 0);   // before the drain: an entry queued during it kicks again
-        if (atomic_load(&g_gfx_teardown)) return;
+        if (atomic_load(&g_gfx_teardown) || atomic_load(&g_defer_gen) != gen) return;
         int back = defer_drain(); res_commit();
-        if (back && !atomic_load(&g_gfx_teardown)) dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 10 * NSEC_PER_MSEC), dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{ defer_kick(); });
+        if (back && !atomic_load(&g_gfx_teardown) && atomic_load(&g_defer_gen) == gen)
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 10 * NSEC_PER_MSEC), dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{ defer_kick_gen(gen); });
     } });
 }
 // What a drain takes out of the residency set leaves it, and is released, at the set's next commit, which the next submission makes. With none open none may come: the drain is
@@ -17612,6 +17618,7 @@ void nvn_hle_teardown(void);
 
 void dm_gfx_teardown(void) { @autoreleasepool {
     atomic_store(&g_gfx_teardown, 1);
+    atomic_fetch_add(&g_defer_gen, 1);
     mtl_present_discard(1);
     dispatch_group_wait(bg_group(), DISPATCH_TIME_FOREVER);
 
@@ -17905,6 +17912,7 @@ void dm_gfx_teardown(void) { @autoreleasepool {
     g_ev = nil; g_mdi_ev = nil; g_ext_ev = nil;
     g_q4 = nil; g_q = nil; g_dev = nil;
     g_feedback_q = nil;
+    atomic_fetch_add(&g_defer_gen, 1);
     atomic_store(&g_gfx_teardown, 0);
 } }
 #pragma clang attribute pop

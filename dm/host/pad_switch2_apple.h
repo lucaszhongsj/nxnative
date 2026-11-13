@@ -33,6 +33,7 @@ typedef struct {
 } dm_switch2_front;
 
 int dm_switch2_start(const dm_switch2_front *front);   // 1: started; 0: off (DM_SW2 is not 1, or the Info.plist has no Bluetooth usage description)
+void dm_switch2_teardown(void);                         // stops scanning and disconnects sessions, safe to call multiple times
 void dm_switch2_active(int on);                         // focus lost (0): the sensors stop driving the game's; back (1): they continue
 s2_pad *dm_switch2_pads(void);                          // the pads, a list through next
 // Rumble: the sink for a player whose pad is a Switch 2 controller (dm_haptics_apple_set_sink(player, dm_switch2_rumble)). The game's two full-key motors, left and right, reach the

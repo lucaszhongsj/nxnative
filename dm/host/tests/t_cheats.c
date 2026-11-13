@@ -652,6 +652,12 @@ int main(void) {
     load_all();
     CHECK(strstr(dm_cheats_report(), "1 cheats over 0x100 words") != NULL, "the report names a cheat over Atmosphère's 0x100 words");
 
+    // ---- Shell game switch: tick thread joins cleanly and files queue drains ----
+    tick_start();
+    CHECK(g_tick_started == 1, "tick_start starts the ~60 Hz apply thread");
+    dm_cheats_teardown();
+    CHECK(g_tick_started == 0 && atomic_load(&g_tick_stop) == 1 && atomic_load(&g_exiting) == 1, "dm_cheats_teardown stops and joins the tick thread");
+
     char rmcmd[1100]; snprintf(rmcmd, sizeof rmcmd, "rm -rf '%s'", root);   // the test's cheats folders
     if (system(rmcmd)) fprintf(stderr, "cannot remove %s\n", root);   // NOLINT(bugprone-command-processor): a fixed rm of the folder mkdtemp made above, no outside input
     printf("%d / %d checks passed\n", checks - fails, checks);

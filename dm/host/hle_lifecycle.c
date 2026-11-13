@@ -58,7 +58,12 @@ __attribute__((weak)) void dm_audren_teardown_post(void) {}
 __attribute__((weak)) void dm_movie_stop_all(void) {}
 __attribute__((weak)) void dm_movie_teardown_post(void) {}
 __attribute__((weak)) void dm_save_sync_stop(void) {}
+__attribute__((weak)) void dm_haptics_apple_shutdown(void) {}
 __attribute__((weak)) void dm_haptics_apple_teardown(void) {}
+__attribute__((weak)) void dm_switch2_teardown(void) {}
+__attribute__((weak)) void dm_codec_video_stop_all(void) {}
+__attribute__((weak)) void dm_codec_video_teardown_post(void) {}
+__attribute__((weak)) void dm_cheats_teardown(void) {}
 __attribute__((weak)) void dm_gfx_quit_begin(void) {}
 __attribute__((weak)) void dm_gfx_teardown(void) {}
 __attribute__((weak)) void dm_fs_teardown(void) {}
@@ -78,15 +83,20 @@ void dm_host_teardown_for_shell(void) {
     dm_audren_stop_all();
     dm_audio_stop_all();
     dm_movie_stop_all();
+    dm_codec_video_stop_all();
     dm_save_sync_stop();
-    dm_haptics_apple_teardown();
+    dm_haptics_apple_shutdown();
     dm_guest_clock_wake_teardown();
     dm_gfx_quit_begin();
     dm_gfx_suspend(1);
     dm_threads_park_all();
+    dm_haptics_apple_teardown();
+    dm_switch2_teardown();
     dm_audren_teardown_post();
     dm_sf_teardown();
     dm_movie_teardown_post();
+    dm_codec_video_teardown_post();
+    dm_cheats_teardown();
     dm_gfx_teardown();
     dm_net_teardown();
     dm_sdk16_teardown();

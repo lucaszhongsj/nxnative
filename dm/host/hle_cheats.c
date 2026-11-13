@@ -1053,10 +1053,14 @@ void dm_cheats_present(void) {
 
 // The fixed ~60 Hz passes when the game is not presenting (window minimized, graphics suspended or before the first
 // present): a stopped game still changes under its cheats, as on hardware where the cheat process keeps running
+static _Atomic int g_tick_stop __attribute__((section("__DATA,__dm_keep")));
+static pthread_t g_tick_th __attribute__((section("__DATA,__dm_keep")));
+
 static void *cheat_tick_thread(void *arg) {
     (void)arg;
-    for (;;) {
+    while (!atomic_load(&g_tick_stop)) {
         usleep(16667);   // ~60 Hz
+        if (atomic_load(&g_tick_stop)) break;
         if (now_ns() - atomic_load(&g_present_ns) < 250000000ull) continue;   // presenting again: the hook applies
         cheats_pass();
     }
@@ -1069,10 +1073,15 @@ static void *cheat_tick_thread(void *arg) {
 static int g_tick_started __attribute__((section("__DATA,__dm_keep")));
 static void tick_start(void) {
     if (g_tick_started) return;
+    atomic_store(&g_tick_stop, 0);
     g_tick_started = 1;
-    pthread_t th; pthread_attr_t a; pthread_attr_init(&a); pthread_attr_setdetachstate(&a, PTHREAD_CREATE_DETACHED);
-    if (pthread_create(&th, &a, cheat_tick_thread, NULL)) LOG("[RED] cheats: cannot start the ~60 Hz apply thread (errno %d), only presents apply", errno);
-    pthread_attr_destroy(&a);
+    pthread_t th;
+    if (pthread_create(&th, NULL, cheat_tick_thread, NULL)) {
+        g_tick_started = 0;
+        LOG("[RED] cheats: cannot start the ~60 Hz apply thread (errno %d), only presents apply", errno);
+        return;
+    }
+    g_tick_th = th;
 }
 
 // ---------- the cheat states: <build>.enabled, DM_CHEATS_ON, the folder's flag files ----------
@@ -1883,10 +1892,20 @@ void dm_cheats_init(void) {
 // A clean exit: no cheat runs any more, so the safe-mode flag goes (atexit, and dm_host_exit before its _exit)
 void dm_cheats_exit(void) {
     atomic_store(&g_exiting, 1);   // a pass still running on another thread must not write the flag back
+    atomic_store(&g_tick_stop, 1);
     if (!g_dir[0]) return;
     files_drain();                 // a queued <build>.enabled lands before the process ends; a queued flag sees g_exiting
     char p[1100]; flag_file(p, sizeof p, "running");
     unlink(p);
+}
+void dm_cheats_teardown(void) {
+    atomic_store(&g_exiting, 1);
+    atomic_store(&g_tick_stop, 1);
+    if (g_tick_started) {
+        pthread_join(g_tick_th, NULL);
+        g_tick_started = 0;
+    }
+    files_drain();
 }
 
 // ---------- the Mac cheats menu and panel (callers: front_mac.m; nothing else uses these) ----------

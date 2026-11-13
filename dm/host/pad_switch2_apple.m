@@ -58,6 +58,7 @@ static void s2_rumble_limit(s2_haptic *v) { float lo = v->lf_amp / 1023.f, hi = 
 
 static NSMutableDictionary<NSUUID *, S2Session *> *g_sessions;
 static CBCentralManager *g_central;
+static _Atomic uint64_t g_s2_gen __attribute__((section("__DATA,__dm_keep")));
 static void s2_session_closed(S2Session *s);
 static void s2_rumble_timer(void);
 
@@ -103,7 +104,11 @@ static s2_pad *s2_pad_for(uint16_t pid) {   // a Joy-Con joins a pad that has th
 - (void)begin {
     [_peripheral discoverServices:nil];
     __weak S2Session *w = self;   // a controller that connects but never finishes the handshake is dropped
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 20 * NSEC_PER_SEC), dispatch_get_main_queue(), ^{ S2Session *s = w; if (s && !s->_handshaken) [s fail:@"handshake timed out"]; });
+    uint64_t sgen = atomic_load(&g_s2_gen);
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 20 * NSEC_PER_SEC), dispatch_get_main_queue(), ^{
+        if (atomic_load(&g_s2_gen) != sgen || !g_central) return;
+        S2Session *s = w; if (s && !s->_handshaken) [s fail:@"handshake timed out"];
+    });
 }
 - (void)fail:(NSString *)why {
     LOG("[sw2] %s: %s", s2_kind(_pid), why.UTF8String);
@@ -137,8 +142,9 @@ static s2_pad *s2_pad_for(uint16_t pid) {   // a Joy-Con joins a pad that has th
     uint8_t f[8 + 255]; size_t n = s2_command(f, sizeof f, c.cmd, c.sub, c.payload.bytes, c.payload.length);
     if (!n) { if (c.done) c.done(nil); [self pump]; return; }
     _pending = YES; _pendingCmd = c.cmd; _cb = c.done; NSUInteger mine = ++_seq; uint8_t id = c.cmd;
-    __weak S2Session *w = self;
+    __weak S2Session *w = self; uint64_t sgen = atomic_load(&g_s2_gen);
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 2 * NSEC_PER_SEC), dispatch_get_main_queue(), ^{
+        if (atomic_load(&g_s2_gen) != sgen || !g_central) return;
         S2Session *s = w; if (!s || !s->_pending || s->_seq != mine) return;
         s->_pending = NO; void (^d)(NSData *) = s->_cb; s->_cb = nil;
         LOG("[sw2] %s: command 0x%02x timed out", s2_kind(s->_pid), id);
@@ -457,16 +463,17 @@ static void s2_session_closed(S2Session *s) { [s teardown]; [g_sessions removeOb
 #if TARGET_OS_OSX
         static BOOL asked;
         if (!g_host_known && !asked) {   // this Mac's address, from the Bluetooth host controller once the app may use Bluetooth (off the main queue: the first call can take seconds); the scan starts after it
-            asked = YES; __weak CBCentralManager *wc = c;
+            asked = YES; __weak CBCentralManager *wc = c; uint64_t sgen = atomic_load(&g_s2_gen);
             dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
                 const char *addr = IOBluetoothHostController.defaultController.addressAsString.UTF8String;   // "aa-bb-cc-dd-ee-ff"
                 unsigned a[6]; BOOL ok = addr && sscanf(addr, "%x%*c%x%*c%x%*c%x%*c%x%*c%x", &a[0], &a[1], &a[2], &a[3], &a[4], &a[5]) == 6 && (a[0] | a[1] | a[2] | a[3] | a[4] | a[5]);
                 uint8_t le[6]; for (int i = 0; i < 6; i++) le[i] = ok ? (uint8_t)a[5 - i] : 0;
                 NSData *leData = [NSData dataWithBytes:le length:6];
                 dispatch_async(dispatch_get_main_queue(), ^{
+                    if (atomic_load(&g_s2_gen) != sgen || !g_central) return;
                     if (ok) { memcpy(g_host, leData.bytes, 6); g_host_known = 1; }
                     else LOG("[sw2] this Mac's Bluetooth address could not be read: controllers are used without pairing (DM_SW2_HOST=aa:bb:cc:dd:ee:ff names it)");
-                    CBCentralManager *cm = wc; if (cm && cm.state == CBManagerStatePoweredOn) [self scan:cm];
+                    CBCentralManager *cm = wc; if (cm && cm == g_central && cm.state == CBManagerStatePoweredOn) [self scan:cm];
                 });
             });
             return;
@@ -496,8 +503,9 @@ static void s2_session_closed(S2Session *s) { [s teardown]; [g_sessions removeOb
     g_sessions[p.identifier] = s;
     LOG("[sw2] %s %s (rssi %d), connecting", use == S2_ADV_WAKE ? "woke:" : "pairing:", s2_kind(a.pid), rssi.intValue);
     [c connectPeripheral:p options:nil];
-    NSUUID *id = p.identifier; __weak CBCentralManager *wc = c;
+    NSUUID *id = p.identifier; __weak CBCentralManager *wc = c; uint64_t sgen = atomic_load(&g_s2_gen);
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 10 * NSEC_PER_SEC), dispatch_get_main_queue(), ^{
+        if (atomic_load(&g_s2_gen) != sgen || !g_central) return;
         S2Session *t = g_sessions[id];
         if (t && t.peripheral.state != CBPeripheralStateConnected) { LOG("[sw2] connecting timed out"); [wc cancelPeripheralConnection:t.peripheral]; s2_session_closed(t); }
     });
@@ -540,12 +548,51 @@ static void s2_rumble_timer(void) {
     }];
 }
 
+static void s2_teardown_on_main(void) {
+    [g_rumble_timer invalidate];
+    g_rumble_timer = nil;
+    if (g_central) {
+        [g_central stopScan];
+        g_central.delegate = nil;
+    }
+    NSArray<S2Session *> *sessions = g_sessions ? g_sessions.allValues : nil;
+    for (S2Session *s in sessions) {
+        if (s.peripheral) {
+            s.peripheral.delegate = nil;
+            if (g_central) [g_central cancelPeripheralConnection:s.peripheral];
+        }
+        [s teardown];
+    }
+    [g_sessions removeAllObjects];
+    g_sessions = nil;
+    while (g_pads) {
+        s2_pad *p = g_pads;
+        g_pads = p->next;
+        if (g_front.detach) g_front.detach(p);
+        free(p);
+    }
+    g_central = nil;
+    g_delegate = nil;
+    memset(&g_front, 0, sizeof g_front);
+}
+void dm_switch2_teardown(void) {
+    atomic_fetch_add(&g_s2_gen, 1);
+    if ([NSThread isMainThread]) {
+        s2_teardown_on_main();
+        return;
+    }
+    if (g_central || g_sessions || g_pads || g_rumble_timer || g_delegate) {
+        dispatch_sync(dispatch_get_main_queue(), ^{ s2_teardown_on_main(); });
+    }
+}
+
 int dm_switch2_start(const dm_switch2_front *front) {
     const char *e = getenv("DM_SW2"); if (!e || !atoi(e)) return 0;   // off by default: no Bluetooth client, so no permission prompt
     if (![NSBundle.mainBundle objectForInfoDictionaryKey:@"NSBluetoothAlwaysUsageDescription"]) {
         LOG("[sw2] Switch 2 controllers are off: this app's Info.plist has no NSBluetoothAlwaysUsageDescription (an app packed with a newer pack_app.py has it)");
         return 0;
     }
+    atomic_fetch_add(&g_s2_gen, 1);
     g_front = *front;
     e = getenv("DM_SW2_VERBOSE"); g_verbose = e && atoi(e);
     e = getenv("DM_PAD_MERGE"); g_joy = !(e && atoi(e));   // merged, every pad is player 1: no pad holds a game's Joy-Cons apart
