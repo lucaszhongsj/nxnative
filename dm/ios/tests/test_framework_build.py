@@ -104,7 +104,10 @@ class ManifestTests(unittest.TestCase):
 
     def test_values_the_schema_cannot_carry_are_refused(self):
         cases = [('--game', '1234'), ('--modules', ''), ('--modules', 'main_sdk'), ('--chain', 'fixture'),
-                 ('--romfs-identity', 'not-an-identity'), ('--built-at', '2026-11-13')]
+                 ('--romfs-identity', 'not-an-identity'), ('--gfx-api', 'metal'),
+                 ('--built-at', '2026-11-13'), ('--built-at', '2026-11-13 18:20:00Z'),
+                 ('--built-at', '2026-11-13T18:20:00+08:00'), ('--built-at', '2026-11-13T18:20:00.123Z'),
+                 ('--built-at', 'invalid')]
         for flag, value in cases:
             with self.subTest(flag=flag, value=value):
                 base = [sys.executable, str(REPO / 'dm/ios/tools/gen_manifest.py'), '/dev/null', '--game', GAME, '--name', 'x',
@@ -123,6 +126,13 @@ class ManifestTests(unittest.TestCase):
         result, with_ts = self.manifest('--built-at', '2026-11-13T16:30:00Z')
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(with_ts['built_at'], '2026-11-13T16:30:00Z')
+
+    def test_optional_gfx_api_and_built_at_are_written_when_given(self):
+        for api in ('nvn', 'vulkan', 'gl'):
+            result, data = self.manifest('--gfx-api', api, '--built-at', '2026-11-13T18:20:00Z')
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(data['gfx_api'], api)
+            self.assertEqual(data['built_at'], '2026-11-13T18:20:00Z')
 
 
 class ProjectTemplateTests(unittest.TestCase):
@@ -170,6 +180,9 @@ class FrameworkEnvironmentTests(unittest.TestCase):
             self.assertTrue((root / 'Gen/framework/dm/env.txt').is_file(), 'the built framework must carry its environment')
             self.assertEqual((root / 'Gen/framework/dm/env.txt').read_text(), 'DM_PROF_TEX_BC_CPU=1\n')
             self.assertFalse((root / 'Gen/framework/dm/font').exists())
+            manifest = json.loads((root / 'Gen/framework/game.manifest.json').read_text())
+            self.assertEqual(manifest['gfx_api'], 'nvn')
+            self.assertRegex(manifest['built_at'], r'^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$')
 
 
 class FrameworkPackagingTests(unittest.TestCase):

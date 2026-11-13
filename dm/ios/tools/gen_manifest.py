@@ -28,6 +28,8 @@ SHADER_MAP = 'dm/shader_map.tsv'  # inside the framework: main.m points DM_NVN_S
 LAUNCHER = 'dm/launcher.json'     # the loader's tables and the launcher settings share the framework's dm/
 TITLE_ID = re.compile(r'^[0-9A-F]{16}$')
 CHAIN = re.compile(r'^b-[0-9A-Za-z._-]+$')
+BUILT_AT = re.compile(r'^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$')
+GFX_APIS = ('nvn', 'vulkan', 'gl')
 
 
 def nro_count(table):
@@ -68,6 +70,10 @@ def manifest(args):
         raise SystemExit(f'[RED] gen_manifest: --chain {args.chain!r} is not written b-<version> (dm/gfx/nvn/dmsh_chain.h)')
     if args.romfs_identity and not args.romfs_identity.startswith('DMROMFSID1 '):
         raise SystemExit('[RED] gen_manifest: --romfs-identity is not a romfs_image.py identity line (DMROMFSID1 ...)')
+    if getattr(args, 'gfx_api', None) and args.gfx_api not in GFX_APIS:
+        raise SystemExit(f'[RED] gen_manifest: --gfx-api {args.gfx_api!r} is not one of {GFX_APIS}')
+    if getattr(args, 'built_at', None) and not BUILT_AT.match(args.built_at):
+        raise SystemExit(f'[RED] gen_manifest: --built-at {args.built_at!r} is not a UTC timestamp YYYY-MM-DDTHH:MM:SSZ')
     data = {
         'schema': SCHEMA,
         'title_id': title_id,
@@ -91,12 +97,12 @@ def manifest(args):
     console = console_of(args.profile)
     if console:
         data['console'] = console   # the shell marks a Switch 2 game and warns about its memory (LNPANDY/NX2Apple#696)
+    if getattr(args, 'gfx_api', None):
+        data['gfx_api'] = args.gfx_api
+    if getattr(args, 'built_at', None):
+        data['built_at'] = args.built_at
     if args.built_by:
         data['built_by'] = args.built_by
-    if args.built_at:
-        if not re.match(r'^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$', args.built_at):
-            raise SystemExit(f'[RED] gen_manifest: --built-at {args.built_at!r} is not UTC ISO-8601 (YYYY-MM-DDTHH:MM:SSZ)')
-        data['built_at'] = args.built_at
     return data
 
 
@@ -119,8 +125,9 @@ def main(argv=None):
     ap.add_argument('--loader', default='FR', choices=('FR', 'FH'),
                     help='FR: a module container whose host is the app (M1); FH: the framework carries its own host (the shell, #451)')
     ap.add_argument('--profile', help='the game\'s dm/games/<title ID>/game.tsv: console in the manifest comes from its first line')
-    ap.add_argument('--built-by', help='who built it, for a log line (optional; a device or tool name)')
+    ap.add_argument('--gfx-api', choices=GFX_APIS, help='the graphics backend this framework uses (nvn, vulkan or gl)')
     ap.add_argument('--built-at', default='', help='UTC ISO-8601 build timestamp (YYYY-MM-DDTHH:MM:SSZ, optional)')
+    ap.add_argument('--built-by', help='who built it, for a log line (optional; a device or tool name)')
     args = ap.parse_args(argv)
     data = manifest(args)
     out = Path(args.out)

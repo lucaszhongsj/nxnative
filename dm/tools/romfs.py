@@ -20,20 +20,72 @@ from typing import TYPE_CHECKING
 
 HEAD = struct.Struct('<8sQQQ')
 ENT = struct.Struct('<QQIHBB')
+FOOTER = struct.Struct('<8sIBBHQQQ24s')
 MAGIC = b'DMROMFS1'
+MSL_MAGIC = b'DMMSLTR1'
+MSL_VERSION = 1
+MSL_ALIGN = 16384
+MSL_FOOTER_ALIGN = 8
+_U64_MAX = (1 << 64) - 1
+_I64_MAX = (1 << 63) - 1
+
+
+def _check_bounds_and_trailer(f, file_size, ioff, isz, path):
+    if file_size > _I64_MAX or ioff < HEAD.size or ioff > file_size or isz > file_size - ioff:
+        raise ValueError(f'invalid RomFS image header: {path}')
+    base_end = ioff + isz
+    if file_size == base_end:
+        return None
+    if file_size - base_end < FOOTER.size:
+        raise ValueError(f'incomplete or invalid RomFS trailer: {path}')
+    footer_off = file_size - FOOTER.size
+    f.seek(footer_off)
+    raw = f.read(FOOTER.size)
+    if len(raw) != FOOTER.size:
+        raise ValueError(f'incomplete or invalid RomFS trailer: {path}')
+    t_magic, ver, gfx_api, flags, chain_len, base_sz, msl_off, msl_sz, chain_raw = FOOTER.unpack(raw)
+    if (t_magic != MSL_MAGIC or ver != MSL_VERSION or not 1 <= gfx_api <= 3 or
+            base_sz != base_end or base_end > _U64_MAX - (MSL_ALIGN - 1) or
+            msl_off != ((base_end + (MSL_ALIGN - 1)) & ~(MSL_ALIGN - 1)) or
+            msl_sz < HEAD.size or msl_off > footer_off or msl_sz > footer_off - msl_off):
+        raise ValueError(f'incomplete or invalid RomFS trailer: {path}')
+    raw_end = msl_off + msl_sz
+    if (raw_end > _U64_MAX - (MSL_FOOTER_ALIGN - 1) or
+            ((raw_end + (MSL_FOOTER_ALIGN - 1)) & ~(MSL_FOOTER_ALIGN - 1)) != footer_off or
+            chain_len > 24 or b'\0' in chain_raw[:chain_len] or
+            chain_raw[chain_len:] != b'\0' * (24 - chain_len)):
+        raise ValueError(f'incomplete or invalid RomFS trailer: {path}')
+    return (msl_off, msl_sz, gfx_api, flags, chain_raw[:chain_len].decode('ascii'))
 
 
 class Image:
-    def __init__(self, path):
+    def __init__(self, path, slice_offset=0, slice_size=None):
         self.path = _os.path.abspath(path)
         self.stat = _os.stat(self.path)
+        self.slice_offset = slice_offset
         with builtins.open(self.path, 'rb') as f:
-            head = f.read(HEAD.size)
-            if len(head) < HEAD.size: raise ValueError(f'invalid RomFS image header: {path}')
-            magic, off, size, count = HEAD.unpack(head)
-            if magic != MAGIC or not 0 < count <= 0xffffffff or off < HEAD.size or off > self.stat.st_size or size != self.stat.st_size - off or count > size // ENT.size:
-                raise ValueError(f'invalid RomFS image header: {path}')
-            f.seek(off); self.index = f.read(size)
+            if slice_size is None:
+                head = f.read(HEAD.size)
+                if len(head) < HEAD.size: raise ValueError(f'invalid RomFS image header: {path}')
+                magic, off, size, count = HEAD.unpack(head)
+                if magic != MAGIC or not 0 < count <= 0xffffffff:
+                    raise ValueError(f'invalid RomFS image header: {path}')
+                _check_bounds_and_trailer(f, self.stat.st_size, off, size, path)
+                if count > size // ENT.size:
+                    raise ValueError(f'invalid RomFS image header: {path}')
+                self.base_size = off + size
+                f.seek(off); self.index = f.read(size)
+            else:
+                if slice_offset < 0 or slice_size < HEAD.size or slice_offset > self.stat.st_size or slice_size > self.stat.st_size - slice_offset:
+                    raise ValueError(f'invalid RomFS slice range: {path}')
+                f.seek(slice_offset)
+                head = f.read(HEAD.size)
+                if len(head) < HEAD.size: raise ValueError(f'invalid RomFS image header: {path}')
+                magic, off, size, count = HEAD.unpack(head)
+                if magic != MAGIC or not 0 < count <= 0xffffffff or off < HEAD.size or off > slice_size or size != slice_size - off or count > size // ENT.size:
+                    raise ValueError(f'invalid RomFS image header: {path}')
+                self.base_size = slice_size
+                f.seek(slice_offset + off); self.index = f.read(size)
         if len(self.index) != size: raise ValueError(f'incomplete RomFS image: {path}')
         self.count, self.pool = count, count * ENT.size
         next_child = 1
@@ -116,7 +168,8 @@ _fd_ranges = {}
 class _File(io.RawIOBase):
     def __init__(self, image, k):
         self.fd = _os.open(image.path, _os.O_RDONLY)
-        self.start, self.length = image.entry(k)[:2]
+        a, self.length = image.entry(k)[:2]
+        self.start = image.slice_offset + a
         self.pos = 0
         _fd_ranges[self.fd] = (self.start, self.length)
     def readable(self): return True

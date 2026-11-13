@@ -24,9 +24,13 @@
 #include <CommonCrypto/CommonDigest.h>
 #include <mach/mach.h>
 #include "../../host/host_image.h"
+#include "../msl_mount.h"
+#include <dispatch/dispatch.h>
 #include <math.h>
 #include <stdatomic.h>
+#include <sys/mman.h>
 #include <time.h>
+#include <unistd.h>
 
 int mtl_fps_target(void);
 int mtl_link_active(void); int mtl_link_wait_tick(int vsyncs, uint64_t timeout_ns);   // nvn_mtl.m
@@ -158,39 +162,73 @@ typedef struct { char name[48]; uint8_t slot, type; } shsamp;                   
 typedef struct { char key[17]; int frag, ub_slot, ub_size, na, nu, nt; shattr *a; shuni *u; shsamp *t; } shinfo;
 static shinfo *g_sh; static int g_nsh;
 static int sh_cmp(const void *a, const void *b) { int c = memcmp(((const shinfo *)a)->key, ((const shinfo *)b)->key, 16); return c ? c : ((const shinfo *)a)->frag - ((const shinfo *)b)->frag; }
+static void sh_parse_line(char *line, int *cap) {
+    if (line[0] == '#' || line[0] == '\n' || line[0] == '\r' || !line[0]) return;
+    char *rest = line, *key = strsep(&rest, "\t"), *stage = strsep(&rest, "\t"), *res = strsep(&rest, "\t\r\n");
+    if (!key || !stage || strlen(key) != 16) return;
+    if (g_nsh == *cap) { *cap = *cap ? *cap * 2 : 1024; g_sh = realloc(g_sh, (size_t)*cap * sizeof *g_sh); }
+    shinfo *s = &g_sh[g_nsh++]; memset(s, 0, sizeof *s);
+    memcpy(s->key, key, 16); s->frag = !strcmp(stage, "frag"); s->ub_slot = -1;
+    int na = 0, nu = 0, nt = 0;
+    for (char *c = res; c && *c; c++) if (c == res || c[-1] == ' ') { na += *c == 'a'; nu += *c == 'u'; nt += *c == 't'; }
+    s->a = zalloc((size_t)(na + 1) * sizeof *s->a); s->u = zalloc((size_t)(nu + 1) * sizeof *s->u); s->t = zalloc((size_t)(nt + 1) * sizeof *s->t);
+    for (char *t = res ? strtok(res, " ") : NULL; t; t = strtok(NULL, " ")) {
+        char nm[64], ty[32]; unsigned a1, a2, a3;
+        if (t[0] == 'a' && sscanf(t, "a:%63[^=]=%u:%31s", nm, &a1, ty) == 3 && a1 < 16) { shattr *x = &s->a[s->na++]; strlcpy(x->name, nm, sizeof x->name); x->slot = a1; x->type = tcode(ty); }
+        else if (t[0] == 'u' && sscanf(t, "u:%63[^=]=%u:%31[^:]:%u:%u", nm, &a1, ty, &a2, &a3) == 5) {
+            shuni *x = &s->u[s->nu++]; strlcpy(x->name, nm, sizeof x->name); x->off = a1; x->type = tcode(ty); x->count = a2; x->stride = a3;
+        } else if (t[0] == 't' && sscanf(t, "t:%63[^=]=%u:%31s", nm, &a1, ty) == 3) { shsamp *x = &s->t[s->nt++]; strlcpy(x->name, nm, sizeof x->name); x->slot = a1; x->type = tcode(ty); }
+        else if (t[0] == 'b' && sscanf(t, "b:%u:%u", &a1, &a2) == 2) { s->ub_slot = a1; s->ub_size = a2; }
+    }
+    if (s->ub_slot >= 15) GLOG("[RED] shader %s: uniform block at buffer slot %d meets the vertex buffer slots", s->key, s->ub_slot);
+}
 static void sh_load(void) {
     const char *d = getenv("DM_MSL_DIR"); char p[1024];
-    if (!d) { GLOG("[RED] DM_MSL_DIR not set: the GL shader library cannot be found"); return; }
-    snprintf(p, sizeof p, "%s/gl/gl_shaders.tsv", d);
-    FILE *f = fopen(p, "r");
-    if (!f) { GLOG("[RED] cannot open %s (run dm/gfx/tools/gl_shaders.py first)", p); return; }
-    static char line[65536]; int cap = 0;
-    while (fgets(line, sizeof line, f)) {
-        if (line[0] == '#' || line[0] == '\n') continue;
-        char *rest = line, *key = strsep(&rest, "\t"), *stage = strsep(&rest, "\t"), *res = strsep(&rest, "\t\n");
-        if (!key || !stage || strlen(key) != 16) continue;
-        if (g_nsh == cap) { cap = cap ? cap * 2 : 1024; g_sh = realloc(g_sh, cap * sizeof *g_sh); }
-        shinfo *s = &g_sh[g_nsh++]; memset(s, 0, sizeof *s);
-        memcpy(s->key, key, 16); s->frag = !strcmp(stage, "frag"); s->ub_slot = -1;
-        int na = 0, nu = 0, nt = 0;
-        for (char *c = res; c && *c; c++) if (c == res || c[-1] == ' ') { na += *c == 'a'; nu += *c == 'u'; nt += *c == 't'; }
-        s->a = zalloc((na + 1) * sizeof *s->a); s->u = zalloc((nu + 1) * sizeof *s->u); s->t = zalloc((nt + 1) * sizeof *s->t);
-        for (char *t = res ? strtok(res, " ") : NULL; t; t = strtok(NULL, " ")) {
-            char nm[64], ty[32]; unsigned a1, a2, a3;
-            if (t[0] == 'a' && sscanf(t, "a:%63[^=]=%u:%31s", nm, &a1, ty) == 3 && a1 < 16) { shattr *x = &s->a[s->na++]; strlcpy(x->name, nm, sizeof x->name); x->slot = a1; x->type = tcode(ty); }
-            else if (t[0] == 'u' && sscanf(t, "u:%63[^=]=%u:%31[^:]:%u:%u", nm, &a1, ty, &a2, &a3) == 5) {
-                shuni *x = &s->u[s->nu++]; strlcpy(x->name, nm, sizeof x->name); x->off = a1; x->type = tcode(ty); x->count = a2; x->stride = a3;
-            } else if (t[0] == 't' && sscanf(t, "t:%63[^=]=%u:%31s", nm, &a1, ty) == 3) { shsamp *x = &s->t[s->nt++]; strlcpy(x->name, nm, sizeof x->name); x->slot = a1; x->type = tcode(ty); }
-            else if (t[0] == 'b' && sscanf(t, "b:%u:%u", &a1, &a2) == 2) { s->ub_slot = a1; s->ub_size = a2; }
-        }
-        if (s->ub_slot >= 15) GLOG("[RED] shader %s: uniform block at buffer slot %d meets the vertex buffer slots", s->key, s->ub_slot);
+    FILE *f = NULL;
+    if (d && *d) {
+        snprintf(p, sizeof p, "%s/gl/gl_shaders.tsv", d);
+        f = fopen(p, "r");
     }
-    fclose(f);
-    qsort(g_sh, g_nsh, sizeof *g_sh, sh_cmp);
-    snprintf(p, sizeof p, "%s/gl/gl_shaders.metallib", d);
+    int cap = 0;
+    if (f) {
+        static char line[65536];
+        while (fgets(line, sizeof line, f)) sh_parse_line(line, &cap);
+        fclose(f);
+    } else {
+        void *tbuf = NULL; size_t tlen = 0;
+        if (!dm_msl_trailer_read("gl/gl_shaders.tsv", &tbuf, &tlen)) {
+            if (d && *d) GLOG("[RED] cannot open %s (run dm/gfx/tools/gl_shaders.py first)", p);
+            else GLOG("[RED] DM_MSL_DIR not set and DM_ROMFS has no gl/gl_shaders.tsv trailer");
+            return;
+        }
+        char *cur = (char *)tbuf;
+        while (cur && *cur) {
+            char *nl = strchr(cur, '\n');
+            if (nl) *nl = '\0';
+            sh_parse_line(cur, &cap);
+            cur = nl ? nl + 1 : NULL;
+        }
+        free(tbuf);
+    }
+    qsort(g_sh, (size_t)g_nsh, sizeof *g_sh, sh_cmp);
     NSError *err = nil;
-    g_lib = [g_dev newLibraryWithURL:[NSURL fileURLWithPath:@(p)] error:&err];
-    if (!g_lib) GLOG("[RED] shader library failed to load %s: %s", p, err.localizedDescription.UTF8String);
+    if (d && *d) snprintf(p, sizeof p, "%s/gl/gl_shaders.metallib", d);
+    if (d && *d && !access(p, F_OK)) {
+        g_lib = [g_dev newLibraryWithURL:[NSURL fileURLWithPath:@(p)] error:&err];
+        if (!g_lib) GLOG("[RED] shader library failed to load %s: %s", p, err.localizedDescription.UTF8String);
+    } else {
+        msl_map m;
+        if (dm_msl_trailer_map("gl/gl_shaders.metallib", &m)) {
+            void *base = m.base; size_t base_len = m.base_len;
+            dispatch_data_t dd = dispatch_data_create(m.data, m.size, dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{ munmap(base, base_len); });
+            g_lib = [g_dev newLibraryWithData:dd error:&err];
+            if (!g_lib) GLOG("[RED] shader library failed to load trailer gl/gl_shaders.metallib: %s", err.localizedDescription.UTF8String);
+        } else if (d && *d) {
+            GLOG("[RED] shader library failed to open %s", p);
+        } else {
+            GLOG("[RED] DM_MSL_DIR not set and DM_ROMFS has no gl/gl_shaders.metallib trailer");
+        }
+    }
 }
 static const shinfo *sh_find(const char *key, int frag) { shinfo k; memcpy(k.key, key, 16); k.frag = frag; return g_nsh ? bsearch(&k, g_sh, g_nsh, sizeof *g_sh, sh_cmp) : NULL; }
 
@@ -2231,7 +2269,7 @@ EGL(eglGetProcAddress, void *, const char *name) {
 }
 
 void dm_gl_teardown(void) { @autoreleasepool {
-    if (!g_dev) return;
+    if (!g_dev) { dm_msl_trailer_teardown(); return; }
     dm_gl_drain();
     pass_end();
     g_cb = nil;
@@ -2285,6 +2323,7 @@ void dm_gl_teardown(void) { @autoreleasepool {
     g_frames = 0;
 
     g_lib = nil; g_util = nil;
+    dm_msl_trailer_teardown();
     g_samp0 = nil;
     g_tex0 = nil; g_cube0 = nil; g_tex3d0 = nil; g_arr0 = nil;
     g_ev = nil; g_q = nil; g_dev = nil;

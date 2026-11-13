@@ -157,6 +157,38 @@ class Startup(unittest.TestCase):
             empty = root / 'empty'; empty.mkdir()
             self.assertEqual(locate(empty), str(doc / 'romfs.img'))
 
+    def test_shader_trailer_preserves_slim_identity_and_refuses_partial_trailer(self):
+        """A slim build's romfs.id records base_romfs_size; appending or replacing a DMMSLTR1 shader trailer keeps romfs_id_check matching while a truncated trailer is refused."""
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary); doc = root / 'Documents'; tmp = root / 'tmp'; bundle = root / 'App.app'; source = root / 'src'
+            msl = root / 'msl' / 'b-testchain'
+            for folder in (doc, tmp, bundle, source, msl): folder.mkdir(parents=True)
+            (source / 'marker').write_text('resource')
+            (source / 'payload.bin').write_bytes(b'A' * 9000)
+            (msl / 'inputs.tsv').write_text('game\t010015100B514000\ninputs\tabc123\n')
+            (msl / '0123456789abcdef_b.metallib').write_bytes(b'MTLB' + b'\0' * 60)
+
+            img_path = doc / 'romfs.img'
+            image.pack(source, img_path)
+            base_size = img_path.stat().st_size
+            (bundle / 'romfs.id').write_text(image.identity(img_path, '010015100B514000', '1.0', 'v0') + '\n')
+
+            info = image.append_msl(img_path, msl.parent, gfx_api='nvn', chain='b-testchain')
+            self.assertTrue(info['has_trailer'])
+            self.assertEqual(info['base_romfs_size'], base_size)
+            self.assertGreater(img_path.stat().st_size, base_size)
+
+            ok = subprocess.run([str(self.locator), str(doc), str(tmp), str(bundle)], capture_output=True, text=True)
+            self.assertEqual(ok.returncode, 0, ok.stderr)
+            self.assertEqual(ok.stdout.strip(), str(img_path))
+
+            # Cut off 1 byte from the trailer footer: startup must refuse the incomplete image
+            raw = img_path.read_bytes()
+            img_path.write_bytes(raw[:-1])
+            bad = subprocess.run([str(self.locator), str(doc), str(tmp), str(bundle)], capture_output=True, text=True)
+            self.assertNotEqual(bad.returncode, 0)
+            self.assertIn('invalid RomFS image', bad.stderr)
+
     def test_per_game_aoc_folder_is_taken_before_the_bundled_one(self):
         """Slim builds carry no add-on content: games/<id>/aoc (the layout hle_fs.c aoc_dir reads) must reach DM_AOC_DIR, before aoc_locate takes Documents/aoc or <App>/aoc, and never over an explicit value."""
         main = (REPO / 'dm/ios/Sources/main.m').read_text()

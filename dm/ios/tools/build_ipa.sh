@@ -235,10 +235,11 @@ if [ "$FRAMEWORK" = 1 ]; then
   fi
   NRO_TABLE=$PATCHED/nro.tsv; [ -f "$NRO_TABLE" ] || NRO_TABLE=   # the NRO modules gen_embed.py packs: nro_count in the manifest
   FW_LOADER=FR; [ -z "$FRAMEWORK_ONLY" ] || FW_LOADER=FH
+  FW_GFXAPI=${GFXAPI:-$(python3 "$DM/games/game.py" "$GAME" gfx_api nvn)} || die "game profile: gfx_api"
   python3 tools/gen_manifest.py Gen/framework/game.manifest.json --game "$GAME" --name "$DM_DISPLAY_NAME" \
     --display-version "$DM_APP_VERSION" --package-version "${PKG:-}" --modules "$MODS" ${NRO_TABLE:+--nro-table "$NRO_TABLE"} \
-    --chain "b-$V" --romfs-marker "$MARKER" --romfs-identity "$ROMFS_ID" --framework-name "$FW_NAME" --loader "$FW_LOADER" --profile "$GD/game.tsv" \
-    --built-at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > /dev/null || die "game manifest (gen_manifest.py)"
+    --chain "b-$V" --romfs-marker "$MARKER" --romfs-identity "$ROMFS_ID" --framework-name "$FW_NAME" --loader "$FW_LOADER" \
+    --gfx-api "$FW_GFXAPI" --built-at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --profile "$GD/game.tsv" > /dev/null || die "game manifest (gen_manifest.py)"
   DM_NS_TAG=$(python3 tools/gen_objc_namespace.py --print-tag ${DM_NS_TAG:+--tag "$DM_NS_TAG"} --game "$GAME" --framework-name "$FW_NAME" ${DM_CHAIN_INDEX:+--chain-index "$DM_CHAIN_INDEX"} \
     --header Gen/framework/objc_namespace.h --exports Gen/framework/exported_symbols.txt \
     "$DM/host" "$DM/gfx" "$DM/ios/Sources" "$DM/ios/framework") || die "framework ObjC namespace"

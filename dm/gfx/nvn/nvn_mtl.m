@@ -40,6 +40,7 @@
 #include "nvn_link_drain.h"
 #include "nvn_timestamp.h"
 #include "msl_image.h"
+#include "../msl_mount.h"
 #include "dmsh_chain.h"   // DMSH_CHAIN: the translation chain version of the B shader library expected by this source tree, one for every game (beside this file, tools/dmsh_chain.py --header)
 #include "game_profile.h"   // game profile constants (profile id, the profile's switches)
 // Texture slot table per stage: 0-127 the combined handles (nvnCommandBufferBindTexture), 128-255 the separate texture binds (NVN_SEPTEX_SLOT0, nvn_obj.h)
@@ -6119,13 +6120,25 @@ static const img_ent *msl_image_file(NSString *path, romfs_img **img) {
     *img = m;
     return m ? msl_image_find(m, path.lastPathComponent.UTF8String) : NULL;
 }
+static NSString *msl_trailer_rel(NSString *path) {
+    if (!g_msl_dir || path.length <= g_msl_dir.length + 1 || ![path hasPrefix:g_msl_dir] || [path characterAtIndex:g_msl_dir.length] != '/') return nil;
+    return [NSString stringWithFormat:@"b-%s/%@", DMSH_CHAIN, [path substringFromIndex:g_msl_dir.length + 1]];
+}
 static NSData *msl_data(NSString *path) {   // a file of the library, nil when it has none
     NSData *d = [NSData dataWithContentsOfFile:path];
     if (d) return d;
     romfs_img *m; const img_ent *x = msl_image_file(path, &m);
-    if (!x) return nil;
-    NSMutableData *o = [NSMutableData dataWithLength:(NSUInteger)x->b];
-    return romfs_image_read(m->fd, o.mutableBytes, (size_t)x->b, (off_t)x->a) ? o : nil;
+    if (x) {
+        NSMutableData *o = [NSMutableData dataWithLength:(NSUInteger)x->b];
+        if (romfs_image_read(m->fd, o.mutableBytes, (size_t)x->b, (off_t)x->a)) return o;
+    }
+    NSString *rel = msl_trailer_rel(path);
+    void *buf = NULL; size_t len = 0;
+    if (rel && dm_msl_trailer_read(rel.UTF8String, &buf, &len)) {
+        if (!len) { free(buf); return [NSData data]; }
+        return [NSData dataWithBytesNoCopy:buf length:len freeWhenDone:YES];
+    }
+    return nil;
 }
 static NSString *exe_rel(const char *rel) {
     char buf[4096]; uint32_t n = sizeof buf;
@@ -6161,10 +6174,13 @@ static void shmap_read(void) {
     g_shmap_path = path;
     const char *m = getenv("DM_MSL_DIR");
     // Library directory = <DM_MSL_DIR or default cache>/b-<translation chain version>: the version comes from dm/gfx/nvn/dmsh_chain.h (tools/dmsh_chain.py), one for every game; a host built from an old source tree only accepts libraries of the old version
-    g_msl_dir = [NSString stringWithFormat:@"%@/b-%s", m ? @(m) : [NSString stringWithFormat:@"%s%s/build/cache/metal_shader_cache", getenv("DM_ROOT") ?: getenv("HOME"), getenv("DM_ROOT") ? "" : "/dm-work"], DMSH_CHAIN];
+    g_msl_dir = [NSString stringWithFormat:@"%@/b-%s", m ? @(m) : [NSString stringWithFormat:@"%s%s/build/cache/metal_shader_cache", getenv("DM_ROOT") ?: (getenv("HOME") ?: ""), getenv("DM_ROOT") ? "" : "/dm-work"], DMSH_CHAIN];
     if (![NSFileManager.defaultManager fileExistsAtPath:g_msl_dir]) {
         NSString *image = [g_msl_dir stringByAppendingString:@".img"];
+        dm_msl_footer tf;
         if ([NSFileManager.defaultManager fileExistsAtPath:image]) MLOG("shader libraries: one file, %s", image.UTF8String);
+        else if (dm_msl_trailer_has([NSString stringWithFormat:@"b-%s/inputs.tsv", DMSH_CHAIN].UTF8String)) MLOG("shader libraries: embedded trailer in DM_ROMFS (b-%s)", DMSH_CHAIN);
+        else if (dm_msl_trailer_info(&tf) && tf.chain_len) MLOG("[RED] shader trailer in DM_ROMFS carries chain %.*s, expected b-%s", (int)tf.chain_len, tf.chain, DMSH_CHAIN);
         else MLOG("[RED] shader library %s (a folder or a .img file) does not exist: translation chain version %s of this source tree has not been built yet (dm/gfx/tools/dmsh_build.py)", g_msl_dir.UTF8String, DMSH_CHAIN);
     }
     // The library's stamp (inputs.tsv, written by a full dmsh_build.py run): the game and the digest of the profile inputs it was built from. The chain version is the same for every
@@ -6356,14 +6372,20 @@ static NSString *lib_digest(const void *p, size_t n) {
 // The library is tagged with its digest (lib_tag), from the mapped bytes
 static id<MTLLibrary> lib_from_file(NSString *path, NSError **err) {
     int fd = open(path.fileSystemRepresentation, O_RDONLY); struct stat st;
-    if (fd < 0) {   // not in the folder: the library's image, whose one descriptor is shared, and only this file's pages are mapped
+    if (fd < 0) {   // not in the folder: the library's image or DM_ROMFS shader trailer, whose one descriptor is shared, and only this file's pages are mapped
         int open_errno = errno; romfs_img *img; const img_ent *x = msl_image_file(path, &img); msl_map f;
         if (x && msl_image_map(img, x, &f)) {
             void *base = f.base; size_t base_len = f.base_len;
             dispatch_data_t d = dispatch_data_create(f.data, f.size, dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{ munmap(base, base_len); });
             return lib_tag([g_dev newLibraryWithData:d error:err], lib_digest(f.data, f.size));
         }
-        if (!x) errno = open_errno;
+        NSString *rel = msl_trailer_rel(path);
+        if (rel && dm_msl_trailer_map(rel.UTF8String, &f)) {
+            void *base = f.base; size_t base_len = f.base_len;
+            dispatch_data_t d = dispatch_data_create(f.data, f.size, dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{ munmap(base, base_len); });
+            return lib_tag([g_dev newLibraryWithData:d error:err], lib_digest(f.data, f.size));
+        }
+        if (!x && (!rel || !dm_msl_trailer_has(rel.UTF8String))) errno = open_errno;
     }
     if (fd < 0 || fstat(fd, &st) || st.st_size <= 0) { if (fd >= 0) close(fd); if (err) *err = [NSError errorWithDomain:NSPOSIXErrorDomain code:errno userInfo:@{NSLocalizedDescriptionKey: [NSString stringWithFormat:@"cannot open %@", path]}]; return nil; }
     size_t len = (size_t)st.st_size; void *m = mmap(NULL, len, PROT_READ, MAP_PRIVATE, fd, 0); close(fd);
@@ -10223,8 +10245,13 @@ static _Atomic int g_pre_known_n;   // pairs left to the draws because they fail
 // their bases cannot be made yet, so the stamp names one such file (pre_device_stamp) and a later start builds them once it is there. g_pre_nolib_file: the first one seen in this
 // run, a name in the library, under g_pre_fail_lock
 static _Atomic int g_pre_nolib; static NSString *g_pre_nolib_file;
-// Whether the library has the file: in its folder or in its image (msl_image_file), as msl_data and lib_from_file read it
-static int msl_has(NSString *path) { romfs_img *m; return !access(path.fileSystemRepresentation, F_OK) || msl_image_file(path, &m) != NULL; }
+// Whether the library has the file: in its folder, in its image (msl_image_file), or in the DM_ROMFS shader trailer
+static int msl_has(NSString *path) {
+    romfs_img *m;
+    if (!access(path.fileSystemRepresentation, F_OK) || msl_image_file(path, &m) != NULL) return 1;
+    NSString *rel = msl_trailer_rel(path);
+    return rel && dm_msl_trailer_has(rel.UTF8String);
+}
 // 1 (and the file noted) when the library lacks <key><suffix>
 static int pre_lib_absent(NSString *key, NSString *suffix) {
     NSString *name = [key stringByAppendingString:suffix];
@@ -17802,10 +17829,11 @@ void dm_gfx_teardown(void) { @autoreleasepool {
 
     romfs_img *mimg = atomic_exchange(&g_msl_img, NULL);
     if (mimg) romfs_image_close(mimg);
+    dm_msl_trailer_teardown();
 
     g_shmap = nil; g_shmap_path = nil; g_msl_dir = nil;
     g_shcache = nil; g_builtin = nil; g_builtin_lib = nil;
-    g_c1_banks = nil; g_c1_full = nil; g_cb_ext = nil;
+    g_c1_banks = nil; g_c1_full = nil; g_c1_full_valid = 0; g_cb_ext = nil;
     g_warm_items = nil; g_warm_dict = nil; g_warm_loads = nil;
     g_pso_user_seen = nil; g_progpf_seen = nil; g_hy_kick_set = nil;
     g_pre_known = nil; g_pre_fails = nil; g_pre_nolib_file = nil; g_pre_nolib = 0;

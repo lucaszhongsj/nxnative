@@ -95,6 +95,7 @@ __attribute__((weak)) void dm_codec_video_teardown_post(void) {}
 __attribute__((weak)) void dm_cheats_teardown(void) {}
 __attribute__((weak)) void dm_gfx_quit_begin(void) {}
 __attribute__((weak)) void dm_gfx_teardown(void) {}
+__attribute__((weak, visibility("hidden"))) void dm_msl_trailer_teardown(void) {}
 __attribute__((weak)) void dm_fs_teardown(void) {}
 __attribute__((weak)) void dm_ue_malloc_teardown(void) {}
 __attribute__((weak)) void dm_guest_clock_wake_teardown(void) {}
@@ -133,6 +134,7 @@ void dm_host_teardown_for_shell(void) {
     dm_sdk16_teardown();
     dm_hid_touch_teardown();
     dm_fpslock_teardown();
+    dm_msl_trailer_teardown();
     dm_fs_teardown();
     dm_guest_memory_release(1);
     dm_ue_malloc_teardown();

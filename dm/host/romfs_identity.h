@@ -5,6 +5,7 @@
 // size and index decide the match; title, version and build (the packed game's title ID, display version and package version) only name the image in messages.
 // index = FNV-1a 64 (offset 0xcbf29ce484222325, prime 0x100000001b3) over the little-endian 64-bit words of header (32 bytes) followed by the index (zero-padded to a multiple of 8 bytes).
 #pragma once
+#include "romfs_image.h"
 #include <errno.h>
 #include <fcntl.h>
 #include <inttypes.h>
@@ -26,14 +27,15 @@ static uint64_t romfs_id_mix(uint64_t h, const uint8_t *p, size_t n) {   // n mu
     }
     return h;
 }
-// Size and index hash of the image at path (title / version / build empty). 0 with errno set for a missing, cut off or invalid image.
+// Base RomFS size (ioff + isz, excluding any DMMSLTR1 trailer) and index hash of the image at path (title / version / build empty).
+// 0 with errno set for a missing, cut off or invalid image (including a truncated or malformed trailer).
 static int romfs_id_of_image(const char *path, romfs_id *out) {
     memset(out, 0, sizeof *out);
     int fd = open(path, O_RDONLY); if (fd < 0) return 0;
     struct stat st; uint8_t h[32]; uint64_t ioff, isz, hash = 0xcbf29ce484222325ull;
-    if (fstat(fd, &st) || pread(fd, h, sizeof h, 0) != (ssize_t)sizeof h) { int e = errno ? errno : EINVAL; close(fd); errno = e; return 0; }
+    if (fstat(fd, &st) || st.st_size < (off_t)sizeof h || !romfs_image_read(fd, h, sizeof h, 0)) { int e = errno ? errno : EINVAL; close(fd); errno = e; return 0; }
     memcpy(&ioff, h + 8, 8); memcpy(&isz, h + 16, 8);
-    if (memcmp(h, "DMROMFS1", 8) || ioff < sizeof h || ioff > (uint64_t)st.st_size || isz != (uint64_t)st.st_size - ioff) { close(fd); errno = EINVAL; return 0; }
+    if (memcmp(h, "DMROMFS1", 8) || !romfs_check_bounds_and_trailer(fd, (uint64_t)st.st_size, ioff, isz, NULL)) { int e = errno ? errno : EINVAL; close(fd); errno = e; return 0; }
     hash = romfs_id_mix(hash, h, sizeof h);
     enum { CHUNK = 1 << 20 };
     uint8_t *buf = malloc(CHUNK + 8); if (!buf) { close(fd); errno = ENOMEM; return 0; }
@@ -49,7 +51,7 @@ static int romfs_id_of_image(const char *path, romfs_id *out) {
         hash = romfs_id_mix(hash, buf, padded); at += n;
     }
     free(buf); close(fd);
-    out->size = (uint64_t)st.st_size; out->index = hash; return 1;
+    out->size = ioff + isz; out->index = hash; return 1;
 }
 static void romfs_id_field(char *dst, size_t cap, const char *v, size_t n) {
     if (n >= cap) n = cap - 1;

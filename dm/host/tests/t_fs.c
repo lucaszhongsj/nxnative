@@ -288,6 +288,82 @@ int main(void) {
         }
         f = fopen(ip, "wb"); fwrite(img, 1, 39 + 50, f); fclose(f);   // cut off inside the index, as a copy stopped partway
         CHECK(!img_open(ip), "a cut-off image is refused");
+        {   // DMMSLTR1 shader trailer: 16 KiB-aligned sub-image + 8-byte-aligned 64-byte footer
+            // Sub-image: root -> dir "b-test" -> file "inputs.tsv" ("game\tx\n", 7 bytes at offset 32)
+            uint8_t sub[32 + 7 + 3 * 24 + 16] = {0};
+            uint64_t shd[3] = {39, 3 * 24 + 16, 3};
+            img_ent se[3] = {{1, 1, 0, 0, 0, 0}, {2, 1, 0, 6, 0, 0}, {32, 7, 6, 10, 1, 0}};
+            memcpy(sub, "DMROMFS1", 8); memcpy(sub + 8, shd, sizeof shd);
+            memcpy(sub + 32, "game\tx\n", 7);
+            memcpy(sub + 39, se, sizeof se);
+            memcpy(sub + 39 + sizeof se, "b-testinputs.tsv", 16);
+
+            uint64_t base_sz = sizeof img;
+            uint64_t msl_off = (base_sz + 16383ull) & ~16383ull;
+            uint64_t msl_sz = sizeof sub;
+            uint64_t footer_off = ((msl_off + msl_sz) + 7ull) & ~7ull;
+            size_t total_sz = (size_t)footer_off + sizeof(dm_msl_footer);
+            uint8_t *full = calloc(1, total_sz);
+            memcpy(full, img, sizeof img);
+            memcpy(full + msl_off, sub, sizeof sub);
+            dm_msl_footer ft = {0};
+            memcpy(ft.magic, "DMMSLTR1", 8);
+            ft.version = 1; ft.gfx_api = DM_MSL_GFX_NVN; ft.flags = DM_MSL_FLAG_MULTI_PROGRAM;
+            ft.chain_len = 6; ft.base_romfs_size = base_sz; ft.msl_offset = msl_off; ft.msl_size = msl_sz;
+            memcpy(ft.chain, "b-test", 6);
+            memcpy(full + footer_off, &ft, sizeof ft);
+
+            f = fopen(ip, "wb"); fwrite(full, 1, total_sz, f); fclose(f);
+            g_nmnt = 0; setenv("DM_ROMFS", ip, 1);
+            CHECK(h_fs_MountRom("rom", NULL, 0) == RES_OK, "mount image carrying a valid DMMSLTR1 trailer");
+            CHECK(read_fs("rom:/data/a", got, sizeof got) && !strcmp(got, "hello") &&
+                  read_fs("rom:/data/c", got, sizeof got) && !strcmp(got, "xy"), "base RomFS files read normally with trailer attached");
+            uint64_t th = 0;
+            CHECK(h_fs_OpenFile(&th, "rom:/b-test/inputs.tsv", MODE_READ) == RES_PATH_NOT_FOUND, "trailer entries do not leak into the guest RomFS");
+            g_nmnt = 0;
+
+            int sfd = open(ip, O_RDONLY);
+            dm_msl_footer parsed = {0};
+            CHECK(sfd >= 0 && romfs_check_bounds_and_trailer(sfd, total_sz, 39, 5 * 24 + 7, &parsed) &&
+                  parsed.version == 1 && parsed.gfx_api == DM_MSL_GFX_NVN && parsed.msl_offset == msl_off && parsed.msl_size == msl_sz &&
+                  parsed.chain_len == 6 && !strcmp(parsed.chain, "b-test"), "romfs_check_bounds_and_trailer parses valid footer");
+            CHECK(!romfs_image_open_slice(sfd, msl_off, msl_sz - 1) && lseek(sfd, 0, SEEK_CUR) >= 0,
+                  "romfs_image_open_slice leaves caller fd open on failure");
+            romfs_image *simg = romfs_image_open_slice(sfd, msl_off, msl_sz);
+            CHECK(simg && simg->n == 3, "romfs_image_open_slice validates and loads trailer sub-image");
+            romfs_image_close(simg);
+
+            // Overflow and truncation rejections
+            int zfd = open(ip, O_RDONLY);
+            errno = 0;
+            CHECK(!romfs_check_bounds_and_trailer(zfd, 1024, UINT64_MAX - 8ull, 16ull, NULL) && errno == EINVAL, "ioff + isz overflow rejected");
+            errno = 0;
+            CHECK(!romfs_check_bounds_and_trailer(zfd, total_sz - 1, 39, 5 * 24 + 7, NULL) && errno == EINVAL, "1-byte truncated trailer rejected");
+            errno = 0;
+            CHECK(!romfs_check_bounds_and_trailer(zfd, msl_off + 20, 39, 5 * 24 + 7, NULL) && errno == EINVAL, "half-written trailer rejected");
+            close(zfd);
+
+            // Bad footer mutations must all fail img_open with EINVAL
+            for (int bad_case = 0; bad_case < 10; bad_case++) {
+                dm_msl_footer bf = ft;
+                size_t write_sz = total_sz;
+                if (bad_case == 0) bf.magic[7] = '2';
+                else if (bad_case == 1) bf.version = 2;
+                else if (bad_case == 2) bf.gfx_api = 0;
+                else if (bad_case == 3) bf.gfx_api = 4;
+                else if (bad_case == 4) bf.base_romfs_size = base_sz + 1;
+                else if (bad_case == 5) bf.msl_offset = msl_off - 8;
+                else if (bad_case == 6) bf.msl_size = 16;
+                else if (bad_case == 7) bf.chain_len = 25;
+                else if (bad_case == 8) bf.chain[2] = '\0';            // NUL inside chain[0..<chain_len]
+                else if (bad_case == 9) bf.chain[23] = 'x';            // non-NUL inside chain[chain_len..<24]
+                memcpy(full + footer_off, &bf, sizeof bf);
+                f = fopen(ip, "wb"); fwrite(full, 1, write_sz, f); fclose(f);
+                errno = 0;
+                CHECK(!img_open(ip) && errno == EINVAL, "corrupt DMMSLTR1 footer case %d is refused", bad_case);
+            }
+            free(full);
+        }
     }
     snprintf(save, sizeof save, "%s/save", root); snprintf(work, sizeof work, "%s.work", save);
     mkdir(save, 0755); snprintf(p, sizeof p, "%s/a", save); put(p, "old");
