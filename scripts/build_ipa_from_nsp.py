@@ -57,7 +57,7 @@ TITLE_ID = ''                           # the game to pack when the folder holds
 WORK_DIR = ''                           # the game's build folder (empty = <title ID>_build in the NSP folder); the extracted files, shader cache and temporary files live there, and the IPA (or app) goes beside it unless OUT_IPA names it
 OUT_IPA = ''                            # output IPA (empty = <the profile's ipa> in the NSP folder); with PLATFORM 'mac-app' the output app (empty = <game name>.app in the NSP folder)
 APP_NAME = ''                           # app name on the home screen (empty = the game name in the base NSP)
-BUNDLE_ID = ''                          # the app's bundle ID (empty = saved per-game Xcode ID, else org.nxnative.<base game title ID in lowercase>)
+BUNDLE_ID = ''                          # the app's bundle ID (empty = DM_BUNDLE_ID or saved per-game Xcode ID, else org.nxnative.<base game title ID in lowercase>, with .<team ID> on single-game iOS builds when a real team is resolved)
 ICON = ''                               # the app icon, a JPEG or PNG of any size (empty = the game's icon from its control data; a dump has none, a NUP may have none)
 FALLBACK_ICON = ''                      # the app icon only when ICON is empty and the game has none of its own (a dump, a NUP without one); empty = such an app's icon is blank
 ROMFS = 'bundle'                        # 'bundle' = the game files go into the IPA (or the Xcode app), as always; 'separate' = they stay out (DM_COPY_ROMFS=NO): the IPA is small, and its rebuilds do not pack or send the RomFS again.
@@ -68,7 +68,7 @@ PREPARE_XCODE = False                   # prepare a per-game Xcode project and a
 PLATFORM = 'ios'                        # 'ios' = the IPA (or the Xcode project); 'mac-app' = a double-clickable Mac app of the game; 'mac' = development: build only what running the game on this Mac needs (Mac shaders, the Mac host), no iOS shaders,
                                         #   Xcode project or IPA; keeps the extracted files and prints the command that runs the game (needs Apple silicon)
 MAC_SIGN = ''                            # PLATFORM 'mac-app': the codesign identity for the app, e.g. 'Developer ID Application: <name> (<team>)' (empty = ad-hoc); never with the hardened runtime
-TEAM_ID = ''                            # optional Apple team ID; empty = DM_TEAM_ID environment, saved Xcode selection, or select in Xcode
+TEAM_ID = ''                            # optional Apple team ID (empty = DM_TEAM_ID environment, saved Xcode selection, sole local Apple Development cert on Xcode prepare, or select in Xcode)
 XCODE_WORKSPACE = ''                    # shared .xcworkspace (empty = NxNative.xcworkspace beside the game's NSP folder)
 LANGUAGE = ''                           # game language, a code or a name: 'ja', 'fr', 'de', 'es', 'zh-Hans', 'zh-Hant', 'ko', 'Japanese', ... (empty = English); it must be one the game supports (the console line lists them);
                                         #   DM_LANG=<code> in the app's Documents/env.txt changes it without a rebuild
@@ -3483,7 +3483,7 @@ def parse_args(argv):
     ap.add_argument('-p', '--package', help='version packed into the IPA, e.g. v327680 / v0 (default: the newest in the folder)')
     ap.add_argument('-o', '--out', help='output IPA, or app with --platform mac-app (default: <the profile\'s ipa>, or <game name>.app, in the NSP folder)')
     ap.add_argument('--app-name', help='app name on the home screen (default: the game name in the base NSP)')
-    ap.add_argument('--bundle-id', help='the app\'s bundle ID (default: saved Xcode ID when preparing again, else org.nxnative.<base game title ID in lowercase>)')
+    ap.add_argument('--bundle-id', help='the app\'s bundle ID (default: DM_BUNDLE_ID or saved Xcode ID when preparing again, else org.nxnative.<base game title ID in lowercase>, with .<team ID> on single-game iOS builds when a real team is resolved)')
     ap.add_argument('--romfs', choices=('bundle', 'separate'), help='bundle = the game files go into the IPA (default: the ROMFS setting, bundle); separate = they stay out of the IPA and the Xcode app: the build is small and fast, and the RomFS image '
                     'is copied to the phone once per game version with the scripts/push_romfs.sh command printed at the end (the app refuses an image of another version)')
     ap.add_argument('--shader-files', action=argparse.BooleanOptionalAction, help='an NVN game\'s shader library goes into the IPA as its separate files, not as one file, for install tools that cannot copy '
@@ -3500,7 +3500,7 @@ def parse_args(argv):
     ap.add_argument('--fallback-icon', help='the app icon only when --icon / ICON is not given and the game has none of its own (a dump, a NUP without one), a JPEG or PNG of any size: a game with its own icon '
                     'keeps it, so a front end can pass a stand-in without knowing what the game carries (default: the FALLBACK_ICON setting, else such an app\'s icon is blank)')
     ap.add_argument('--mac-sign', help='--platform mac-app: the codesign identity for the app, e.g. "Developer ID Application: <name> (<team>)" (default: the MAC_SIGN setting, else ad-hoc)')
-    ap.add_argument('--team-id', help='Apple developer team ID (default: TEAM_ID setting, DM_TEAM_ID environment, or saved Xcode selection)')
+    ap.add_argument('--team-id', help='Apple developer team ID (default: TEAM_ID setting, DM_TEAM_ID environment, saved Xcode selection, or sole local Apple Development cert when preparing Xcode)')
     ap.add_argument('--xcode-workspace', help='workspace collecting prepared games (default: NxNative.xcworkspace beside the NSP folder; use with --prepare-xcode)')
     ap.add_argument('-l', '--language', help='game language, a code or a name: ja, fr, de, es, it, nl, pt, ru, ko, zh-Hans, zh-Hant, en-GB, fr-CA, es-419, pt-BR, Japanese, ... (default: the LANGUAGE setting, else English); '
                     'it must be one the game supports, which the console lists')
@@ -3533,6 +3533,89 @@ def parse_args(argv):
     ap.add_argument('--progress', choices=('auto', 'bar', 'lines', 'json', 'off'), help='stage lines on the console: bar = one line per stage, redrawn in place; lines = a plain line every BEAT seconds; json = newline-delimited JSON events (no prompts); off = only each stage\'s start and end '
                     '(default: the PROGRESS setting; auto = bar in a terminal or Spyder, lines when the output goes to a file or a pipe)')
     return ap.parse_args(argv)
+
+
+def real_team_id(value):
+    """Return a non-placeholder Apple team ID, or empty string for unset or 0000000000."""
+    team = (value or '').strip()
+    return team if team and team != '0000000000' else ''
+
+
+def detect_development_team(timeout=5):
+    """Return the sole Apple Development / iPhone Developer OU team ID from Keychain, else empty string."""
+    try:
+        listed = subprocess.run(
+            ['/usr/bin/security', 'find-identity', '-v', '-p', 'codesigning'],
+            capture_output=True, text=True, stdin=subprocess.DEVNULL, timeout=timeout,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return ''
+    if listed.returncode != 0:
+        return ''
+    identities, seen = [], set()
+    for line in listed.stdout.splitlines():
+        open_q, close_q = line.find('"'), line.rfind('"')
+        if open_q == -1 or close_q <= open_q:
+            continue
+        name = line[open_q + 1:close_q]
+        if (name.startswith('Apple Development:') or name.startswith('iPhone Developer:')) and name not in seen:
+            seen.add(name)
+            identities.append(name)
+    if not identities:
+        return ''
+    teams = set()
+    for identity in identities:
+        try:
+            cert = subprocess.run(
+                ['/usr/bin/security', 'find-certificate', '-c', identity, '-p'],
+                capture_output=True, text=True, stdin=subprocess.DEVNULL, timeout=timeout,
+            )
+            if cert.returncode != 0 or not cert.stdout:
+                return ''
+            subj = subprocess.run(
+                ['/usr/bin/openssl', 'x509', '-noout', '-subject'],
+                input=cert.stdout, capture_output=True, text=True, timeout=timeout,
+            )
+        except (OSError, subprocess.SubprocessError):
+            return ''
+        if subj.returncode != 0:
+            return ''
+        match = re.search(r'(?:^|[,/\s])OU\s*=\s*([A-Z0-9]{10})(?=$|[,/\s])', subj.stdout)
+        if not match:
+            return ''
+        teams.add(match.group(1))
+        if len(teams) > 1:
+            return ''
+    return next(iter(teams)) if len(teams) == 1 else ''
+
+
+def resolve_team_id(args, env, saved_signing, prepare_xcode):
+    """Resolve the Apple team ID from explicit/saved sources or a sole local development cert."""
+    explicit = next((t for t in map(real_team_id, (args.team_id, TEAM_ID, env.get('DM_TEAM_ID'), saved_signing.get('DEVELOPMENT_TEAM'))) if t), '')
+    if explicit:
+        return explicit
+    if prepare_xcode and sys.platform == 'darwin':
+        detected = detect_development_team()
+        if detected:
+            return detected
+    return '0000000000'
+
+
+def resolve_bundle_id(app, args, env, saved_signing, team_id, *, mac=False, shell_fw=None):
+    """Resolve the app bundle ID, appending .<team_id> only for default single-game iOS builds with a real team."""
+    default_id = f'org.nxnative.{app:016x}'
+    explicit = (args.bundle_id or BUNDLE_ID or env.get('DM_BUNDLE_ID') or '').strip()
+    if explicit:
+        return explicit
+    if mac or shell_fw:
+        return default_id
+    saved = (saved_signing.get('PRODUCT_BUNDLE_IDENTIFIER') or '').strip()
+    if saved and saved.lower() != default_id:
+        return saved
+    real_team = real_team_id(team_id)
+    if real_team:
+        return f'{default_id}.{real_team}'
+    return default_id
 
 
 def icon_file(value, option):
@@ -3816,8 +3899,8 @@ def main(args=None):
     # the app name and bundle ID both come from the base NSP: the game name in its control data, and a bundle ID from its title ID; a setting / the command line overrides them
     app_name = args.app_name or APP_NAME or nacp.name(base / 'control.nacp') or (g.get('name') if dump else '')   # a dump has no control data, a NUP may have no NACP
     if not app_name and not (mac and not mac_pack): raise BuildError(f'no game name in the base extraction ({base / "control.nacp"}; an older extraction did not save it: delete extract/ and run again, or give --app-name)')
-    bundle_id = args.bundle_id or BUNDLE_ID or saved_signing.get('PRODUCT_BUNDLE_IDENTIFIER') or f'org.nxnative.{app:016x}'
-    team_id = args.team_id or TEAM_ID or env.get('DM_TEAM_ID') or saved_signing.get('DEVELOPMENT_TEAM') or '0000000000'
+    team_id = resolve_team_id(args, env, saved_signing, prepare_xcode)
+    bundle_id = resolve_bundle_id(app, args, env, saved_signing, team_id, mac=mac, shell_fw=shell_fw)
     if prepare_xcode:
         try: xcode_projects.check_bundle_id(workspace, project, bundle_id)
         except ValueError as e: raise BuildError(str(e)) from e
