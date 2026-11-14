@@ -5,7 +5,7 @@
 #include "game_profile.h"
 #include "input_map.h"
 static NSString *input_preferences_domain(void) {
-    return NSBundle.mainBundle.bundleIdentifier ?: [@"org.nxnative." DM_GAME_ID lowercaseString];
+    return NSBundle.mainBundle.bundleIdentifier ?: [[@"org.nxnative." stringByAppendingString:@(DM_GAME_ID)] lowercaseString];
 }
 static BOOL input_preferences_enabled(void) {
     const char *off=getenv("DM_SAVED_CHOICES"); return !off || strcmp(off,"0");
