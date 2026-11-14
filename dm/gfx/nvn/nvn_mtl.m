@@ -39,6 +39,7 @@
 #include "nvn_primitive.h"
 #include "nvn_link_drain.h"
 #include "nvn_timestamp.h"
+#include "nvn_rt_recycle.h"
 #include "msl_image.h"
 #include "../msl_mount.h"
 #include "dmsh_chain.h"   // DMSH_CHAIN: the translation chain version of the B shader library expected by this source tree, one for every game (beside this file, tools/dmsh_chain.py --header)
@@ -412,22 +413,90 @@ static void res_remove(id<MTLAllocation> r) { @autoreleasepool {
 // added (resource_vis). Heaps idle for RH_IDLE_NS, and the oldest past
 // RH_CAP bytes waiting, leave the residency set when a submission begins (rh_trim). DM_NVN_RT_RECYCLE=0 makes each texture its own allocation and each family heap exact and freed
 // with its last texture, as before; ab alternates it with the DM_AB phases
-enum { RH_CAP = 256u << 20 }; static const uint64_t RH_IDLE_NS = 3000000000ull;
-typedef struct { void *heap; uint64_t size, t; } rh_ent;   // heap: retained (CFBridgingRetain); t: when it began to wait
+typedef struct { void *heap; uint64_t size, t; } rh_ent;   // heap: retained (CFBridgingRetain), t: when it began to wait
 static os_unfair_lock g_rh_lk = OS_UNFAIR_LOCK_INIT; static rh_ent *g_rh; static unsigned g_rh_n, g_rh_cap; static uint64_t g_rh_bytes;
 static _Atomic uint64_t g_rh_made, g_rh_reused, g_rh_trimmed;   // for the memory readout
+static int g_rh_mode = -1;
+static _Atomic int g_rh_pressure;
+static _Atomic int g_rh_test_override, g_rh_test_is_ios, g_rh_test_pressure;
+static _Atomic uint64_t g_rh_test_avail_bytes;
+static dispatch_queue_t g_rh_mem_q;
+static dispatch_source_t g_rh_mem_src;
 static int sw_mode(const char *name, int dflt); static inline int sw_on(int m);
-static int rh_mode(void) { static int m = -1; if (m < 0) m = sw_mode("DM_NVN_RT_RECYCLE", 1); return m; }
+static int rh_mode(void) { if (g_rh_mode < 0) g_rh_mode = sw_mode("DM_NVN_RT_RECYCLE", 1); return g_rh_mode; }
+static void rh_test_set(int enable, int is_ios, uint64_t avail_bytes, int pressure) {
+    atomic_store_explicit(&g_rh_test_is_ios, is_ios, memory_order_relaxed);
+    atomic_store_explicit(&g_rh_test_avail_bytes, avail_bytes, memory_order_relaxed);
+    atomic_store_explicit(&g_rh_test_pressure, pressure, memory_order_relaxed);
+    atomic_store_explicit(&g_rh_test_override, enable, memory_order_release);
+}
+static void rh_cur_policy(rh_policy *out) {
+    int is_ios = TARGET_OS_IPHONE;
+    uint64_t avail = 0;
+    int pressure = atomic_load_explicit(&g_rh_pressure, memory_order_relaxed);
+#if TARGET_OS_IPHONE
+    avail = (uint64_t)os_proc_available_memory();
+#endif
+    if (atomic_load_explicit(&g_rh_test_override, memory_order_acquire)) {
+        is_ios = atomic_load_explicit(&g_rh_test_is_ios, memory_order_relaxed);
+        avail = atomic_load_explicit(&g_rh_test_avail_bytes, memory_order_relaxed);
+        pressure = atomic_load_explicit(&g_rh_test_pressure, memory_order_relaxed);
+    }
+    *out = rh_policy_for_platform(is_ios, avail, pressure);
+}
+// Evict expired or over-budget entries in 64-entry batches, releasing and calling res_remove outside g_rh_lk
+static void rh_evict_to_budget(uint64_t now, const rh_policy *p) {
+    if (!p) return;
+    for (;;) {
+        void *drop[64];
+        unsigned nd = 0;
+        os_unfair_lock_lock(&g_rh_lk);
+        while (g_rh_n && nd < 64) {
+            unsigned old = 0;
+            for (unsigned i = 1; i < g_rh_n; i++) {
+                if (g_rh[i].t < g_rh[old].t) old = i;
+            }
+            if (!rh_needs_evict(g_rh_bytes, now, g_rh[old].t, p)) break;
+            drop[nd++] = g_rh[old].heap;
+            g_rh_bytes = g_rh_bytes >= g_rh[old].size ? g_rh_bytes - g_rh[old].size : 0;
+            g_rh[old] = g_rh[--g_rh_n];
+        }
+        int more = g_rh_n != 0 && nd == 64;
+        os_unfair_lock_unlock(&g_rh_lk);
+        if (!nd) break;
+        for (unsigned i = 0; i < nd; i++) {
+            id<MTLHeap> h = CFBridgingRelease(drop[i]);
+            res_remove(h);
+        }
+        atomic_fetch_add(&g_rh_trimmed, nd);
+        if (!more) break;
+    }
+}
 // A heap whose texture was freed waits for the next texture it fits (with the switch off it is freed). Runs where the texture's last reference goes (defer_drain: the submit thread or a
 // completion handler)
 static void rh_wait(id<MTLHeap> heap) {
+    rh_policy p;
+    rh_cur_policy(&p);
     if (!heap || atomic_load(&g_gfx_teardown)) return;
-    if (!sw_on(rh_mode())) { res_remove(heap); return; }
-    rh_ent e = {(void *)CFBridgingRetain(heap), heap.size, clock_gettime_nsec_np(CLOCK_MONOTONIC)};
+    uint64_t now = clock_gettime_nsec_np(CLOCK_MONOTONIC);
+    if (!sw_on(rh_mode())) {
+        res_remove(heap);
+        rh_policy zero = {0, 0, 0, 1};
+        rh_evict_to_budget(now, &zero);
+        return;
+    }
+    uint64_t sz = (uint64_t)heap.size;
+    if (!rh_should_pool_entry(&p, sz)) {
+        res_remove(heap);
+        rh_evict_to_budget(now, &p);
+        return;
+    }
+    rh_ent e = {(void *)CFBridgingRetain(heap), sz, now};
     os_unfair_lock_lock(&g_rh_lk);
     if (g_rh_n == g_rh_cap) { g_rh_cap = g_rh_cap ? 2 * g_rh_cap : 64; g_rh = realloc_or_die(g_rh, g_rh_cap * sizeof *g_rh, "the recycled texture heaps"); }
     g_rh[g_rh_n++] = e; g_rh_bytes += e.size;
     os_unfair_lock_unlock(&g_rh_lk);
+    rh_evict_to_budget(now, &p);
 }
 @interface NvRecycledHeap : NSObject { @public id<MTLHeap> heap; } @end
 @implementation NvRecycledHeap
@@ -444,7 +513,9 @@ static id<MTLHeap> rh_heap(uint64_t size, MTLStorageMode sm, MTLCPUCacheMode cm,
     *reused = 0;
     if (!size) return nil;
     int on = sw_on(rh_mode());
-    uint64_t top = size + size / 2;
+    rh_policy p;
+    rh_cur_policy(&p);
+    uint64_t top = rh_reuse_max(size);
     void *got = NULL;
     if (on) {
         os_unfair_lock_lock(&g_rh_lk);
@@ -455,11 +526,11 @@ static id<MTLHeap> rh_heap(uint64_t size, MTLStorageMode sm, MTLCPUCacheMode cm,
             if (h.storageMode != sm || h.cpuCacheMode != cm) continue;   // (a placed texture takes its heap's hazard tracking: a placement heap reports untracked, a descriptor default)
             best = i;
         }
-        if (best < g_rh_n) { got = g_rh[best].heap; g_rh_bytes -= g_rh[best].size; g_rh[best] = g_rh[--g_rh_n]; }
+        if (best < g_rh_n) { got = g_rh[best].heap; g_rh_bytes = g_rh_bytes >= g_rh[best].size ? g_rh_bytes - g_rh[best].size : 0; g_rh[best] = g_rh[--g_rh_n]; }
         os_unfair_lock_unlock(&g_rh_lk);
     }
     if (got) { *reused = 1; atomic_fetch_add(&g_rh_reused, 1); return CFBridgingRelease(got); }
-    MTLHeapDescriptor *hd = [MTLHeapDescriptor new]; hd.type = MTLHeapTypePlacement; hd.size = on ? size + size / 8 : size;
+    MTLHeapDescriptor *hd = [MTLHeapDescriptor new]; hd.type = MTLHeapTypePlacement; hd.size = on ? rh_alloc_size(size, p.exact_alloc) : size;
     hd.storageMode = sm; hd.cpuCacheMode = cm; hd.hazardTrackingMode = hm;
     id<MTLHeap> h = [g_dev newHeapWithDescriptor:hd];
     if (h && on) atomic_fetch_add(&g_rh_made, 1);
@@ -516,19 +587,18 @@ static void tu_register(id<MTLTexture> t, uint64_t serial) {
     if (g_tu_gone.n && nvn_hm_del(&g_tu_gone, &serial)) g_tu_remade++;
     os_unfair_lock_unlock(&g_tu_lk);
 }
-// When a submission begins: heaps that waited RH_IDLE_NS, and the oldest past RH_CAP bytes, leave the residency set and are freed
+// When a submission begins: heaps past the platform idle or budget policy leave the residency set and are freed
 static void rh_trim(void) {
-    if (!g_rh_n) return;
-    uint64_t now = clock_gettime_nsec_np(CLOCK_MONOTONIC); void *drop[64]; unsigned nd = 0;
-    os_unfair_lock_lock(&g_rh_lk);
-    while (g_rh_n && nd < 64) {
-        unsigned old = 0; for (unsigned i = 1; i < g_rh_n; i++) if (g_rh[i].t < g_rh[old].t) old = i;
-        if (now - g_rh[old].t < RH_IDLE_NS && g_rh_bytes <= RH_CAP) break;
-        drop[nd++] = g_rh[old].heap; g_rh_bytes -= g_rh[old].size; g_rh[old] = g_rh[--g_rh_n];
+    if (atomic_load(&g_gfx_teardown)) return;
+    uint64_t now = clock_gettime_nsec_np(CLOCK_MONOTONIC);
+    if (!sw_on(rh_mode())) {
+        rh_policy zero = {0, 0, 0, 1};
+        rh_evict_to_budget(now, &zero);
+        return;
     }
-    os_unfair_lock_unlock(&g_rh_lk);
-    for (unsigned i = 0; i < nd; i++) { id<MTLHeap> h = CFBridgingRelease(drop[i]); res_remove(h); }
-    if (nd) atomic_fetch_add(&g_rh_trimmed, nd);
+    rh_policy p;
+    rh_cur_policy(&p);
+    rh_evict_to_budget(now, &p);
 }
 // The R32 storage under a 32-bit colour texture that takes image atomics (tex_upgrade): resident as long as the colour view over it lives, which is what the game's names hold
 @interface NvAtomicRaw : NSObject { @public id<MTLTexture> raw; } @end
@@ -891,6 +961,28 @@ void mtl_init(void) {
     if (!g_nvn_deswz_gpu) MLOG("[RED] GPU deswizzle init failed; swizzled textures fall back to the CPU");
     MLOG("Metal device %s", g_dev.name.UTF8String);
     udc_selftest();
+#if TARGET_OS_IPHONE
+    if (!g_rh_mem_q) g_rh_mem_q = dispatch_queue_create("dm.nvn.rh-mem", DISPATCH_QUEUE_SERIAL);
+    if (!g_rh_mem_src) {
+        dispatch_source_t src = dispatch_source_create(DISPATCH_SOURCE_TYPE_MEMORYPRESSURE, 0,
+            DISPATCH_MEMORYPRESSURE_NORMAL | DISPATCH_MEMORYPRESSURE_WARN | DISPATCH_MEMORYPRESSURE_CRITICAL,
+            g_rh_mem_q);
+        __weak dispatch_source_t wsrc = src;
+        dispatch_source_set_event_handler(src, ^{ @autoreleasepool {
+            dispatch_source_t s = wsrc;
+            if (!s || atomic_load(&g_gfx_teardown)) return;
+            unsigned long flags = dispatch_source_get_data(s);
+            if (flags & (DISPATCH_MEMORYPRESSURE_WARN | DISPATCH_MEMORYPRESSURE_CRITICAL)) {
+                atomic_store_explicit(&g_rh_pressure, 1, memory_order_release);
+                rh_trim();
+            } else if (flags & DISPATCH_MEMORYPRESSURE_NORMAL) {
+                atomic_store_explicit(&g_rh_pressure, 0, memory_order_release);
+            }
+        } });
+        g_rh_mem_src = src;
+        dispatch_resume(src);
+    }
+#endif
 }
 
 void dm_mtl_l3_tick(uint32_t tick) {
@@ -17648,6 +17740,12 @@ void dm_gfx_teardown(void) { @autoreleasepool {
     atomic_fetch_add(&g_defer_gen, 1);
     mtl_present_discard(1);
     dispatch_group_wait(bg_group(), DISPATCH_TIME_FOREVER);
+    dispatch_source_t msrc = g_rh_mem_src;
+    dispatch_queue_t mq = g_rh_mem_q;
+    if (msrc) dispatch_source_cancel(msrc);
+    if (mq) dispatch_sync(mq, ^{});
+    g_rh_mem_src = nil;
+    g_rh_mem_q = nil;
 
     if (g_q) {
         if (on_sub_thread()) { up_flush(); rec_drain(); }
@@ -17891,6 +17989,12 @@ void dm_gfx_teardown(void) { @autoreleasepool {
     for (unsigned i = 0; i < g_rh_n; i++) if (g_rh[i].heap) CFRelease(g_rh[i].heap);
     free(g_rh); g_rh = NULL; g_rh_n = g_rh_cap = 0; g_rh_bytes = 0;
     os_unfair_lock_unlock(&g_rh_lk);
+    g_rh_mode = -1;
+    atomic_store(&g_rh_made, 0);
+    atomic_store(&g_rh_reused, 0);
+    atomic_store(&g_rh_trimmed, 0);
+    atomic_store(&g_rh_pressure, 0);
+    rh_test_set(0, 0, 0, 0);
 
     pthread_mutex_lock(&g_res_commit_mu);
     pthread_mutex_lock(&g_res_mu);

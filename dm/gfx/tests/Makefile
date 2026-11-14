@@ -541,6 +541,8 @@ t_image_alias: t_image_alias.m $(MTL_T_DEP)
 check_t_image_alias: t_image_alias
 	DM_NVN_ENC_THREAD=0 MTL_DEBUG_LAYER=1 ./t_image_alias
 	DM_NVN_ENC_THREAD=1 MTL_DEBUG_LAYER=1 ./t_image_alias
+t_rt_recycle_policy: t_rt_recycle_policy.c ../nvn/nvn_rt_recycle.h
+	clang -O1 -Wall -Wextra -Werror -o $@ t_rt_recycle_policy.c
 t_rt_recycle: t_rt_recycle.m $(MTL_T_DEP)
 	clang $(CFLAGS) -fobjc-arc -o $@ t_rt_recycle.m $(MTL_T_SRC) $(FW)
 .PHONY: check_t_rt_recycle
