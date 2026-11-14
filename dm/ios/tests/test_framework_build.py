@@ -7,8 +7,8 @@ Four parts, each on synthetic inputs, no game files or Xcode:
   - the framework is signed before the app's executable, the framework's signature carries no entitlements, the app's
     keeps the Increased Memory Limit request, and the packed IPA has the framework where the app dlopens it. A default
     pack (no DM_FRAMEWORK) still has no Frameworks/ entry at all;
-  - DM_FRAMEWORK_ONLY puts the game's shader libraries into the framework in the form they have: an NVN game's one file
-    b-<chain>.img (dm/tools/shader_lib.py) as msl/b-<chain>.img, a folder as msl/<folder>, and a rebuild leaves only that one.
+  - DM_FRAMEWORK_ONLY strips the game's shader libraries from the framework (leaving no msl/ directory) and records
+    source shader metadata under .msl-cache/<id>.json.
 Only the signing and packing steps run (a stand-in app and framework, no Xcode); codesign is required for the third part.
 """
 import json
@@ -274,7 +274,7 @@ class FrameworkPackagingTests(unittest.TestCase):
 
 @unittest.skipUnless(sys.platform == 'darwin', 'build_ipa.sh copies an image with macOS cp -c (clonefile)')
 class FrameworkOnlyShaderLibrariesTests(unittest.TestCase):
-    """DM_FRAMEWORK_ONLY's copy of the shader libraries into the game's framework, after a stand-in xcodebuild; no Xcode, no game files."""
+    """DM_FRAMEWORK_ONLY strips the shader libraries from the game framework and caches source metadata in out/.msl-cache/<GAME>.json."""
     FW = 'DmGame' + GAME
 
     def setUp(self):
@@ -314,33 +314,62 @@ class FrameworkOnlyShaderLibrariesTests(unittest.TestCase):
         self.assertTrue((self.out / self.FW).is_file())
 
     def shaders(self):
-        return sorted(p.name for p in (self.out / 'msl').iterdir())
+        msl = self.out / 'msl'
+        return sorted(p.name for p in msl.iterdir()) if msl.exists() else []
 
     def test_a_packed_library_goes_in_as_its_one_file(self):
         image = self.library(packed=True)
         self.build()
-        self.assertEqual(self.shaders(), ['b-fixture.img'])
-        self.assertEqual((self.out / 'msl/b-fixture.img').read_bytes(), image.read_bytes())
+        self.assertFalse((self.out / 'msl').exists())
+        cache = json.loads((self.root / 'out/.msl-cache' / f'{GAME}.json').read_text())
+        self.assertEqual(cache['schema'], 1)
+        self.assertEqual(cache['title_id'], GAME)
+        self.assertEqual(cache['gfx_api'], 'nvn')
+        self.assertEqual(cache['chain'], 'b-fixture')
+        self.assertFalse(cache['multi_program'])
+        self.assertEqual(cache['lib_path'], str(image))
+        self.assertEqual(cache['msl_root'], str(self.root / 'shaders'))
+        self.assertEqual(cache['programs'], [])
 
     def test_a_library_folder_goes_in_as_a_folder(self):
-        self.library(packed=False)
+        folder = self.library(packed=False)
         self.build()
-        self.assertEqual(self.shaders(), ['b-fixture'])
-        self.assertEqual((self.out / 'msl/b-fixture/fixture_b.metallib').read_text(), 'shader')
+        self.assertFalse((self.out / 'msl').exists())
+        cache = json.loads((self.root / 'out/.msl-cache' / f'{GAME}.json').read_text())
+        self.assertEqual(cache['schema'], 1)
+        self.assertEqual(cache['title_id'], GAME)
+        self.assertEqual(cache['gfx_api'], 'nvn')
+        self.assertEqual(cache['chain'], 'b-fixture')
+        self.assertFalse(cache['multi_program'])
+        self.assertEqual(cache['lib_path'], str(folder))
+        self.assertEqual(cache['msl_root'], str(self.root / 'shaders'))
+        self.assertEqual(cache['programs'], [])
 
     def test_a_rebuild_leaves_only_the_current_library(self):
         (self.out / 'msl/b-fixture').mkdir(parents=True)   # an earlier build's folder, and another chain's library
         (self.out / 'msl/b-fixture/stale_b.metallib').write_text('stale')
         (self.out / 'msl/b-otherchain.img').write_text('other chain')
-        self.library(packed=True)
+        image = self.library(packed=True)
         self.build()
-        self.assertEqual(self.shaders(), ['b-fixture.img'])
+        self.assertFalse((self.out / 'msl').exists())
+        cache = json.loads((self.root / 'out/.msl-cache' / f'{GAME}.json').read_text())
+        self.assertEqual(cache['lib_path'], str(image))
+        self.assertEqual(cache['gfx_api'], 'nvn')
+        self.assertEqual(cache['chain'], 'b-fixture')
+
         image = self.library(packed=True, content='a newer shader')
         self.build()
-        self.assertEqual((self.out / 'msl/b-fixture.img').read_bytes(), image.read_bytes())
-        self.library(packed=False)
+        self.assertFalse((self.out / 'msl').exists())
+        cache = json.loads((self.root / 'out/.msl-cache' / f'{GAME}.json').read_text())
+        self.assertEqual(cache['lib_path'], str(image))
+
+        folder = self.library(packed=False)
         self.build()
-        self.assertEqual(self.shaders(), ['b-fixture'])
+        self.assertFalse((self.out / 'msl').exists())
+        cache = json.loads((self.root / 'out/.msl-cache' / f'{GAME}.json').read_text())
+        self.assertEqual(cache['lib_path'], str(folder))
+        self.assertEqual(cache['gfx_api'], 'nvn')
+        self.assertEqual(cache['chain'], 'b-fixture')
 
 
 if __name__ == '__main__':

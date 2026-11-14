@@ -281,8 +281,9 @@ if [ "$PREPARE_XCODE" = YES ]; then
 fi
 
 # DM_FRAMEWORK_ONLY: the framework target alone, unsigned (build_shell.sh's project embeds it and Xcode signs it with the shell), then the
-# game's per-game resources into it, so one folder is one game: the shader libraries (msl/<MSLDIR> or msl/<MSLDIR>.img, msl/ the shell's DM_MSL_DIR), the pipeline
-# archive (pso/, DM_PSO_BUNDLE) and the icon the shell's library shows. The game files and add-on content stay out (data, Documents/games/<id>/)
+# game's per-game resources into it, so one folder is one game: the pipeline archive (pso/, DM_PSO_BUNDLE) and the icon the shell's library shows.
+# The shader libraries are stripped from the framework (msl/ removed); their source metadata is recorded under .msl-cache/<id>.json.
+# The game files and add-on content stay out (data, Documents/games/<id>/)
 if [ -n "$FRAMEWORK_ONLY" ]; then
   t "xcodebuild (Release, unsigned, the game framework $FW_NAME with its own host)"
   mkdir -p "$O" "$FRAMEWORK_ONLY" || die "mkdir $FRAMEWORK_ONLY"
@@ -296,17 +297,87 @@ if [ -n "$FRAMEWORK_ONLY" ]; then
   OUTFW=$FRAMEWORK_ONLY/$FW_NAME.framework; mkdir -p "$OUTFW"
   t "copying resources into $FW_NAME.framework"
   rsync -a --delete --exclude /msl --exclude /pso --exclude /icon.png -- "$BUILT/" "$OUTFW/" || die "copy the framework to $OUTFW"
-  # An NVN game's libraries may be the one file b-<chain>.img (dm/tools/shader_lib.py): it goes in as msl/<MSLDIR>.img, where the host reads it (nvn_mtl.m), as stage_resources.sh copies it into an app
+  rm -rf "$OUTFW/msl"
   LIB=$(lib_path "$MSL_IOS/$MSLDIR") || die "shader libraries $MSL_IOS/$MSLDIR"
-  mkdir -p "$OUTFW/msl" || die "mkdir $OUTFW/msl"
-  if [ -f "$LIB" ]; then
-    rm -rf "$OUTFW/msl/$MSLDIR"
-    if [ -f "$OUTFW/msl/$MSLDIR.img" ]; then rsync -a -- "$LIB" "$OUTFW/msl/$MSLDIR.img"; else cp -cp -- "$LIB" "$OUTFW/msl/$MSLDIR.img"; fi || die "copy the shader libraries"
-  else
-    rm -f "$OUTFW/msl/$MSLDIR.img"
-    mkdir -p "$OUTFW/msl/$MSLDIR" && rsync -a --delete -- "$LIB/" "$OUTFW/msl/$MSLDIR/" || die "copy the shader libraries"
+  PROG_DATA=
+  if [ -n "${PROGRAMS_TSV:-}" ]; then
+    M0=$MSLDIR
+    while IFS= read -r row; do
+      prog_set "$row"
+      PLIB=$(lib_path "$MSL_IOS/$MSLDIR") || die "shader libraries $MSL_IOS/$MSLDIR"
+      PROG_DATA+="${PN}"$'\t'"${GAME}"$'\t'"${MSL_IOS}"$'\t'"${MSLDIR}"$'\t'"${GFXAPI:-nvn}"$'\t'"${PLIB}"$'\n'
+    done < <(prog_rows)
+    prog_back
+    MSLDIR=$M0
   fi
-  for old in "$OUTFW/msl/"*; do case "$old" in "$OUTFW/msl/$MSLDIR"|"$OUTFW/msl/$MSLDIR.img") ;; *) rm -rf "$old";; esac; done
+  FW_GFX=${FW_GFXAPI:-${GFXAPI:-nvn}}
+  PROG_DATA="$PROG_DATA" python3 - "$FRAMEWORK_ONLY" "$GAME" "$FW_GFX" "$MSLDIR" "$MSL_IOS" "$LIB" << 'EOF' || die "record shader metadata (.msl-cache)"
+import json, os, sys, tempfile, shutil
+
+fw_only, game, gfx_api, msldir, msl_root, lib = sys.argv[1:7]
+cache_dir = os.path.join(fw_only, '.msl-cache')
+os.makedirs(cache_dir, exist_ok=True)
+
+chain = msldir if gfx_api == 'nvn' else ''
+raw_progs = os.environ.get('PROG_DATA', '')
+lines = [l.split('\t') for l in raw_progs.splitlines() if l.strip()]
+
+if lines:
+    multi_program = True
+    stage_dir = os.path.join(cache_dir, f'{game}_multi')
+    shutil.rmtree(stage_dir, ignore_errors=True)
+    os.makedirs(stage_dir, exist_ok=True)
+    programs = []
+    for pn, p_game, p_msl_root, p_msldir, p_gfx, p_lib in lines:
+        p_chain = p_msldir if p_gfx == 'nvn' else ''
+        p_dir = os.path.join(stage_dir, f'p{pn}')
+        os.makedirs(p_dir, exist_ok=True)
+        if os.path.isfile(p_lib):
+            dst = os.path.join(p_dir, os.path.basename(p_lib))
+            if os.path.islink(dst) or os.path.exists(dst):
+                os.unlink(dst)
+            os.symlink(os.path.abspath(p_lib), dst)
+        elif os.path.isdir(p_lib):
+            sub_dir = os.path.join(p_dir, p_msldir)
+            os.makedirs(sub_dir, exist_ok=True)
+            for item in os.listdir(p_lib):
+                src_item = os.path.join(p_lib, item)
+                dst_item = os.path.join(sub_dir, item)
+                if os.path.islink(dst_item) or os.path.exists(dst_item):
+                    os.unlink(dst_item)
+                os.symlink(os.path.abspath(src_item), dst_item)
+        programs.append({
+            'program': int(pn) if pn.isdigit() else pn,
+            'title_id': p_game,
+            'gfx_api': p_gfx,
+            'chain': p_chain,
+            'msl_root': p_msl_root,
+            'lib_path': p_lib,
+        })
+    lib_path = stage_dir
+else:
+    multi_program = False
+    lib_path = lib
+    programs = []
+
+meta = {
+    'schema': 1,
+    'title_id': game,
+    'gfx_api': gfx_api,
+    'chain': chain,
+    'multi_program': multi_program,
+    'msl_root': msl_root,
+    'lib_path': lib_path,
+    'programs': programs,
+}
+
+tmp_fd, tmp_file = tempfile.mkstemp(prefix=f'{game}.json.tmp.', dir=cache_dir)
+with os.fdopen(tmp_fd, 'w', encoding='utf-8') as f:
+    json.dump(meta, f, indent=2)
+    f.write('\n')
+target_json = os.path.join(cache_dir, f'{game}.json')
+os.replace(tmp_file, target_json)
+EOF
   if [ -n "$PSO" ]; then mkdir -p "$OUTFW/pso" && rsync -a --delete -- "$PSO/" "$OUTFW/pso/" || die "copy the pipeline archive"; else rm -rf "$OUTFW/pso"; fi
   if [ -f "$ICON" ]; then sips -s format png -z 512 512 "$ICON" --out "$OUTFW/icon.png" > /dev/null || die "sips: cannot convert the icon $ICON"; else rm -f "$OUTFW/icon.png"; fi
   python3 -c 'import json, sys; m = json.load(open(sys.argv[1])); sys.exit(m["framework_executable"] != sys.argv[2])' "$OUTFW/game.manifest.json" "$FW_NAME" \
