@@ -350,22 +350,28 @@ void dm_fps_state_apply(void) {
     const char *dr = getenv("DM_DYNAMIC_RESOLUTION"); uint32_t dyn = dr && !strcmp(dr, "1");
     if (dr && strcmp(dr, "0") && strcmp(dr, "1")) LOG("[RED] DM_DYNAMIC_RESOLUTION=%s: must be 0 or 1; keeping full resolution", dr);
     memcpy(dm_fps_state + 0x40, &dyn, sizeof dyn);
-    // Screen shape: DM_SCREEN_ASPECT, the screen's width / height between 1.3 and 1.77, makes the builds with screen-shape stubs
-    // (Breath of the Wild 1.9.0's patches.py) render that shape: the output keeps its width (1920) and takes the height that gives the ratio, a multiple of 48 so the
-    // 2/3-size layout space (1280 wide) stays whole: 1.43 → 1920x1344 and 1280x896. State +0x48 u32 output height, +0x4c u32 layout height, +0x50 its float; 0 = 16:9
+    // Screen shape: DM_SCREEN_ASPECT, the screen's width / height between 1.3 and 2.4, makes the builds with screen-shape stubs
+    // (Breath of the Wild 1.9.0's patches.py) render that shape: the output keeps its width (1920) and takes the height that gives the ratio, a multiple of 8 so the
+    // 2/3-size layout space (1280 wide) stays whole: 1.43 → 1920x1344 and 1280x896, 2.17 (an iPhone 17 in landscape) → 1920x880 and 1280x586. A multiple of 8 rather
+    // than 48 keeps the quantisation error under 0.4% at the wider ratios 19.5:9 screens use (48 gives 2.2% at 2.17, a black bar or a visible crop). State +0x48 u32
+    // output height, +0x4c u32 layout height, +0x50 its float; 0 = 16:9
     const char *as = getenv("DM_SCREEN_ASPECT");
     if (as && *as && strcmp(as, "0") && strcmp(as, "auto")) {   // 0: 16:9; auto: the iOS front end resolves it to the screen's shape (a Mac window has none)
         char *end; float a = strtof(as, &end);
-        if (end == as || *end || !(a >= 1.3f && a < 1.77f)) LOG("[RED] DM_SCREEN_ASPECT=%s: a width / height from 1.3 to 1.77; keeping 16:9", as);
+        if (end == as || *end || !(a >= 1.3f && a < 2.4f)) LOG("[RED] DM_SCREEN_ASPECT=%s: a width / height from 1.3 to 2.4; keeping 16:9", as);
         else {
-            uint32_t oh = (uint32_t)(1920.0f / a / 48.0f + 0.5f) * 48, lh = oh * 2 / 3; float lf = (float)lh;
+            uint32_t oh = (uint32_t)(1920.0f / a / 8.0f + 0.5f) * 8, lh = oh * 2 / 3; float lf = (float)lh;
             memcpy(dm_fps_state + 0x48, &oh, 4); memcpy(dm_fps_state + 0x4c, &lh, 4); memcpy(dm_fps_state + 0x50, &lf, 4);
             extern void mtl_present_screen(uint32_t w, uint32_t h); mtl_present_screen(1920, oh);   // the picture's shape for a texture that follows it (nvn_mtl.m present_shape)
             const char *ms = getenv("DM_SCREEN_ASPECT_SITES"); uint32_t mask = ms ? (uint32_t)strtoul(ms, NULL, 0) : 0xffffffffu;   // the stubs of the game's own conversions, one bit each (+0x54)
             memcpy(dm_fps_state + 0x54, &mask, 4);
             if (ms) LOG("%s: screen shape: conversion sites %#x (DM_SCREEN_ASPECT_SITES)", g_fps_mod, mask);
             // The field of view: views of the screen's ratio (the scene, the HUD's camera) keep 16:9's sides and show more above and below (patches.py's sead::PerspectiveProjection stubs)
+            // k is the vertical angle's factor. A taller screen (r < 16:9) widens it so the sides stay 16:9's. A wider screen (r > 16:9, a 19.5:9 phone in landscape) must not
+            // narrow it: the vertical angle stays, the projection's aspect takes r, and the scene shows more at the sides. Without the floor a wider screen narrowed the angle
+            // and cropped the top and bottom instead.
             float r = 1920.0f / (float)oh, k = (16.0f / 9.0f) / r, tol = 0.01f;
+            if (k < 1.0f) k = 1.0f;   // a wider screen keeps the vertical angle (see above); never narrows it
             const char *fo = getenv("DM_SCREEN_FOV"); if (fo && !strcmp(fo, "off")) tol = -1.0f;   // trials: the scene keeps the game's vertical angle (no view matches); the HUD camera still widens
             memcpy(dm_fps_state + 0x58, &r, 4); memcpy(dm_fps_state + 0x5c, &k, 4); memcpy(dm_fps_state + 0x60, &tol, 4);
             float wide = 16.0f / 9.0f, wtol = 0.001f, far = 10000.0f;   // the HUD camera's projection: 16:9, near 1, far 10000 (+0x74 / +0x78 / +0x7c)
@@ -379,6 +385,10 @@ void dm_fps_state_apply(void) {
             // and bottom bars). DM_SCREEN_HUD=<edge>,<listed>,<full-screen width>,<full-screen height>[,<tallest>]
             // overrides them for trials
             float anc[7] = {(float)lh / 2 - 360.0f, (float)lh / 720.0f, 280.0f, 100.0f, 1270.0f, 710.0f, 1300.0f};
+            // A wider screen (oh < 1080, a 19.5:9 phone in landscape) has no room above or below: the vertical shift and the vertical stretch fall back to "do nothing"
+            // (0 and 1), so the HUD keeps its 16:9 rows and the layouts' y row is not scaled. The scene's extra width comes from the projection's aspect, not from these.
+            if (anc[0] < 0) anc[0] = 0;
+            if (anc[1] < 1.0f) anc[1] = 1.0f;
             const char *hv = getenv("DM_SCREEN_HUD");
             if (hv && sscanf(hv, "%f,%f,%f,%f,%f", &anc[2], &anc[3], &anc[4], &anc[5], &anc[6]) < 4) LOG("[RED] DM_SCREEN_HUD=%s: <edge>,<listed>,<full width>,<full height>[,<tallest>]; keeping the rest", hv);
             memcpy(dm_fps_state + 0x80, anc, sizeof anc);
