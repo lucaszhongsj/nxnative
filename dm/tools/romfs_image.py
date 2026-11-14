@@ -31,6 +31,9 @@ GFX_API_CODES = {'nvn': 1, 'vulkan': 2, 'gl': 3}
 GFX_API_NAMES = {1: 'nvn', 2: 'vulkan', 3: 'gl'}
 MSL_APP_SUFFIXES = ('.metallib', '.json', '.tsv')
 MSL_APP_LEAVE_OUT = ('_b_build.json',)
+MSL_EXTRACT_MAX_ENTRIES = 200_000
+MSL_EXTRACT_MAX_BYTES = 16 << 30
+MSL_EXTRACT_CHUNK = 8 << 20
 _PROG_DIR_RE = re.compile(r'^p\d+$')
 _U64_MAX = (1 << 64) - 1
 _I64_MAX = (1 << 63) - 1
@@ -728,6 +731,136 @@ def inspect_msl(img):
         return info
 
 
+def _validate_extract_rel_path(rel_path, label):
+    if not isinstance(rel_path, str) or not rel_path:
+        raise ValueError(f'empty relative path in RomFS trailer: {label}')
+    if rel_path.startswith(('/', '\\')) or '\\' in rel_path or ':' in rel_path or '\0' in rel_path:
+        raise ValueError(f'unsafe relative path {rel_path!r} in RomFS trailer: {label}')
+    if any(0xD800 <= ord(ch) <= 0xDFFF for ch in rel_path):
+        raise ValueError(f'non-UTF-8 path in RomFS trailer: {label}')
+    parts = rel_path.split('/')
+    if any(part in ('', '.', '..') for part in parts):
+        raise ValueError(f'unsafe path segment in {rel_path!r} in RomFS trailer: {label}')
+    return parts
+
+
+def _resolve_extract_dest(out_real, parts, label):
+    cur = out_real
+    for seg in parts:
+        cur = os.path.join(cur, seg)
+        if os.path.islink(cur):
+            raise ValueError(f'symlink component forbidden in extraction path {cur}: {label}')
+    cand = os.path.abspath(cur)
+    if cand == out_real or os.path.commonpath([out_real, cand]) != out_real:
+        raise ValueError(f'extraction path escapes output directory: {label}')
+    return cand
+
+
+def extract_msl(img, out_dir):
+    """Validates and streams the embedded DMMSLTR1 shader trailer of img into out_dir."""
+    img_path = os.fspath(img)
+    out_path = os.fspath(out_dir)
+    if not out_path or '\0' in out_path:
+        raise ValueError('invalid extraction output directory')
+    info = inspect_msl(img_path)
+    if not info['has_trailer']:
+        raise ValueError(f'no DMMSLTR1 shader trailer in {img}')
+    if os.path.islink(out_path):
+        raise ValueError(f'extraction output directory must not be a symlink: {out_path}')
+    if os.path.exists(out_path) and not os.path.isdir(out_path):
+        raise ValueError(f'extraction output path is not a directory: {out_path}')
+
+    msl_offset = info['msl_offset']
+    msl_size = info['msl_size']
+    label = f'{img_path} [msl trailer]'
+
+    with open(img_path, 'rb') as f:
+        if os.fstat(f.fileno()).st_size != info['file_size']:
+            raise ValueError(f'RomFS image size changed during extraction: {img_path}')
+        listing = _validate_and_list_slice(f, msl_offset, msl_size, label)
+        if len(listing) > MSL_EXTRACT_MAX_ENTRIES:
+            raise ValueError(f'RomFS trailer exceeds entry quota ({len(listing)} > {MSL_EXTRACT_MAX_ENTRIES}): {img_path}')
+
+        dirs_todo = []
+        files_todo = []
+        count = 0
+        total_bytes = 0
+        for rel_path, (is_dir, rel_off, size) in sorted(listing.items()):
+            parts = _validate_extract_rel_path(rel_path, label)
+            if is_dir:
+                dirs_todo.append(parts)
+            else:
+                if rel_off < HEAD.size or size < 0 or rel_off > msl_size or size > msl_size - rel_off:
+                    raise ValueError(f'invalid RomFS trailer file bounds for {rel_path!r}: {img_path}')
+                if size > MSL_EXTRACT_MAX_BYTES - total_bytes:
+                    raise ValueError(f'RomFS trailer exceeds byte quota ({MSL_EXTRACT_MAX_BYTES} bytes): {img_path}')
+                total_bytes += size
+                count += 1
+                files_todo.append((msl_offset + rel_off, size, parts, rel_path))
+
+        os.makedirs(out_path, exist_ok=True)
+        out_real = os.path.realpath(out_path)
+
+        resolved_dirs = []
+        for parts in dirs_todo:
+            d_dest = _resolve_extract_dest(out_real, parts, label)
+            if os.path.exists(d_dest) and not os.path.isdir(d_dest):
+                raise ValueError(f'cannot overwrite file with directory {d_dest}: {img_path}')
+            resolved_dirs.append(d_dest)
+
+        resolved_files = []
+        for abs_off, size, parts, rel_path in files_todo:
+            f_dest = _resolve_extract_dest(out_real, parts, label)
+            if os.path.isdir(f_dest):
+                raise ValueError(f'cannot overwrite directory with file {f_dest}: {img_path}')
+            resolved_files.append((abs_off, size, f_dest, rel_path))
+
+        for d_dest in resolved_dirs:
+            os.makedirs(d_dest, exist_ok=True)
+            if os.path.commonpath([out_real, os.path.realpath(d_dest)]) != out_real:
+                raise ValueError(f'directory resolved outside output root: {d_dest}')
+
+        created_parents = set()
+        resolved_files.sort(key=lambda item: (item[0], item[3]))
+        pid = os.getpid()
+        for abs_off, size, f_dest, rel_path in resolved_files:
+            parent = os.path.dirname(f_dest)
+            if parent not in created_parents:
+                os.makedirs(parent, exist_ok=True)
+                if os.path.commonpath([out_real, os.path.realpath(parent)]) != out_real:
+                    raise ValueError(f'parent directory resolved outside output root: {parent}')
+                created_parents.add(parent)
+            if os.path.islink(f_dest):
+                raise ValueError(f'refusing to overwrite symlink {f_dest}: {img_path}')
+            tmp_dest = f'{f_dest}.part.{pid}'
+            if os.path.islink(tmp_dest):
+                raise ValueError(f'refusing to write through symlink {tmp_dest}: {img_path}')
+            f.seek(abs_off)
+            rem = size
+            try:
+                with open(tmp_dest, 'wb') as out_f:
+                    while rem > 0:
+                        chunk = f.read(min(rem, MSL_EXTRACT_CHUNK))
+                        if not chunk:
+                            raise ValueError(f'unexpected EOF reading {rel_path!r} from RomFS trailer: {img_path}')
+                        out_f.write(chunk)
+                        rem -= len(chunk)
+                os.replace(tmp_dest, f_dest)
+            except BaseException:
+                try:
+                    os.unlink(tmp_dest)
+                except OSError:
+                    pass
+                raise
+
+    return {
+        **info,
+        'out_dir': os.path.abspath(out_path),
+        'extracted_files': count,
+        'extracted_bytes': total_bytes,
+    }
+
+
 def parse_identity(text):   # {field: value} of an identity line; size is an int
     parts = text.split()
     if not parts or parts[0] != ID_MAGIC: raise ValueError('not an identity line')
@@ -757,6 +890,7 @@ if __name__ == '__main__':
     ap.add_argument('--reuse', action='store_true', help='keep the image only while its source tree, packer and image are unchanged')
     ap.add_argument('--append-msl', action='store_true', help='append a 16 KiB-aligned DMMSLTR1 shader trailer to IMAGE from MSL_SRC')
     ap.add_argument('--replace-msl', action='store_true', help='truncate IMAGE to base_romfs_size and write a new DMMSLTR1 shader trailer from MSL_SRC')
+    ap.add_argument('--extract-msl', action='store_true', help='extract the DMMSLTR1 shader trailer from IMAGE into OUT_DIR')
     ap.add_argument('--inspect-msl', metavar='IMAGE', help='inspect IMAGE and print its DMMSLTR1 trailer metadata as JSON')
     ap.add_argument('--gfx-api', choices=tuple(GFX_API_CODES), help='graphics backend for --append-msl / --replace-msl (inferred when unambiguous)')
     ap.add_argument('--chain', help='shader chain identifier (e.g. b-<hex>) for --append-msl / --replace-msl')
@@ -766,12 +900,19 @@ if __name__ == '__main__':
     args = ap.parse_args()
     try:
         if args.inspect_msl:
-            if args.pos or args.append_msl or args.replace_msl:
+            if args.pos or args.append_msl or args.replace_msl or args.extract_msl:
                 raise ValueError('--inspect-msl takes a single IMAGE argument')
             print(json.dumps(inspect_msl(args.inspect_msl), indent=2))
             sys.exit(0)
-        if args.append_msl and args.replace_msl:
-            raise ValueError('--append-msl and --replace-msl are mutually exclusive')
+        trailer_modes = int(bool(args.append_msl)) + int(bool(args.replace_msl)) + int(bool(args.extract_msl))
+        if trailer_modes > 1:
+            raise ValueError('--append-msl, --replace-msl and --extract-msl are mutually exclusive')
+        if args.extract_msl:
+            if len(args.pos) != 2:
+                raise ValueError('expected IMAGE and OUT_DIR arguments')
+            res = extract_msl(args.pos[0], args.pos[1])
+            print(f"{args.pos[0]} -> {res['out_dir']}: extracted {res['extracted_files']} files, {res['extracted_bytes']} bytes ({res['gfx_api']} {res['chain'] or '-'})")
+            sys.exit(0)
         if args.append_msl or args.replace_msl:
             if len(args.pos) != 2:
                 raise ValueError('expected IMAGE and MSL_SRC arguments')

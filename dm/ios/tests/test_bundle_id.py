@@ -136,7 +136,7 @@ class CliBundleIdWorkflowTests(unittest.TestCase):
                 'check_native_python': None, 'free_gb': 10000, 'find_nx_extract': root / 'nx_extract',
                 'extract': extraction, 'check_formats': None, 'can_clone': False, 'build_mismatch': [],
                 'extract_aoc': None, 'rewrite': profile, 'build_vk_shaders': root / 'shaders',
-                'provisional_prep': None, 'chain_header': None,
+                'provisional_prep': None, 'chain_header': None, '_persist_build_seed': None,
                 'mac_host': (root / 'dmhost', root / 'font.ttf'), 'mac_run': 'run',
             }.items():
                 stack.enter_context(patch.object(build, name, return_value=value))

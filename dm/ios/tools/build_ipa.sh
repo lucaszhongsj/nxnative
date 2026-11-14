@@ -91,12 +91,33 @@ export DM_SCHEME_NAME
 lib_has() { python3 "$DM/tools/shader_lib.py" has "$1" 2> /dev/null; }
 lib_cat() { python3 "$DM/tools/shader_lib.py" cat "$1" "$2" 2> /dev/null; }
 lib_path() { python3 "$DM/tools/shader_lib.py" path "$1"; }
+ROMFS_IDENTITY=${DM_ROMFS_IDENTITY:-}
+ROMFS_IDENTITY=${ROMFS_IDENTITY%$'\n'}
+ROMFS_IDENTITY=${ROMFS_IDENTITY%$'\r'}
+valid_romfs_identity() {
+  case ${1:-} in
+    *$'\n'* | *$'\r'*) return 1 ;;
+    'DMROMFSID1 '?*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
 # The checks of one program's inputs (GAME, GD, PATCHED, ROMFS, MSL_IOS, GFXAPI, MODS, MARKER as set): every program of a game of several programs passes them
 check_program() {
 [ -f "$PATCHED/main.fixups.tsv" ] || die "no rewritten main in $PATCHED (run dm/tools/patch_nso.py first)"
 MODS=$(python3 "$DM/games/game.py" modules "$GAME" "$PATCHED") || die "game profile $GD: modules"   # main's build row, as the host picks them: a version may lack a module another has
 for f in $MODS; do [ -f "$PATCHED/$f.patched.bin" ] && [ -f "$PATCHED/$f.fixups.tsv" ] || die "no rewritten module $PATCHED/$f (run dm/tools/patch_nso.py first)"; done
-python3 "$DM/tools/romfs.py" "$ROMFS" "$MARKER" || die "no RomFS at $ROMFS (missing $MARKER)"
+SLIM_CHECK=NO
+if [ "${DM_COPY_ROMFS:-}" = NO ] || [ -n "$FRAMEWORK_ONLY" ]; then SLIM_CHECK=YES
+elif [ -z "${DM_COPY_ROMFS:-}" ] && [ -z "${DM_FULL_ROMFS:-}" ] && [ "$PREPARE_XCODE" != YES ] && [ -z "${PROGRAMS_TSV:-}" ]; then SLIM_CHECK=YES; fi
+ROMFS_IDENTITY=${ROMFS_IDENTITY:-${DM_ROMFS_IDENTITY:-}}
+ROMFS_IDENTITY=${ROMFS_IDENTITY%$'\n'}
+ROMFS_IDENTITY=${ROMFS_IDENTITY%$'\r'}
+if [ "$SLIM_CHECK" = YES ] && [ ! -e "$ROMFS" ] && [ -n "$ROMFS_IDENTITY" ]; then
+  valid_romfs_identity "$ROMFS_IDENTITY" || die "invalid DM_ROMFS_IDENTITY (expected 'DMROMFSID1 ...')"
+  t "game files: absent at $ROMFS, using DM_ROMFS_IDENTITY"
+else
+  python3 "$DM/tools/romfs.py" "$ROMFS" "$MARKER" || die "no RomFS at $ROMFS (missing $MARKER)"
+fi
 V=${V:-$(sed -n 's/^#define DMSH_CHAIN "\(.*\)"/\1/p' "$DM/gfx/nvn/dmsh_chain.h")}   # the chain version the host is compiled with, one for every game
 # A Vulkan game (Hades): the shaders are the game's SPIR-V, translated by dm/gfx/tools/vk_shaders.py into $MSL_IOS/vk; an OpenGL game (Digimon Story Cyber Sleuth): its GLSL, translated by
 # dm/gfx/tools/gl_shaders.py into $MSL_IOS/gl; neither has NVN chain libraries. GFXAPI=nvn / vulkan / gl says which (the NSP script passes what main imports); without it, the shader
@@ -230,8 +251,23 @@ if [ "$FRAMEWORK" = 1 ]; then
   # pack step's romfs.id does. That step's default is repeated here because the manifest is a build resource and has to exist now.
   FW_COPY_ROMFS=${DM_COPY_ROMFS:-}
   if [ -z "$FW_COPY_ROMFS" ] && [ "$PREPARE_XCODE" != YES ]; then [ -n "${DM_FULL_ROMFS:-}" ] && FW_COPY_ROMFS=YES || FW_COPY_ROMFS=NO; fi
-  ROMFS_ID=; if [ "$FW_COPY_ROMFS" = NO ] && [ -f "$ROMFS" ]; then
-    mkdir -p "$O" && ROMFS_ID=$(python3 -I "$DM/tools/romfs_image.py" --identity "$ROMFS" "$GAME" "$DM_APP_VERSION" "${PKG:-}") || die "identity of $ROMFS"
+  ROMFS_ID=
+  if [ "$FW_COPY_ROMFS" = NO ]; then
+    ROMFS_IDENTITY=${ROMFS_IDENTITY:-${DM_ROMFS_IDENTITY:-}}
+    ROMFS_IDENTITY=${ROMFS_IDENTITY%$'\n'}
+    ROMFS_IDENTITY=${ROMFS_IDENTITY%$'\r'}
+    if [ -f "$ROMFS" ]; then
+      mkdir -p "$O" && ROMFS_ID=$(python3 -I "$DM/tools/romfs_image.py" --identity "$ROMFS" "$GAME" "$DM_APP_VERSION" "${PKG:-}") || die "identity of $ROMFS"
+      printf '%s\n' "$ROMFS_ID" > "$O/romfs.id" || die "write $O/romfs.id"
+    elif [ -n "$ROMFS_IDENTITY" ]; then
+      case $ROMFS_IDENTITY in
+        *$'\n'* | *$'\r'*) die "invalid DM_ROMFS_IDENTITY (expected 'DMROMFSID1 ...')" ;;
+        'DMROMFSID1 '?*) ;;
+        *) die "invalid DM_ROMFS_IDENTITY (expected 'DMROMFSID1 ...')" ;;
+      esac
+      ROMFS_ID=$ROMFS_IDENTITY
+      mkdir -p "$O" && printf '%s\n' "$ROMFS_ID" > "$O/romfs.id" || die "write $O/romfs.id"
+    fi
   fi
   NRO_TABLE=$PATCHED/nro.tsv; [ -f "$NRO_TABLE" ] || NRO_TABLE=   # the NRO modules gen_embed.py packs: nro_count in the manifest
   FW_LOADER=FR; [ -z "$FRAMEWORK_ONLY" ] || FW_LOADER=FH
@@ -257,7 +293,24 @@ if [ "$PREPARE_XCODE" = YES ] && [ -n "${DM_ENTITLEMENTS-default}" ]; then
   t "entitlements: $(plutil -convert json -o - Gen/DmIOS.entitlements)"
 fi
 # DM_COPY_ROMFS=NO also for the prepared project: its Copy game resources phase (stage_resources.sh) then leaves the game files out and writes the image's identity; Gen/dm.xcconfig is made again by every run
-[ "${DM_COPY_ROMFS:-YES}" != NO ] || [ "$PREPARE_XCODE" != YES ] || echo "DM_COPY_ROMFS = NO" >> Gen/dm.xcconfig
+if [ "$PREPARE_XCODE" = YES ] && [ "${DM_COPY_ROMFS:-YES}" = NO ]; then
+  echo "DM_COPY_ROMFS = NO" >> Gen/dm.xcconfig
+  ROMFS_IDENTITY=${ROMFS_IDENTITY:-${DM_ROMFS_IDENTITY:-}}
+  ROMFS_IDENTITY=${ROMFS_IDENTITY%$'\n'}
+  ROMFS_IDENTITY=${ROMFS_IDENTITY%$'\r'}
+  if [ -f "$ROMFS" ]; then
+    mkdir -p "$O" && python3 -I "$DM/tools/romfs_image.py" --identity "$ROMFS" "$GAME" "$DM_APP_VERSION" "${PKG:-}" > "$O/romfs.id" || die "identity of $ROMFS"
+    t "game files identity: $(cat "$O/romfs.id")"
+  elif [ -n "$ROMFS_IDENTITY" ]; then
+    case $ROMFS_IDENTITY in
+      *$'\n'* | *$'\r'*) die "invalid DM_ROMFS_IDENTITY (expected 'DMROMFSID1 ...')" ;;
+      'DMROMFSID1 '?*) ;;
+      *) die "invalid DM_ROMFS_IDENTITY (expected 'DMROMFSID1 ...')" ;;
+    esac
+    mkdir -p "$O" && printf '%s\n' "$ROMFS_IDENTITY" > "$O/romfs.id" || die "write $O/romfs.id"
+    t "game files identity: $(cat "$O/romfs.id")"
+  fi
+fi
 # The framework project is named explicitly. Everything else runs xcodegen exactly as before: a prepared project has its
 # template copied in as project.yml, and the in-place build uses dm/ios/project.yml (the default template is never edited)
 if [ "$PREPARE_XCODE" = YES ] || [ "$FRAMEWORK" != 1 ]; then xcodegen generate -q > /dev/null || die "xcodegen"
@@ -448,8 +501,19 @@ if [ "${DM_COPY_ROMFS:-YES}" = NO ]; then
   t "no game files in the IPA (DM_COPY_ROMFS=NO): the app takes Documents/romfs.img (scripts/push_romfs.sh)"
   # The image's identity (dm/host/romfs_identity.h) goes into the app as romfs.id: main.m then uses only a Documents/romfs.img with the same size and index hash, and says so when it is another version or missing.
   # A RomFS folder has no image to name yet (push_romfs.sh packs it on the Mac), so such a build carries no identity and accepts any complete image
+  ROMFS_IDENTITY=${ROMFS_IDENTITY:-${DM_ROMFS_IDENTITY:-}}
+  ROMFS_IDENTITY=${ROMFS_IDENTITY%$'\n'}
+  ROMFS_IDENTITY=${ROMFS_IDENTITY%$'\r'}
   if [ -f "$ROMFS" ]; then
     mkdir -p "$O" && python3 -I "$DM/tools/romfs_image.py" --identity "$ROMFS" "$GAME" "$DM_APP_VERSION" "${PKG:-}" > "$O/romfs.id" || die "identity of $ROMFS"
+    MAPS=("$P/romfs.id=$O/romfs.id"); t "game files identity: $(cat "$O/romfs.id")"
+  elif [ -n "$ROMFS_IDENTITY" ]; then
+    case $ROMFS_IDENTITY in
+      *$'\n'* | *$'\r'*) die "invalid DM_ROMFS_IDENTITY (expected 'DMROMFSID1 ...')" ;;
+      'DMROMFSID1 '?*) ;;
+      *) die "invalid DM_ROMFS_IDENTITY (expected 'DMROMFSID1 ...')" ;;
+    esac
+    mkdir -p "$O" && printf '%s\n' "$ROMFS_IDENTITY" > "$O/romfs.id" || die "write $O/romfs.id"
     MAPS=("$P/romfs.id=$O/romfs.id"); t "game files identity: $(cat "$O/romfs.id")"
   fi
 elif [ -f "$ROMFS" ]; then MAPS=("$P/romfs.img=$ROMFS"); else MAPS=("$P/romfs=$ROMFS"); fi

@@ -518,6 +518,7 @@ class ShellFrameworkProgress(unittest.TestCase):
                 mock.patch.object(nsp, 'build_shaders', return_value=root / 'ios_sh'),
                 mock.patch.object(nsp, 'uses_jit', return_value=False),
                 mock.patch.object(nsp, 'report_profile_status'),
+                mock.patch.object(nsp, '_persist_build_seed'),
                 mock.patch.object(nsp, 'run', side_effect=fake_run),
             )
             with contextlib.ExitStack() as stack:
