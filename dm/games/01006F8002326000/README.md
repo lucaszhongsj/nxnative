@@ -63,6 +63,18 @@ Checked on a Mac (M1, macOS 27, headless, an island save) against 16:9: the 3D v
 
 - From a fresh save, `DM_KEYS="40:A*51/2,145:B*12/0.4,151:Down,152:Right*4/0.4,154.5:A,155.5:Right*4/0.4,158:A,159:Down*2/0.4,160.5:Left*2/0.4,162:A,163.5:Plus,167:A*4/2,175:Plus,178:A*146/2,179:Plus*30/4"` names the player "tom" on the keyboard, takes the defaults, watches the movie and reaches the dock at about frame 14,100 (470 s).
 
+## Adaptive view consistency (current)
+
+On a taller picture the game caches projections and screen rectangles that a change of shape has to invalidate. The adapter in `view.s` (built to position-independent ARM64 by `gen_view_stubs.py`, licensed MIT-0 in `view.LICENSE`) is registered by `FRAME_STEP` for 3.0.3 `main` only: 21 hooks and 29 caches refresh cached projections, follow the current perspective in scissors and captures, widen field ranges and near-plane unprojection, and dock the inline keyboard and footer. It shares the frame step state page with `screen_shape` and needs no host state of its own.
+
+`main+0x265140` is the single `ret` of `nn::ui2d::DrawInfo::SetProjectionMtx`. One chained stub runs the upstream y-row division first (its 16:9 test reads m0 and m5, which the adapter's `Lscreen_projection` rewrites), then calls the adapter's keyboard dock; the adapter adds its offset to index 6 instead of overwriting it. `main+0x27d4c0` forces the footer subtree dirty at `Pane::Calculate` entry and `main+0x27d570` runs `duo_calc` after `CalculateGlobalMatrix`: the two were disassembled and coexist.
+
+The adapter follows the host's `DM_SCREEN_ASPECT` (1.3 to 1.77) through `dm_fps_state +0x58`; it does not support arbitrary ratios or folding-display rotation. At `+0x58 = 0` (16:9, or `auto` on iOS) every adapter stub runs the original instructions.
+
+The frame stamps are values in the free part of the state page, with no host pointer: `+0xa8` is the host's present counter (`dm_guest_frame_tick`, `hle_os.c`, one relaxed store each present), `+0xb0` the keyboard frame's stamp and `+0xb8` a touch panel's, written by `keyboard_frame` and `touch_page` through `Ltouch_stamp` (`x17` = 8 and 16). `Lrecent_keyboard` subtracts the first two, so "the inline keyboard rendered in the last two presents" needs no host state. `keyboard_window` keeps its own stamp at `+0x38`, which nothing reads: AnimalDuo's touch-context (bit 3) was not ported.
+
+Open: the dock offset is divided by the vertical stretch before it is added (option B); option A drops that division. Neither has been checked on a device; keyboard docking needs a device check.
+
 ## Found on this game
 
 - [The Mac host build starts an older Python than the pipeline](../../../docs/reference/packing.md#the-mac-host-build-starts-an-older-python-than-the-pipeline): NX2Apple issue #711 reported the host shader generator starting Python 3.6 despite the bundled Python 3.13 driver. Reproduced with synthetic tools, no gameplay check.
@@ -78,6 +90,7 @@ General host changes first needed here; each applies to every game:
 - [The alpha test through a library of its own](../../../docs/reference/rendering.md#the-alpha-test-through-a-library-of-its-own): the island map's corruption (issue #73) improved with an alpha test in a downstream runtime (PR #430).
 - **Touch samples on a 4 ms grid, with a history** (`touch_read` in `hle_hid.c`): the name-entry keyboard highlighted tapped letters but entered none, since its reader and the input manager read the touch screen in the same frame and the first used up the Start and End (issue #2567): [Touch samples on a 4 ms grid, with a history](../../../docs/reference/services.md#touch-samples-on-a-4-ms-grid-with-a-history).
 - **The game's view in the shape the game presents** (`front_picture_shape`; with `DM_SCREEN_ASPECT=1.43` the 1920x1344 picture was fitted into a 16:9 view on the phone): [The picture laid out in the shape the game presents](../../../docs/reference/rendering.md#the-picture-laid-out-in-the-shape-the-game-presents).
+- **A hand-emitted stub that calls saves `x30` with its argument** (the `0x265140` chain, which froze the first frame with `pc == lr` and `sp` walking up the stack): [A hand-emitted stub that calls must save x30, not only its argument registers](../../../docs/reference/rewriter.md#a-hand-emitted-stub-that-calls-must-save-x30-not-only-its-argument-registers).
 
 ## Open
 
