@@ -107,6 +107,8 @@ void dm_haptics_apple_controller(int player, GCController *controller) { (void)p
 void dm_haptics_apple_controller_locality(int player, GCController *controller, GCHapticsLocality locality) { (void)player; (void)controller; (void)locality; }
 
 int front_web_touch(void) { return 0; }   // no offline web page above the synthetic game
+void front_web_close(void) {}
+void dm_host_teardown_for_shell(void) {}
 int dm_locate_game_data(void) { return 1; }
 const struct dm_profile *dm_profile(void) {
     static const struct dm_profile profile = {.name = "DuoHarness", .pad_layout = DM_GAME_PAD_LAYOUT};
