@@ -244,6 +244,9 @@ static int boot_env(void) {
     // First line of the log: the fork's patches this build carries (Info.plist DMForkPatches), so a report says whether it comes from a build beyond upstream's support
     NSString *fork_patches = [NSBundle.mainBundle objectForInfoDictionaryKey:@"DMForkPatches"];
     fprintf(stderr, "fork patches: %s\n", [fork_patches isKindOfClass:NSString.class] && fork_patches.length ? fork_patches.UTF8String : "none");
+    // The launcher that built it (DMBuildVersion), when it was one whose version carries a fork mark: a report says which build made the app
+    NSString *build_version = [NSBundle.mainBundle objectForInfoDictionaryKey:@"DMBuildVersion"];
+    if ([build_version isKindOfClass:NSString.class] && build_version.length) fprintf(stderr, "built by: NX2Apple %s\n", build_version.UTF8String);
 #if DM_FRAMEWORK_BUILD
     // Route C: the runtime profile ships inside the game framework, and dm_profile() (hle_profile.c) reads DM_PROFILE on its
     // first call below (front_hud_env, romfs_locate, the per-game data folders). Before the env files, and forced: the game

@@ -318,6 +318,11 @@ else xcodegen generate -q --spec project-framework.yml > /dev/null || die "xcode
 # DMCommit / DMChain: the checkout that built the app (+dirty with uncommitted changes to tracked files) and the shader chain it carries, which the host logs at start (main.c)
 COMMIT=$(git -C "$DM" rev-parse --short=12 HEAD 2> /dev/null) && { [ -z "$(git -C "$DM" status --porcelain --untracked-files=no 2> /dev/null)" ] || COMMIT=$COMMIT+dirty
   /usr/libexec/PlistBuddy -c "Add :DMCommit string $COMMIT" Gen/Info.plist > /dev/null || die "DMCommit"; t "source: $COMMIT"; }
+# DMBuildVersion: the launcher that built this app (DM_BUILD_VERSION, the front end's own display version), so a build made by a
+# patched launcher says so next to the game's version, which stays the game's (CFBundleShortVersionString is what the launcher
+# shows and compares, so it never carries this mark)
+if [ -n "${DM_BUILD_VERSION:-}" ]; then
+  /usr/libexec/PlistBuddy -c "Add :DMBuildVersion string $DM_BUILD_VERSION" Gen/Info.plist > /dev/null || die "DMBuildVersion"; t "built by: NX2Apple $DM_BUILD_VERSION"; fi
 case "$MSLDIR" in b-*) /usr/libexec/PlistBuddy -c "Add :DMChain string ${MSLDIR#b-}" Gen/Info.plist > /dev/null || die "DMChain";; esac
 # DM_METAL_CAPTURE=1: a development build that may write GPU frame captures (MetalCaptureEnabled; the host's DM_GPU_CAPTURE switch writes them to Documents/gpu_captures)
 if [ "${DM_METAL_CAPTURE:-0}" = 1 ]; then /usr/libexec/PlistBuddy -c "Add :MetalCaptureEnabled bool true" Gen/Info.plist > /dev/null || die "MetalCaptureEnabled"; t "Metal frame capture: enabled (DM_METAL_CAPTURE=1)"; fi
