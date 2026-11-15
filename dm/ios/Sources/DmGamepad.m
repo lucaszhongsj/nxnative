@@ -444,6 +444,12 @@ int front_web_touch(void);
 }
 - (void)touchesBegan:(NSSet<UITouch *> *)ts withEvent:(UIEvent *)e {
     if (_padOff && !_layout.onTV) [self wakeMenu];
+    // The gear stays out of the way while a controller drives a picture on the TV (updateControlVisibility, GitHub issue #809): two fingers bring it back, so a game the
+    // shell starts (GameMenu.swift's console mode row, no settings screen) can still change the console mode.
+    if (_padOff && _layout.onTV && ts.count == 2 && _menu.hidden) {
+        [self wakeMenu];
+        LOG("front end: two-finger tap in TV play shows the menu gear");
+    }
     BOOL game = NO;
     for (UITouch *t in ts) {
         if (_padOff) { game |= [self gameBegin:t]; continue; }
@@ -830,7 +836,10 @@ static BOOL pads_slotted(GCController *gone) {
 }
 - (void)setMenuOpen:(BOOL)open {
     _menuOpen = open;
-    if (_padOff && !_layout.onTV) [self wakeMenu];
+    if (_padOff) {
+        if (!_layout.onTV) [self wakeMenu];
+        else if (!open) [self updateControlVisibility];   // closing it on the TV puts the gear back out of the way (the header above)
+    }
 }
 - (void)updateControlVisibility {
     _controls.hidden = _padOff;

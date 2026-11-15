@@ -133,3 +133,4 @@ const char *front_ios_device_check(void) { return NULL; }   // a supported GPU
 void dm_cloud_saves_env(void) {}
 int save_sync_flush(int timeout_ms) { (void)timeout_ms; return 1; }
 void dm_host_shutdown(const char *why) { (void)why; }
+void dm_switch2_teardown(void) {}

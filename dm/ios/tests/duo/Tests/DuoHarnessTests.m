@@ -1335,6 +1335,11 @@ static BOOL gDuoHarnessReduceMotionEnabled;
         [self setHarnessControllers:@[controller] notification:GCControllerDidConnectNotification];
         [self waitForView:menu hidden:YES];
         XCTAssertNotEqual([pad hitTest:menu.center withEvent:nil], menu);
+        DuoFakeTouch *fingerA = [self touchAt:CGPointMake(60, 60) time:2], *fingerB = [self touchAt:CGPointMake(100, 60) time:2];
+        [self beginTouches:@[fingerA, fingerB] onPad:pad];
+        [self endTouches:@[fingerA, fingerB] onPad:pad cancelled:NO];
+        [self waitForView:menu hidden:NO];
+        XCTAssertEqual([pad hitTest:menu.center withEvent:nil], menu, @"Two fingers bring the gear back in TV play, for the console mode in a game the shell starts");
         [self deliverSnapshotChangeFor:controller button:controller.extendedGamepad.buttonB value:1];
         XCTAssertEqual(duo_harness_state().players[0].buttons, DM_BTN_A);
 

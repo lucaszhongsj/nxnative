@@ -10,11 +10,14 @@ var gameMenuModel: LauncherModel?   // the settings screen's model (Launcher.swi
 // launcher as DM_HOME_QUIT_TEXT is for the quit prompt: the shell sets it at launch, and a game's own app gets it in its bundled dm/env.txt (the build's
 // --env-file), where the lines are joined by a backslash and n. A line that is missing or empty stays English.
 enum GameMenuText: Int, CaseIterable {
-    case moreSettings, controllerLayout
+    case moreSettings, controllerLayout, consoleMode, docked, handheld
     var english: String {
         switch self {
         case .moreSettings: return "More settings on the start screen"
         case .controllerLayout: return "Controller layout"
+        case .consoleMode: return "Console mode"
+        case .docked: return "Docked"
+        case .handheld: return "Handheld"
         }
     }
     static func line(_ t: GameMenuText, in text: String?) -> String {
@@ -49,6 +52,12 @@ private func gameMenuItems() -> [UIMenuElement] {
         }
     }
     if !placed { items.insert(UIMenu(options: .displayInline, children: [layout]), at: 0) }
+    if gameMenuModel == nil {   // the shell starts the game with DM_LAUNCHER=0 and has no settings screen: the console mode changes here, first in the menu, as on a Switch put in or out of its dock, for this run only
+        let docked = dm_opmode() != 0
+        let modes = [UIAction(title: GameMenuText.docked.text, state: docked ? .on : .off) { _ in dm_setting_live("DM_OPMODE", "1") },
+                     UIAction(title: GameMenuText.handheld.text, state: docked ? .off : .on) { _ in dm_setting_live("DM_OPMODE", "0") }]
+        items.insert(UIMenu(title: GameMenuText.consoleMode.text, options: .singleSelection, children: modes), at: 0)
+    }
     items.append(Unmanaged<UIMenu>.fromOpaque(dm_quit_menu()).takeRetainedValue())   // Quit <game>, last and on its own: it opens the quit prompt (front_ios.m)
     return items
 }
