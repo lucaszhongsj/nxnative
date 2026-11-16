@@ -96,6 +96,7 @@ static void tv_attach(void);
 
 @interface DmRootVC : UIViewController
 @property (nonatomic, strong) DmGameView *game;
+@property (nonatomic, strong) UIView *companion;   // under the pad, in the band a split gives it (DmLayout.h dm_layout): what the game's own screens cannot show there
 @property (nonatomic, strong) UIView *pad;
 @property (nonatomic, strong) UILabel *fps;
 @property (nonatomic) BOOL launched;
@@ -103,6 +104,8 @@ static void tv_attach(void);
 @property (nonatomic) BOOL fill;   // DM_PICTURE_FIT=fill: in landscape the picture covers the screen, its edges cropped (DmLayout.h dm_layout_picture)
 @property (nonatomic) BOOL partiallyOpen;   // an iPhone Duo's hinge half open (UIHingeInteraction, iOS 27.1)
 @property (nonatomic) NSInteger hingeStatus;
+@property (nonatomic) BOOL standing;   // the last orientation followOrientation saw: YES with the phone up
+@property (nonatomic) int modeWhenLying;   // the console mode to go back to when the phone lies down; -1 = standing, nothing to restore
 @property (nonatomic, copy) NSString *layoutLog;   // the last layout line logged
 #if __has_include(<UIKit/UIHingeInteraction.h>)
 - (void)hingeChanged:(UIHinge *)hinge API_AVAILABLE(ios(27.1));
@@ -171,18 +174,21 @@ static void launcher_done(void) { [g_root startGame]; }
         lb.text = @"Game files not found.\nPut the RomFS folder into this App's Documents as \"romfs\" (Files app), then restart.";
         [self.view addSubview:lb]; return;
     }
+    self.modeWhenLying = -1;   // the first layout pass sets the mode for the orientation the game starts in
     dm_cloud_saves_env();   // DM_SAVE_SYNC from the launcher's Cloud saves pick, before the game's first save mount reads it (CloudSaves.m, save_sync.h)
     front_hud_env();   // before the process's first Metal device, which reads MTL_HUD_ENABLED (an env file's DM_METAL_HUD sets it in main.m already; GitHub issue #840)
     const char *dev = front_ios_device_check();   // that first device: a GPU without BC textures is refused here, not at launch, so the launcher's HUD switch counts
     if (dev) { [self showHint:[NSString stringWithFormat:@"This device is not supported.\n%s", dev]]; return; }   // the host does not start
     {   // Picture shape "auto" (the launcher's Match screen): the app window's own shape when it is taller or wider than 16:9 (an iPad's 4:3, an unfolded iPhone Duo's 1.43:1,
-        // a 19.5:9 phone in landscape at 2.17:1; loader.c takes 1.3 to 2.4), else 16:9. The window's, not the screen's: on an iPad under Stage Manager or Split View the app does
-        // not fill the screen. Resolved here, before the host writes the state page (main.c dm_fps_state_apply)
+        // a 19.5:9 phone in landscape at 2.17:1), else 16:9. The window's, not the screen's: on an iPad under Stage Manager or Split View the app does not fill the screen. Resolved
+        // here, before the host writes the state page (main.c dm_fps_state_apply). A phone standing up keeps 16:9 (DmLayout.h dm_picture_shape_auto): its picture sits above
+        // the controls, where a picture of its own 1.78 to 2.16:1 shape would be shorter than the 16:9 one
         const char *a = getenv("DM_SCREEN_ASPECT");
         if (a && !strcmp(a, "auto")) {
-            CGSize sz = self.view.window ? self.view.window.bounds.size : UIScreen.mainScreen.bounds.size; double r = MAX(sz.width, sz.height) / MAX(MIN(sz.width, sz.height), 1);
-            char v[16]; if (r >= 1.3 && r < 2.4) snprintf(v, sizeof v, "%.3f", r); else strcpy(v, "0");
-            setenv("DM_SCREEN_ASPECT", v, 1); LOG("front end: picture shape auto: window %.0fx%.0f points (%.3f:1) → DM_SCREEN_ASPECT=%s", sz.width, sz.height, r, v);
+            CGSize sz = self.view.window ? self.view.window.bounds.size : UIScreen.mainScreen.bounds.size;
+            float r = dm_picture_shape_auto(sz);
+            char v[16]; if (r > 0) snprintf(v, sizeof v, "%.3f", r); else strcpy(v, "0");
+            setenv("DM_SCREEN_ASPECT", v, 1); LOG("front end: picture shape auto: window %.0fx%.0f points → DM_SCREEN_ASPECT=%s", sz.width, sz.height, v);
         }
     }
     self.fill = dm_picture_fill(getenv("DM_PICTURE_FIT"));
@@ -195,6 +201,13 @@ static void launcher_done(void) { [g_root startGame]; }
     if (getenv("DM_METAL_HUD") && atoi(getenv("DM_METAL_HUD"))) { g_layer.developerHUDProperties = @{@"mode": @"default"}; LOG("front end: Metal performance HUD on (DM_METAL_HUD)"); }   // Apple's HUD over the game: frame rate, frame and GPU time, memory
     else if (getenv("DM_HUD_PER_LAYER")) { g_layer.developerHUDProperties = @{@"mode": @"disabled"}; LOG("front end: Metal performance HUD off (DM_METAL_HUD)"); }   // the shell turns Metal's HUD on for every start (ShellMain.m)
     dm_haptics_apple_init();
+    // The band under the picture in a split (DmLayout.h dm_layout companion): the pad floats over it, so only what no key covers is seen. Hidden while there is no
+    // split: the picture takes the whole view and the pad's own background is all there is. Touches go through it to the pad, which owns the band's hit testing
+    self.companion = [[UIView alloc] initWithFrame:CGRectZero];
+    self.companion.backgroundColor = [UIColor colorWithWhite:0.07 alpha:1];
+    self.companion.userInteractionEnabled = NO;
+    self.companion.hidden = YES;
+    [self.view addSubview:self.companion];
     self.pad = dm_gamepad_view(self.view.bounds);
     self.pad.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
     [self.view addSubview:self.pad];
@@ -205,9 +218,28 @@ static void launcher_done(void) { [g_root startGame]; }
     tv_attach();   // a TV connected while the launcher showed
     front_ios_boot();
 }
+static UIWindow *g_tv;   // the TV scene's window while one shows the picture (tv_attach)
+// Console mode follows the screen's orientation while no TV shows the picture: a phone standing up is handheld, so the game's own touch screens (its software
+// keyboard above all) take touches, and the picture is the handheld 1280x720 one; lying down it returns to the mode the player had. A TV docks the game
+// whatever the phone does (tv_attach / tv_detach own the mode then). A choice made in the in-game menu while standing up is the one lying down returns to.
+// The switch is dm_set_opmode, which pushes the console mode change notification the game watches, so it follows while it runs.
+- (void)followOrientation:(CGRect)b {
+    if (g_tv) return;   // the picture is on the TV: docked there
+    BOOL standing = b.size.height > b.size.width;
+    if (standing == self.standing) return;
+    self.standing = standing;
+    if (standing) {
+        self.modeWhenLying = dm_opmode();
+        if (self.modeWhenLying != 0) { dm_set_opmode(0); dm_gamepad_opmode_changed(); LOG("front end: console mode handheld, a phone standing up (the game's own keyboard takes touches)"); }
+    } else if (self.modeWhenLying >= 0) {
+        int m = self.modeWhenLying; self.modeWhenLying = -1;
+        if (dm_opmode() != m) { dm_set_opmode(m); dm_gamepad_opmode_changed(); LOG("front end: console mode %s again, lying down", m ? "docked" : "handheld"); }
+    }
+}
 - (void)viewDidLayoutSubviews {
     [super viewDidLayoutSubviews];
     CGRect b = self.view.bounds; if (!self.game) return;
+    [self followOrientation:b];
     CGRect division = CGRectNull;   // an iPhone Duo's fold, as UIKit reports it (iOS 27.1)
     NSMutableArray<NSString *> *regionLog = [NSMutableArray array];
 #if __has_include(<UIKit/UIHingeInteraction.h>)
@@ -224,6 +256,8 @@ static void launcher_done(void) { [g_root startGame]; }
     BOOL onTV = self.game.superview != self.view;   // the TV's view lays the picture out; the phone is all pad
     DmLayout layout = onTV ? dm_layout_pad_only(b) : dm_layout_picture(dm_layout(b, gameInsets, self.partiallyOpen, division, g_picture_aspect), b, self.fill, g_picture_aspect);
     if (!onTV) self.game.frame = layout.game;
+    self.companion.frame = layout.companion;
+    self.companion.hidden = !layout.separated;
     layout.topSafeOnly = duoPortrait;
     BOOL hingeClosed = NO;
 #if __has_include(<UIKit/UIHingeInteraction.h>)
@@ -273,7 +307,7 @@ UIViewController *front_ios_root(void) { return [DmRootVC new]; }
 - (void)viewDidLoad { [super viewDidLoad]; self.view.backgroundColor = UIColor.blackColor; }
 - (void)viewDidLayoutSubviews { [super viewDidLayoutSubviews]; for (UIView *v in self.view.subviews) v.frame = dm_aspect_fit(self.view.bounds, g_picture_aspect); }
 @end
-static UIWindow *g_tv; static int g_tv_mode_was = -1;
+static int g_tv_mode_was = -1;   // the console mode to go back to when the TV is unplugged
 static void tv_attach(void) {
     DmGameView *v = g_root.game; if (!g_tv || !v || v.superview == g_tv.rootViewController.view) return;
     // at most 1080p: the game renders 1080p docked, and a 4K drawable only adds an upscale and a 4K stream (an AirPlay TV showed black, the GPU went from 15 to 60 ms a frame).
@@ -314,6 +348,7 @@ bool dm_setting_live(const char *env, const char *value) {
         if (!value) return true;
         int m = atoi(value) ? 1 : 0;
         if (g_tv_mode_was >= 0) { g_tv_mode_was = m; LOG("front end: console mode %s once the TV is unplugged (in-game menu)", m ? "docked" : "handheld"); return true; }
+        if (g_root.standing) g_root.modeWhenLying = m;   // the player chose it while standing up: lying down keeps that choice, not the one it replaced
         dm_set_opmode(m); dm_gamepad_opmode_changed(); LOG("front end: console mode %s (in-game menu)", m ? "docked" : "handheld");
         return true;
     }

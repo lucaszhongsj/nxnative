@@ -243,15 +243,16 @@ static BOOL gDuoHarnessReduceMotionEnabled;
     const UIEdgeInsets insets[] = {UIEdgeInsetsMake(59, 0, 34, 0), UIEdgeInsetsMake(50, 0, 24, 0)};
     for (NSUInteger i = 0; i < 2; i++) {
         CGRect bounds = sizes[i];
-        CGFloat splitY = CGRectGetMidY(bounds);
         CGRect safe = UIEdgeInsetsInsetRect(bounds, insets[i]);
         DmLayout layout = dm_layout(bounds, insets[i], NO, CGRectNull, DM_PICTURE_16_9);
+        // No fold: the band starts where the picture's own width puts its bottom (DmLayout.h dm_layout), never past the midpoint
+        CGFloat splitY = MIN(CGRectGetMidY(bounds), CGRectGetMinY(safe) + safe.size.width / DM_PICTURE_16_9);
         XCTAssertTrue(layout.separated);
         XCTAssertTrue(CGRectEqualToRect(layout.controls, CGRectMake(0, splitY, bounds.size.width, bounds.size.height - splitY)));
         XCTAssertEqualWithAccuracy(layout.game.size.width / layout.game.size.height, 16.0 / 9.0, 0.001);
         XCTAssertGreaterThanOrEqual(CGRectGetMinY(layout.game), CGRectGetMinY(safe));
         XCTAssertLessThanOrEqual(CGRectGetMaxY(layout.game), splitY);
-        XCTAssertLessThanOrEqual(CGRectGetMaxY(layout.game), CGRectGetMinY(layout.controls), @"The midpoint boundary leaves no video/control overlap");
+        XCTAssertLessThanOrEqual(CGRectGetMaxY(layout.game), CGRectGetMinY(layout.controls), @"The band's top leaves no video/control overlap");
     }
 }
 
@@ -273,11 +274,124 @@ static BOOL gDuoHarnessReduceMotionEnabled;
     XCTAssertLessThanOrEqual(CGRectGetMaxY(separated.game), CGRectGetMinY(separated.controls));
 }
 
+- (void)testPictureShapeAutoKeepsAPhoneStandingUpAt16By9 {
+    // A phone's long side is 1.78 to 2.16 times its short one; a picture of that shape above the controls would be shorter than the 16:9 one
+    XCTAssertEqual(dm_picture_shape_auto(CGSizeMake(390, 844)), 0.0f, @"An iPhone 14 standing up keeps 16:9");
+    XCTAssertEqual(dm_picture_shape_auto(CGSizeMake(375, 667)), 0.0f, @"An iPhone SE standing up keeps 16:9");
+    XCTAssertEqual(dm_picture_shape_auto(CGSizeMake(430, 932)), 0.0f, @"An iPhone Pro Max standing up keeps 16:9");
+    // An iPad or an unfolded Duo standing up is 1.33 to 1.52 and keeps its own shape, which fills the upper part better than 16:9
+    XCTAssertEqualWithAccuracy(dm_picture_shape_auto(CGSizeMake(820, 1180)), 1180.0 / 820.0, 0.001);
+    XCTAssertEqualWithAccuracy(dm_picture_shape_auto(CGSizeMake(744, 1133)), 1133.0 / 744.0, 0.001);
+    XCTAssertEqualWithAccuracy(dm_picture_shape_auto(CGSizeMake(1032, 1376)), 1376.0 / 1032.0, 0.001, @"An unfolded Duo standing up is 3:4 by its long side");
+    XCTAssertEqualWithAccuracy(dm_picture_shape_auto(CGSizeMake(1376, 1032)), 1376.0 / 1032.0, 0.001, @"An unfolded Duo lying down is 4:3");
+    // A window wider than 16:9 stays 16:9 until loader.c takes the wider range the screen-shape work for phones lying down needs
+    XCTAssertEqual(dm_picture_shape_auto(CGSizeMake(844, 390)), 0.0f, @"A 19.5:9 phone lying down");
+    XCTAssertEqualWithAccuracy(dm_picture_shape_auto(CGSizeMake(1024, 768)), 1024.0 / 768.0, 0.001, @"An iPad lying down is 4:3");
+    // A square window has no shape of its own to take
+    XCTAssertEqual(dm_picture_shape_auto(CGSizeMake(600, 600)), 0.0f);
+    XCTAssertEqual(dm_picture_shape_auto(CGSizeZero), 0.0f);
+}
+
 - (void)testPortraitWithoutHingeStatusStillSplitsVideoAboveControls {
+    // A phone standing up gives the 16:9 picture the height its own width asks for (390 x 219), so no bars above or below it, and the rest of the window to
+    // the band; halving a 19.5:9 phone left 9:9.75, where nearly half of the picture's part was bars
     DmLayout layout = dm_layout(CGRectMake(0, 0, 390, 844), UIEdgeInsetsMake(59, 0, 34, 0), NO, CGRectNull, DM_PICTURE_16_9);
     XCTAssertTrue(layout.separated);
-    XCTAssertTrue(CGRectEqualToRect(layout.controls, CGRectMake(0, 422, 390, 422)));
-    XCTAssertLessThanOrEqual(CGRectGetMaxY(layout.game), CGRectGetMinY(layout.controls));
+    XCTAssertEqualWithAccuracy(layout.game.size.width, 390, 0.5);
+    XCTAssertEqualWithAccuracy(layout.game.size.height, 390 * 9.0 / 16.0, 0.5, @"The picture keeps 16:9 at the window's width: %@", NSStringFromCGRect(layout.game));
+    XCTAssertEqualWithAccuracy(CGRectGetMinY(layout.game), 59, 0.5, @"It starts at the safe area's top: no bar above it");
+    XCTAssertEqualWithAccuracy(CGRectGetMaxY(layout.game), CGRectGetMinY(layout.controls), 0.5, @"No bar between the picture and the band");
+    XCTAssertEqualWithAccuracy(CGRectGetMinY(layout.controls), 59 + 390 * 9.0 / 16.0, 0.5);
+    XCTAssertEqualWithAccuracy(layout.controls.size.height, 844 - (59 + 390 * 9.0 / 16.0), 0.5);
+    XCTAssertEqualWithAccuracy(layout.companion.size.height, layout.controls.size.height, 0.5);
+    // The picture never takes more than half the window: an iPad's 4:3 keeps the midpoint it had, so the band keeps at least half
+    DmLayout ipad = dm_layout(CGRectMake(0, 0, 820, 1180), UIEdgeInsetsMake(24, 0, 20, 0), NO, CGRectNull, 1180.0 / 820.0);
+    XCTAssertTrue(ipad.separated);
+    XCTAssertEqualWithAccuracy(CGRectGetMinY(ipad.controls), 590, 0.5, @"An iPad keeps the midpoint: 4:3 needs 615 of the 820 across, over half the window");
+}
+
+- (void)testCompanionTakesTheBandUnderThePictureAndNoOtherLayoutHasOne {
+    // The pad floats over the band, so the panel is the whole band and is drawn under the keys: the same rectangle as the controls, not a part of it
+    DmLayout split = dm_layout(CGRectMake(0, 0, 390, 844), UIEdgeInsetsMake(59, 0, 34, 0), NO, CGRectNull, DM_PICTURE_16_9);
+    XCTAssertTrue(split.separated);
+    XCTAssertTrue(CGRectEqualToRect(split.companion, split.controls), @"The band is the pad's area: %@ against %@", NSStringFromCGRect(split.companion), NSStringFromCGRect(split.controls));
+    XCTAssertLessThanOrEqual(CGRectGetMaxY(split.game), CGRectGetMinY(split.companion), @"The picture stays above the band");
+    // A Duo's fold moves the band with the controls
+    DmLayout folded = dm_layout(CGRectMake(0, 0, 669, 951), UIEdgeInsetsMake(62, 0, 34, 0), NO, CGRectMake(0, 455.5, 669, 40), DM_PICTURE_16_9);
+    XCTAssertTrue(folded.separated);
+    XCTAssertTrue(CGRectEqualToRect(folded.companion, folded.controls));
+    XCTAssertEqualWithAccuracy(CGRectGetMinY(folded.companion), 495.5, 0.5, @"Below the fold's lower half");
+    // Landscape (the overlay) and a picture on a TV have no band
+    DmLayout overlay = dm_layout(CGRectMake(0, 0, 844, 390), UIEdgeInsetsZero, NO, CGRectNull, DM_PICTURE_16_9);
+    XCTAssertFalse(overlay.separated);
+    XCTAssertTrue(CGRectIsEmpty(overlay.companion));
+    DmLayout tv = dm_layout_pad_only(CGRectMake(0, 0, 390, 844));
+    XCTAssertFalse(tv.separated);
+    XCTAssertTrue(CGRectIsEmpty(tv.companion));
+}
+
+- (void)testProductionRootFollowsTheOrientationWithItsConsoleMode {
+    // A phone standing up is handheld, so the game's own touch screens (its software keyboard above all) take touches; lying down it returns to the mode it
+    // had. The harness stubs dm_set_opmode into a variable (DuoRuntimeStubs.m), so this reads the mode the front end asked for.
+    UIViewController *root = [self harnessRootViewController];
+    SEL follow = NSSelectorFromString(@"followOrientation:");
+    XCTAssertTrue([root respondsToSelector:follow], @"The front end switches the console mode by orientation");
+    NSMethodSignature *sig = [root methodSignatureForSelector:follow];
+    NSInvocation *call = [NSInvocation invocationWithMethodSignature:sig];
+    call.target = root; call.selector = follow;
+    CGRect standing = CGRectMake(0, 0, 390, 844), lying = CGRectMake(0, 0, 844, 390);
+    // The harness window stands up, so the app has already followed that orientation: settle it lying down and docked, the baseline the app starts from
+    [call setArgument:&lying atIndex:2]; [call invoke];
+    dm_set_opmode(1);
+    [call setArgument:&standing atIndex:2]; [call invoke];
+    XCTAssertEqual(dm_opmode(), 0, @"A phone standing up runs handheld: the game's keyboard takes touches");
+    [call setArgument:&lying atIndex:2]; [call invoke];
+    XCTAssertEqual(dm_opmode(), 1, @"Lying down it returns to the mode the player had");
+    // A choice made in the in-game menu while standing up is the one lying down returns to
+    [call setArgument:&standing atIndex:2]; [call invoke];
+    XCTAssertEqual(dm_opmode(), 0);
+    dm_set_opmode(1);   // the player docks it from the in-game menu while standing up
+    [call setArgument:&lying atIndex:2]; [call invoke];
+    XCTAssertEqual(dm_opmode(), 1, @"The player's docked choice while standing up is what lying down keeps");
+}
+
+- (void)testPlayerConsoleModeChosenWhileStandingUpSurvivesTheReturn {
+    // A phone standing up forces handheld, so a player who wants docked there picks it in the in-game menu; lying down must keep that choice, not the
+    // handheld it replaced. This is the case a baseline of docked hides: the mode held for the return would still be handheld.
+    UIViewController *root = [self harnessRootViewController];
+    SEL follow = NSSelectorFromString(@"followOrientation:");
+    NSInvocation *call = [NSInvocation invocationWithMethodSignature:[root methodSignatureForSelector:follow]];
+    call.target = root; call.selector = follow;
+    CGRect standing = CGRectMake(0, 0, 390, 844), lying = CGRectMake(0, 0, 844, 390);
+    dm_set_opmode(0);   // a player who was handheld lying down
+    [call setArgument:&lying atIndex:2]; [call invoke];
+    dm_set_opmode(0);
+    [call setArgument:&standing atIndex:2]; [call invoke];
+    XCTAssertEqual(dm_opmode(), 0, @"Standing up it stays handheld");
+    // The in-game menu's docked pick while standing up
+    XCTAssertTrue(dm_setting_live("DM_OPMODE", "1"));
+    XCTAssertEqual(dm_opmode(), 1);
+    [call setArgument:&lying atIndex:2]; [call invoke];
+    XCTAssertEqual(dm_opmode(), 1, @"Lying down keeps the player's docked pick, not the handheld it replaced");
+}
+
+- (void)testProductionRootPutsThePanelUnderThePadAndOutOfItsWay {
+    UIViewController *root = [self harnessRootViewController];
+    UIView *pad = [root valueForKey:@"pad"];
+    UIView *companion = [root valueForKey:@"companion"];
+    XCTAssertNotNil(companion, @"The front end keeps a view for the band");
+    XCTAssertEqual(companion.superview, root.view);
+    // The pad is above the panel: its keys and touches cover the panel, which the band's own background fills underneath
+    NSInteger padIndex = [root.view.subviews indexOfObjectIdenticalTo:pad];
+    NSInteger panelIndex = [root.view.subviews indexOfObjectIdenticalTo:companion];
+    XCTAssertGreaterThan(padIndex, panelIndex, @"The pad is added after the panel, so it floats over it");
+    // The panel takes no touch of its own: the pad owns the band's hit testing (a touch on no key falls through, as before)
+    XCTAssertFalse(companion.isUserInteractionEnabled);
+    [root.view layoutIfNeeded];
+    BOOL portrait = root.view.bounds.size.height > root.view.bounds.size.width;
+    XCTAssertEqual(companion.hidden, !portrait, @"The panel is shown only where a split gives it a band");
+    if (portrait) XCTAssertEqualWithAccuracy(CGRectGetMinY(companion.frame), CGRectGetMaxY([(UIView *)[root valueForKey:@"game"] frame]), 1.0,
+                                            @"The panel starts where the picture ends: %@", NSStringFromCGRect(companion.frame));
 }
 
 - (void)testPortraitControlsUseAnchoredGroupsWithASeparatedThreeDimensionalLeftPair {
@@ -999,7 +1113,8 @@ static BOOL gDuoHarnessReduceMotionEnabled;
     NSData *plist = [NSData dataWithContentsOfURL:[NSBundle.mainBundle URLForResource:@"Info" withExtension:@"plist"]];
     NSDictionary *info = [NSPropertyListSerialization propertyListWithData:plist options:0 format:nil error:nil];
     NSSet *landscape = [NSSet setWithArray:@[@"UIInterfaceOrientationLandscapeLeft", @"UIInterfaceOrientationLandscapeRight"]];
-    XCTAssertEqualObjects([NSSet setWithArray:info[@"UISupportedInterfaceOrientations"]], landscape);
+    // The harness's own plist carries what the app's does, so a test that reads it reads the app's contract (test_orientation_policy.py holds both to it)
+    XCTAssertEqualObjects([NSSet setWithArray:info[@"UISupportedInterfaceOrientations"]], [landscape setByAddingObject:@"UIInterfaceOrientationPortrait"]);
     NSSet *all = [landscape setByAddingObjectsFromSet:[NSSet setWithArray:@[@"UIInterfaceOrientationPortrait", @"UIInterfaceOrientationPortraitUpsideDown"]]];
     XCTAssertEqualObjects([NSSet setWithArray:info[@"UISupportedInterfaceOrientations~ipad"]], all);
     XCTAssertNil(info[@"UIRequiresFullScreen"]);
