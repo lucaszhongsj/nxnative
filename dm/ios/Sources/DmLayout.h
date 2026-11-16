@@ -42,11 +42,11 @@ static inline CGRect dm_aspect_fill(CGRect b, CGFloat aspect) {
 static inline BOOL dm_picture_fill(const char *_Nullable value) { return value && !strcmp(value, "fill"); }   // DM_PICTURE_FIT: fit (default) or fill
 
 // Picture shape "auto" (the launcher's Match screen): the window's own shape when it is taller than 16:9 (an iPad's 4:3, an unfolded iPhone Duo's 1.43:1) or
-// wider (a 19.5:9 phone lying down at 2.17:1), else 16:9. A phone standing up takes the shape of its picture's band instead (half the window): the splash
-// of a wide screen turned on its side, so the game fills the band without cropping. The range is loader.c's (0.9 to 2.4). 0 = 16:9.
+// wider (a 19.5:9 phone lying down at 2.17:1), else 16:9. A phone standing up takes the shape of half the window: the picture fills the upper 50% of the
+// screen without cropping, the panel the lower 50%. The range is loader.c's (0.9 to 2.4). 0 = 16:9.
 static inline float dm_picture_shape_auto(CGSize window) {
-    if (window.height > window.width) return 0.0f;   // standing up: 16:9, which the split's band fits whole
-    double r = MAX(window.width, window.height) / MAX(MIN(window.width, window.height), 1);
+    double r = window.height > window.width ? window.width / MAX(window.height * 0.5, 1)
+                                            : MAX(window.width, window.height) / MAX(MIN(window.width, window.height), 1);
     return r >= 0.9 && r < 2.4 ? (float)r : 0.0f;
 }
 
@@ -68,17 +68,16 @@ static inline DmLayout dm_layout(CGRect b, UIEdgeInsets insets, BOOL partiallyOp
     division = dm_horizontal_division(b, division);
     BOOL portrait = b.size.height > b.size.width;
     if (!portrait && (!partiallyOpen || CGRectIsNull(division))) return l;
+    // A phone standing up with no fold splits the screen at its midpoint: the picture takes the upper half, the panel the lower half. The picture's shape
+    // is computed for that half at launch (dm_picture_shape_auto), so it fills the upper rectangle without bars. A fold sets both edges within the safe area.
+    BOOL folded = !CGRectIsNull(division);
     CGRect safe = UIEdgeInsetsInsetRect(b, insets);
-    // Where the picture's part ends and the band begins. A phone standing up with no fold gives the picture the height its own width asks for, so a 16:9
-    // picture has no bars above or below: halving a 19.5:9 phone leaves 9:9.75, where nearly half of the picture's part was bars. It never takes more than
-    // half the window, so a squarer window keeps the midpoint: an iPad's 4:3 asks for 570 of 820 across, over half, and the band keeps at least half. A
-    // taller picture (an iPad mini's 1.52) is the picture's own height either way, so only the bars it used to have go to the band. A fold sets both edges.
-    CGFloat upperBottom = CGRectIsNull(division) ? MIN(CGRectGetMidY(b), CGRectGetMinY(safe) + safe.size.width / MAX(aspect, 0.001))
-                                                 : CGRectGetMinY(division);
-    CGFloat bandTop = CGRectIsNull(division) ? upperBottom : CGRectGetMaxY(division);
-    CGRect upper = CGRectMake(CGRectGetMinX(safe), CGRectGetMinY(safe), safe.size.width, upperBottom - CGRectGetMinY(safe));
+    CGFloat upperBottom = folded ? CGRectGetMinY(division) : CGRectGetMidY(b);
+    CGFloat bandTop = folded ? CGRectGetMaxY(division) : upperBottom;
+    CGRect upper = folded ? CGRectMake(CGRectGetMinX(safe), CGRectGetMinY(safe), safe.size.width, upperBottom - CGRectGetMinY(safe))
+                          : CGRectMake(CGRectGetMinX(b), CGRectGetMinY(b), b.size.width, upperBottom - CGRectGetMinY(b));
     CGRect lower = CGRectMake(CGRectGetMinX(b), bandTop, b.size.width, CGRectGetMaxY(b) - bandTop);
-    if (upper.size.height <= 0 || CGRectGetMaxY(safe) <= CGRectGetMinY(lower)) return l;
+    if (upper.size.height <= 0) return l;
     l.game = dm_aspect_fit(upper, aspect); l.companion = lower; l.controls = lower; l.separated = YES;
     return l;
 }

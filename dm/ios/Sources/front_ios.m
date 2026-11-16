@@ -191,17 +191,18 @@ static void launcher_done(void) { [g_root startGame]; }
     if (dev) { [self showHint:[NSString stringWithFormat:@"This device is not supported.\n%s", dev]]; return; }   // the host does not start
     {   // Picture shape "auto" (the launcher's Match screen): the app window's own shape when it is taller or wider than 16:9 (an iPad's 4:3, an unfolded iPhone Duo's 1.43:1,
         // a 19.5:9 phone in landscape at 2.17:1), else 16:9. The window's, not the screen's: on an iPad under Stage Manager or Split View the app does not fill the screen. Resolved
-        // here, before the host writes the state page (main.c dm_fps_state_apply). A phone standing up keeps 16:9 (DmLayout.h dm_picture_shape_auto): its picture sits above
-        // the controls, where a picture of its own 1.78 to 2.16:1 shape would be shorter than the 16:9 one
+        // here, before the host writes the state page (main.c dm_fps_state_apply). The console mode picks the calculation: handheld takes the shape of half the
+        // screen, so the picture fills the upper half and the panel the lower half; docked takes the screen's own wide shape. Physical rotation changes neither.
         const char *a = getenv("DM_SCREEN_ASPECT");
         if (a && !strcmp(a, "auto")) {
             // The window's bounds are still the other shape on a cold start (the scene turns after this call). Use the screen's physical size and put its
             // edges in the order the scene's orientation says, so a phone launched lying down resolves to its wide shape, not to 16:9.
             CGSize sz = UIScreen.mainScreen.bounds.size;
-            // The console mode is the choice: handheld is the split's 16:9 picture, docked is the screen's own wide shape. Physical rotation changes nothing.
+            // The console mode is the choice: handheld is the split's half-screen picture, docked is the screen's own wide shape. Rotation changes nothing.
             BOOL handheld = dm_opmode() == 0;
+            if (handheld && sz.width > sz.height) sz = CGSizeMake(sz.height, sz.width);   // the picture's band is the short side x half the long side
             if (!handheld && sz.width < sz.height) sz = CGSizeMake(sz.height, sz.width);
-            float r = handheld ? 0 : dm_picture_shape_auto(sz);
+            float r = dm_picture_shape_auto(sz);
             char v[16]; if (r > 0) snprintf(v, sizeof v, "%.3f", r); else strcpy(v, "0");
             setenv("DM_SCREEN_ASPECT", v, 1); LOG("front end: picture shape auto: screen %.0fx%.0f points (%s) → DM_SCREEN_ASPECT=%s", sz.width, sz.height, handheld ? "handheld" : "docked", v);
         }

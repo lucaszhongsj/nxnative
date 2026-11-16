@@ -451,8 +451,8 @@ int front_web_touch(void);
         if (_padOff && !_layout.onTV && e && e.type == UIEventTypeTouches) [self wakeMenu];
         return nil;
     }
-    if (_tap) return nil;   // the Tap layout has no controls: the whole view, band included, belongs to the game or the panel
-    if (_layout.separated && CGRectContainsPoint(_layout.companion, p) && ![self controlAt:p]) return nil;   // a tap on no key goes through to the panel (tabs, item slots)
+    if (_tap) return nil;   // Tap hides the pad: every touch goes to the game or the panel, so the panel is tappable here
+    if (_layout.separated && CGRectContainsPoint(_layout.controls, p)) return self;   // 3D owns the whole band: the panel below is not tappable
     return v;
 }
 - (void)touchesBegan:(NSSet<UITouch *> *)ts withEvent:(UIEvent *)e {
