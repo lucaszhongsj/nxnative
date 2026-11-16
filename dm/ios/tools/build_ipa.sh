@@ -213,7 +213,8 @@ LD=$(python3 -c 'import json, sys; print(next((s["default"] for s in json.load(o
 if [ -n "$LD" ] && [ "$LD" != "$DM_LANG" ]; then t "game language: the game has no $DM_LANG; packing $LD, its first"; export DM_LANG=$LD; fi
 # A profile's companion.json opts the game into the Eden Duo companion: the data-driven interface manifest and its authored MSBT strings are bundled as
 # dm/companion-ui.json, the module's build-ID and input-gate configuration as dm/companion.json, and the component licenses beside it (a build that includes
-# the companion is distributed under GPL-3.0-or-later, with its notices). Games without the file pack no companion and link none.
+# the companion is distributed under GPL-3.0-or-later, with its notices). Only this game's app compiles the companion's Swift renderer: any other game's
+# leaves both files out, so its app carries neither the renderer nor the module (whose sources companion.mk adds to the host for this profile alone).
 if [ -f "$GD/companion.json" ]; then
   cp "$GD/companion.json" Gen/dm/companion.json || die "copy companion profile"
   python3 "$IOS/tools/gen_companion.py" "$DM/third_party/eden_duo/acnh" Gen/dm/companion-ui.json || die "generate companion interface"
@@ -221,9 +222,11 @@ if [ -f "$GD/companion.json" ]; then
   mkdir -p Gen/dm/companion-licenses || die "make companion notices directory"
   cp "$DM"/third_party/eden_duo/LICENSE-*.txt "$DM/third_party/eden_duo/NOTICES.txt" "$DM/third_party/eden_duo/UPSTREAM.json" Gen/dm/companion-licenses/ || die "copy companion notices"
   cp "$DM/third_party/zstd/LICENSE" Gen/dm/companion-licenses/LICENSE-ZSTD.txt || die "copy Zstandard license"
-  # Swift compiles the companion renderer only for this game: the other games' apps link no DMCompanion and would fail on the Swift reference.
-  echo "SWIFT_ACTIVE_COMPILATION_CONDITIONS = \$(inherited) DM_COMPANION" >> Gen/dm.xcconfig
+  echo "GCC_PREPROCESSOR_DEFINITIONS = \$(inherited) DM_COMPANION=1" >> Gen/dm.xcconfig   # front_ios.m calls the companion's view controller only under it
   t "companion: interface, profile and licenses bundled"
+else
+  # The renderer and its model have nothing to draw in a game without companion.json, so they stay out of that game's target.
+  echo "EXCLUDED_SOURCE_FILE_NAMES = \$(inherited) ACNHCompanion.swift EdenCompanion.swift" >> Gen/dm.xcconfig
 fi
 # Diagnostic build: DM_ENV_FILE=file → dm/env.txt in the bundle (main.m sets one environment variable per line at boot)
 if [ -n "${DM_ENV_FILE:-}" ]; then cp "$DM_ENV_FILE" Gen/dm/env.txt || die "copy DM_ENV_FILE"; t "env: $(grep -v '^#' "$DM_ENV_FILE" | tr '\n' ' ')"; fi

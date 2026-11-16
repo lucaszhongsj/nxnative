@@ -94,8 +94,11 @@ static void tv_attach(void);
 @property (strong, nonatomic) UIWindow *window;
 @end
 
-// SwiftUI's companion (ACNHCompanion.swift): a hosting controller for the game's data-driven interface. NULL in a build without a companion.
+// SwiftUI's companion (ACNHCompanion.swift): a hosting controller for the game's data-driven interface. Only a build whose profile has companion.json
+// defines DM_COMPANION (build_ipa.sh) and compiles the renderer, so nothing refers to this symbol in the other games' apps.
+#if DM_COMPANION
 extern void *dm_companion_view_controller(void);
+#endif
 
 @interface DmRootVC : UIViewController
 @property (nonatomic, strong) DmGameView *game;
@@ -207,8 +210,12 @@ static void launcher_done(void) { [g_root startGame]; }
     dm_haptics_apple_init();
     // The band under the picture in a split (DmLayout.h dm_layout companion): the SwiftUI companion's view, with the pad floating over it. Hidden while
     // there is no split: the picture takes the whole view and the pad's own background is all there is. The companion takes its own touches; the pad keeps
-    // the ones that land on a key (DmGamepad.m hitTest). A game without a companion answers NULL and keeps the empty placeholder.
+    // the ones that land on a key (DmGamepad.m hitTest). A game without a companion keeps the empty placeholder.
+#if DM_COMPANION
     UIViewController *companionVC = (__bridge_transfer UIViewController *)dm_companion_view_controller();
+#else
+    UIViewController *companionVC = nil;
+#endif
     self.companionVC = companionVC;
     self.companion = companionVC ? companionVC.view : [[UIView alloc] initWithFrame:CGRectZero];
     self.companion.backgroundColor = [UIColor colorWithWhite:0.07 alpha:1];

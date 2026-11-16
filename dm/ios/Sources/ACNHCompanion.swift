@@ -44,13 +44,10 @@ struct CompanionMarker: Identifiable {
     let load: ImageLoader
     private var timer: Timer?
     private var interactionSamples: AnyCancellable?
-#if DM_COMPANION
+    // The module's ObjC adapter. This file joins the target only where the profile has companion.json (build_ipa.sh), which is also the only build
+    // that links the adapter; a test injects reader / sender / images and gets no engine.
     private let native: DMCompanion?
-#else
-    private let native: AnyObject? = nil   // a build without the companion module has no native engine; tests inject reader / sender / images
-#endif
     init(reader: Reader? = nil, sender: Sender? = nil, images: ImageLoader? = nil) {
-#if DM_COMPANION
         let engine = reader == nil ? DMCompanion.shared() : nil
         native = engine
         read = reader ?? { engine?.snapshot as? [String: Any] ?? [:] }
@@ -64,11 +61,6 @@ struct CompanionMarker: Identifiable {
                 .sink { [weak self] _ in Task { @MainActor in self?.poll() } }
         }
         engine?.start()
-#else
-        read = reader ?? { [:] }
-        send = sender ?? { _, _ in }
-        load = images ?? { _, completion in completion(nil, 0, 0) }
-#endif
         poll()
         schedulePolling()
     }
@@ -91,9 +83,7 @@ struct CompanionMarker: Identifiable {
     func visible(_ value: Bool) {
         if !value && page == .bag { action("bag_cancel", 0) }
         presented=value
-        #if DM_COMPANION
         native?.setVisible(value)
-        #endif
         schedulePolling();if value {poll()}
     }
     func setPresentation(controlsHidden: Bool, physicalController: Bool, presented: Bool) {
@@ -168,18 +158,13 @@ struct ACNHCompanionView: View {
 
 #if os(iOS)
 // The front end embeds this hosting controller's view as the band under the picture (front_ios.m), with the touch pad floating above it. It inherits the
-// game root's orientation policy; no canvas rotation is needed: the view is laid out by the root, not presented full screen. NULL for a game whose app
-// defines no DM_COMPANION (build_ipa.sh defines it only where the profile has companion.json), which keeps the front end's empty band.
+// game root's orientation policy; no canvas rotation is needed: the view is laid out by the root, not presented full screen.
 @MainActor @_cdecl("dm_companion_view_controller")
-public func dmCompanionViewController() -> UnsafeMutableRawPointer? {
-#if DM_COMPANION
+public func dmCompanionViewController() -> UnsafeMutableRawPointer {
     let model = CompanionModel()
     let controller = DmHostingController(rootView: ACNHCompanionView(model: model))
     controller.view.backgroundColor = .clear
     controller.view.clipsToBounds = true
     return Unmanaged.passRetained(controller).toOpaque()
-#else
-    return nil
-#endif
 }
 #endif
