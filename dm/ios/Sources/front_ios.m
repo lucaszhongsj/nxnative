@@ -262,7 +262,11 @@ static UIWindow *g_tv;   // the TV scene's window while one shows the picture (t
     // The console mode follows the phone while no TV shows the picture: standing up the game's own keyboard needs the handheld mode, lying down the one the
     // profile starts with. Only a turn takes it, so a mode the player picks in the in-game menu stays until the phone turns again.
     if (!g_tv) {
-        BOOL standing = b.size.height > b.size.width, first = !self.modeChosen;
+        // The scene's orientation, not this view's bounds: a layout pass during the game's own start-up reports a window of the other shape for a moment,
+        // and taking that for a turn would switch the console mode under the game.
+        UIWindowScene *scene = self.view.window.windowScene;
+        BOOL standing = scene ? UIInterfaceOrientationIsPortrait(scene.interfaceOrientation) : b.size.height > b.size.width;
+        BOOL first = !self.modeChosen;
         if (first) { self.modeChosen = YES; self.profileMode = dm_opmode(); }
         if (first || self.lastStanding != standing) {
             self.lastStanding = standing;
