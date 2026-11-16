@@ -388,7 +388,8 @@ static BOOL gDuoHarnessReduceMotionEnabled;
     XCTAssertEqual([pad hitTest:minus withEvent:nil], pad, @"A key still belongs to the pad");
     // The band's middle-left is clear of the top menu pill, the thumb groups at 0.58 down and the right-stick area: it must pass through
     CGPoint clear = CGPointMake(CGRectGetMinX(layout.companion) + 12, CGRectGetMidY(layout.companion));
-    XCTAssertTrue(CGRectContainsPoint(layout.controls, clear));
+    XCTAssertTrue(CGRectContainsPoint(layout.companion, clear) && !CGRectContainsPoint(layout.controls, clear),
+                  @"The panel's band is its own, above the pad's foot");
     XCTAssertNil([pad hitTest:clear withEvent:nil], @"No key there: the companion below receives the tap");
     // Landscape has no band: the pad keeps the whole view
     DmLayout overlay = dm_layout(CGRectMake(0, 0, 844, 390), UIEdgeInsetsZero, NO, CGRectNull, DM_PICTURE_16_9);
