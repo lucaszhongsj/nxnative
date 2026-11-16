@@ -246,14 +246,14 @@ static BOOL gDuoHarnessReduceMotionEnabled;
         CGFloat aspect = dm_picture_shape_auto(bounds.size, insets[i].top);
         DmLayout layout = dm_layout(bounds, insets[i], NO, CGRectNull, aspect);
         // No fold: the area below the safe top splits in half, the picture fills the upper half and the panel the lower half
-        CGFloat splitY = insets[i].top + (bounds.size.height - insets[i].top) * 0.5;
+        CGFloat splitY = CGRectGetMidY(bounds);
         XCTAssertTrue(layout.separated);
         XCTAssertTrue(CGRectEqualToRect(layout.companion, CGRectMake(0, splitY, bounds.size.width, bounds.size.height - splitY)),
                       @"The panel keeps the lower half");
         XCTAssertTrue(CGRectEqualToRect(layout.controls, layout.companion),
                       @"The pad floats over the whole band");
         XCTAssertEqualWithAccuracy(layout.game.size.width / layout.game.size.height, aspect, 0.001);
-        XCTAssertEqualWithAccuracy(layout.game.size.height, splitY - insets[i].top, 0.5, @"The picture fills the upper half");
+        XCTAssertEqualWithAccuracy(layout.game.size.height, splitY, 0.5, @"The picture fills the upper half");
         XCTAssertLessThanOrEqual(CGRectGetMaxY(layout.game), CGRectGetMinY(layout.companion), @"The band's top leaves no video/panel overlap");
     }
 }
@@ -278,12 +278,12 @@ static BOOL gDuoHarnessReduceMotionEnabled;
 
 - (void)testPictureShapeAutoFillsHalfTheScreenWhenStandingUp {
     // A phone standing up takes the shape of half the window, so the picture fills the upper 50% and the panel the lower 50%
-    XCTAssertEqualWithAccuracy(dm_picture_shape_auto(CGSizeMake(390, 844), 59), 390.0 / 392.5, 0.001);
-    XCTAssertEqualWithAccuracy(dm_picture_shape_auto(CGSizeMake(375, 667), 50), 375.0 / 308.5, 0.001);
-    XCTAssertEqualWithAccuracy(dm_picture_shape_auto(CGSizeMake(430, 932), 59), 430.0 / 436.5, 0.001);
-    XCTAssertEqualWithAccuracy(dm_picture_shape_auto(CGSizeMake(820, 1180), 24), 820.0 / 578.0, 0.001);
-    XCTAssertEqualWithAccuracy(dm_picture_shape_auto(CGSizeMake(744, 1133), 24), 744.0 / 554.5, 0.001);
-    XCTAssertEqualWithAccuracy(dm_picture_shape_auto(CGSizeMake(1032, 1376), 24), 1032.0 / 676.0, 0.001, @"An unfolded Duo standing up");
+    XCTAssertEqualWithAccuracy(dm_picture_shape_auto(CGSizeMake(390, 844), 59), 390.0 / 422.0, 0.001);
+    XCTAssertEqualWithAccuracy(dm_picture_shape_auto(CGSizeMake(375, 667), 50), 375.0 / 333.5, 0.001);
+    XCTAssertEqualWithAccuracy(dm_picture_shape_auto(CGSizeMake(430, 932), 59), 430.0 / 466.0, 0.001);
+    XCTAssertEqualWithAccuracy(dm_picture_shape_auto(CGSizeMake(820, 1180), 24), 820.0 / 590.0, 0.001);
+    XCTAssertEqualWithAccuracy(dm_picture_shape_auto(CGSizeMake(744, 1133), 24), 744.0 / 566.5, 0.001);
+    XCTAssertEqualWithAccuracy(dm_picture_shape_auto(CGSizeMake(1032, 1376), 24), 1032.0 / 688.0, 0.001, @"An unfolded Duo standing up");
     XCTAssertEqualWithAccuracy(dm_picture_shape_auto(CGSizeMake(1376, 1032), 0), 1376.0 / 1032.0, 0.001, @"An unfolded Duo lying down is 4:3");
     // A window wider than 16:9 keeps its own shape: loader.c takes 1.3 to 2.4, so a phone lying down at 19.5:9 is a shape to render in
     XCTAssertEqualWithAccuracy(dm_picture_shape_auto(CGSizeMake(844, 390), 0), 844.0 / 390.0, 0.001, @"A 19.5:9 phone lying down");
@@ -294,22 +294,22 @@ static BOOL gDuoHarnessReduceMotionEnabled;
 }
 
 - (void)testPortraitWithoutHingeStatusStillSplitsVideoAboveControls {
-    // A phone standing up splits the area below the Dynamic Island in half: the picture fills the upper half, the panel the lower half
+    // A phone standing up splits the screen at its midpoint: the picture fills the upper half, the panel the lower half
     DmLayout layout = dm_layout(CGRectMake(0, 0, 390, 844), UIEdgeInsetsMake(59, 0, 34, 0), NO, CGRectNull, dm_picture_shape_auto(CGSizeMake(390, 844), 59));
     XCTAssertTrue(layout.separated);
     XCTAssertEqualWithAccuracy(layout.game.size.width, 390, 0.5);
-    XCTAssertEqualWithAccuracy(layout.game.size.height, 392.5, 0.5, @"The picture fills the upper half: %@", NSStringFromCGRect(layout.game));
-    XCTAssertEqualWithAccuracy(CGRectGetMinY(layout.game), 59, 0.5, @"It starts below the Dynamic Island");
+    XCTAssertEqualWithAccuracy(layout.game.size.height, 422, 0.5, @"The picture fills the upper half: %@", NSStringFromCGRect(layout.game));
+    XCTAssertEqualWithAccuracy(CGRectGetMinY(layout.game), 0, 0.5, @"It starts at the top of the screen");
     XCTAssertEqualWithAccuracy(CGRectGetMaxY(layout.game), CGRectGetMinY(layout.companion), 0.5, @"No bar between the picture and the band");
-    XCTAssertEqualWithAccuracy(CGRectGetMinY(layout.companion), 451.5, 0.5);
-    XCTAssertEqualWithAccuracy(layout.companion.size.height, 392.5, 0.5, @"The panel keeps the lower half");
+    XCTAssertEqualWithAccuracy(CGRectGetMinY(layout.companion), 422, 0.5);
+    XCTAssertEqualWithAccuracy(layout.companion.size.height, 422, 0.5, @"The panel keeps the lower half");
     XCTAssertTrue(CGRectEqualToRect(layout.controls, layout.companion), @"The pad floats over the whole band");
     XCTAssertEqualWithAccuracy(CGRectGetMaxY(layout.controls), 844, 0.5);
     // An iPad standing up splits the area below its safe top in half
     DmLayout ipad = dm_layout(CGRectMake(0, 0, 820, 1180), UIEdgeInsetsMake(24, 0, 20, 0), NO, CGRectNull, dm_picture_shape_auto(CGSizeMake(820, 1180), 24));
     XCTAssertTrue(ipad.separated);
-    XCTAssertEqualWithAccuracy(CGRectGetMinY(ipad.companion), 602, 0.5, @"An iPad splits below its safe top");
-    XCTAssertEqualWithAccuracy(ipad.game.size.height, 578, 0.5, @"The picture fills the upper half");
+    XCTAssertEqualWithAccuracy(CGRectGetMinY(ipad.companion), 590, 0.5, @"An iPad splits at its midpoint");
+    XCTAssertEqualWithAccuracy(ipad.game.size.height, 590, 0.5, @"The picture fills the upper half");
 }
 
 - (void)testCompanionTakesTheBandUnderThePictureAndNoOtherLayoutHasOne {
@@ -375,7 +375,7 @@ static BOOL gDuoHarnessReduceMotionEnabled;
     BOOL portrait = root.view.bounds.size.height > root.view.bounds.size.width;
     XCTAssertEqual(companion.hidden, !portrait, @"The panel is shown only where a split gives it a band");
     if (portrait) {
-        CGFloat splitY = root.view.safeAreaInsets.top + (root.view.bounds.size.height - root.view.safeAreaInsets.top) * 0.5;
+        CGFloat splitY = root.view.bounds.size.height / 2;
         XCTAssertEqualWithAccuracy(CGRectGetMinY(companion.frame), splitY, 1.0,
                                    @"The panel takes the lower half: %@", NSStringFromCGRect(companion.frame));
         XCTAssertLessThanOrEqual(CGRectGetMaxY([(UIView *)[root valueForKey:@"game"] frame]), CGRectGetMinY(companion.frame),
@@ -399,9 +399,9 @@ static BOOL gDuoHarnessReduceMotionEnabled;
 
         CGRect lower = layout.controls;
         CGFloat u = MIN(MIN(lower.size.height / 430.0, lower.size.width / 700.0), 1.3);
-        CGPoint stickCenter = CGPointMake(CGRectGetMinX(lower) + 0.25 * lower.size.width,
-                                          CGRectGetMinY(lower) + 0.45 * lower.size.height);
-        CGPoint faceCenter = CGPointMake(CGRectGetMinX(lower) + 0.75 * lower.size.width, stickCenter.y);
+        CGPoint stickCenter = CGPointMake(CGRectGetMinX(lower) + 0.375 * lower.size.width,
+                                          CGRectGetMinY(lower) + 0.50 * lower.size.height);
+        CGPoint faceCenter = CGPointMake(CGRectGetMinX(lower) + 0.625 * lower.size.width, stickCenter.y);
         CGRect stickRing = [self largestShapePathBoundsInLayer:pad.layer];
         CGPoint renderedStick = CGPointMake(CGRectGetMidX(stickRing), CGRectGetMidY(stickRing));
         XCTAssertEqualWithAccuracy(renderedStick.x, stickCenter.x, 0.5,
@@ -413,7 +413,7 @@ static BOOL gDuoHarnessReduceMotionEnabled;
                                    @"The ABXY diamond sits above the right stick in the right column (case %lu)", (unsigned long)i);
         XCTAssertEqualWithAccuracy(faces.y, faceCenter.y, 0.5);
 
-        CGPoint dpadCenter = CGPointMake(stickCenter.x, CGRectGetMinY(lower) + 0.80 * lower.size.height);
+        CGPoint dpadCenter = CGPointMake(stickCenter.x, CGRectGetMinY(lower) + 0.875 * lower.size.height);
         DuoFakeTouch *right = [self touchAt:CGPointMake(dpadCenter.x + 0.6 * 48 * u, dpadCenter.y) time:1];
         [self beginTouches:@[right] onPad:pad];
         XCTAssertEqual(duo_harness_input().buttons, DM_BTN_RIGHT,
@@ -440,9 +440,9 @@ static BOOL gDuoHarnessReduceMotionEnabled;
 
     CGRect lower = layout.controls;
     CGFloat u = MIN(MIN(lower.size.height / 430.0, lower.size.width / 700.0), 1.3);
-    CGPoint stickCenter = CGPointMake(CGRectGetMinX(lower) + 0.25 * lower.size.width,
-                                      CGRectGetMinY(lower) + 0.45 * lower.size.height);
-    CGPoint faceCenter = CGPointMake(CGRectGetMinX(lower) + 0.75 * lower.size.width, stickCenter.y);
+    CGPoint stickCenter = CGPointMake(CGRectGetMinX(lower) + 0.375 * lower.size.width,
+                                      CGRectGetMinY(lower) + 0.50 * lower.size.height);
+    CGPoint faceCenter = CGPointMake(CGRectGetMinX(lower) + 0.625 * lower.size.width, stickCenter.y);
     CGRect stickRing = [self largestShapePathBoundsInLayer:pad.layer];
     XCTAssertEqualWithAccuracy(CGRectGetMidX(stickRing), stickCenter.x, 0.5,
                                @"In 2D, the left stick itself occupies the left column's upper row");
@@ -458,7 +458,7 @@ static BOOL gDuoHarnessReduceMotionEnabled;
                          @"A touch at the visible 2D stick must drive the left-stick mapping");
     [self endTouches:@[stick] onPad:pad cancelled:NO];
 
-    CGPoint hiddenDpad = CGPointMake(stickCenter.x + 0.6 * 48 * u, CGRectGetMinY(lower) + 0.80 * lower.size.height);
+    CGPoint hiddenDpad = CGPointMake(stickCenter.x + 0.6 * 48 * u, CGRectGetMinY(lower) + 0.875 * lower.size.height);
     DuoFakeTouch *dpad = [self touchAt:hiddenDpad time:2];
     [self beginTouches:@[dpad] onPad:pad];
     XCTAssertEqual(duo_harness_input().buttons & DM_BTN_RIGHT, 0,
@@ -473,10 +473,10 @@ static BOOL gDuoHarnessReduceMotionEnabled;
     UIView *pad = [self padForLayout:layout bounds:bounds];
     CGRect lower = layout.controls;
     CGFloat u = MIN(MIN(lower.size.height / 430.0, lower.size.width / 700.0), 1.3);
-    CGPoint stickCenter = CGPointMake(CGRectGetMinX(lower) + 0.25 * lower.size.width,
-                                      CGRectGetMinY(lower) + 0.45 * lower.size.height);
-    CGPoint dpadCenter = CGPointMake(stickCenter.x, CGRectGetMinY(lower) + 0.80 * lower.size.height);
-    CGPoint faceA = CGPointMake(CGRectGetMinX(lower) + 0.75 * lower.size.width + 50 * u, stickCenter.y);
+    CGPoint stickCenter = CGPointMake(CGRectGetMinX(lower) + 0.375 * lower.size.width,
+                                      CGRectGetMinY(lower) + 0.50 * lower.size.height);
+    CGPoint dpadCenter = CGPointMake(stickCenter.x, CGRectGetMinY(lower) + 0.875 * lower.size.height);
+    CGPoint faceA = CGPointMake(CGRectGetMinX(lower) + 0.625 * lower.size.width + 50 * u, stickCenter.y);
     CGPoint video = CGPointMake(CGRectGetMidX(layout.game), CGRectGetMidY(layout.game));
     DuoFakeTouch *stick = [self touchAt:stickCenter time:1];
     DuoFakeTouch *right = [self touchAt:CGPointMake(dpadCenter.x + 0.6 * 48 * u, dpadCenter.y) time:1];
@@ -1254,8 +1254,8 @@ static BOOL gDuoHarnessReduceMotionEnabled;
     CGRect safe = CGRectIntersection(layout.controls, UIEdgeInsetsInsetRect(bounds, UIEdgeInsetsZero));
     CGFloat u = layout.separated ? MIN(MIN(safe.size.height / 430.0, safe.size.width / 700.0), 1.3) : MIN(bounds.size.height / 430.0, 1.3);
     if (layout.separated && bounds.size.height > bounds.size.width) {
-        CGPoint faceCenter = CGPointMake(CGRectGetMinX(safe) + 0.75 * safe.size.width,
-                                         CGRectGetMinY(safe) + 0.45 * safe.size.height);
+        CGPoint faceCenter = CGPointMake(CGRectGetMinX(safe) + 0.625 * safe.size.width,
+                                         CGRectGetMinY(safe) + 0.50 * safe.size.height);
         return CGPointMake(faceCenter.x + 50 * u, faceCenter.y);
     }
     return CGPointMake(CGRectGetMaxX(safe) - 81 * u + 50 * u, CGRectGetMaxY(safe) - 82 * u);

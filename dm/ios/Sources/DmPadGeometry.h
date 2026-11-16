@@ -108,8 +108,8 @@ static inline DmPadGeo dm_pad_geo_at(CGRect bounds, UIEdgeInsets insets, DmLayou
     if (g.portrait) {
         // Two columns, with each thumb's pair at a fixed height of the band: the stick and the diamond sit together just below the middle,
         // the D-pad and the right stick together near the bottom, leaving the top of the band clear for the panel.
-        CGFloat xl = CGRectGetMinX(s) + s.size.width * 0.25, xr = CGRectGetMinX(s) + s.size.width * 0.75;
-        CGFloat yTop = CGRectGetMinY(s) + s.size.height * 0.45, yLow = CGRectGetMinY(s) + s.size.height * 0.80;
+        CGFloat xl = CGRectGetMinX(s) + s.size.width * 0.375, xr = CGRectGetMinX(s) + s.size.width * 0.625;
+        CGFloat yTop = CGRectGetMinY(s) + s.size.height * 0.50, yLow = CGRectGetMinY(s) + s.size.height * 0.875;
         g.stick = CGPointMake(xl, yTop);
         g.face = CGPointMake(xr, yTop);
         g.dpad = CGPointMake(xl, yLow);
