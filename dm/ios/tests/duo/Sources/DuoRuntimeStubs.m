@@ -115,6 +115,13 @@ const struct dm_profile *dm_profile(void) {
     return &profile;
 }
 
+// The harness links front_ios.m but no SwiftUI companion: the production root still asks for the band's view, and an empty one stands in for it.
+void dm_companion_host_ready(void) {}
+void *dm_companion_view_controller(void) {
+    UIViewController *vc = [UIViewController new];
+    vc.view.backgroundColor = UIColor.clearColor;
+    return (__bridge_retained void *)vc;
+}
 int front_ios_boot_ok(void) { return 1; }
 void front_ios_boot(void) {}
 bool dm_show_launcher(void *viewController, void (*done)(void)) { (void)viewController; (void)done; return false; }

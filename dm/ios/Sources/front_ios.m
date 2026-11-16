@@ -94,9 +94,13 @@ static void tv_attach(void);
 @property (strong, nonatomic) UIWindow *window;
 @end
 
+// SwiftUI's companion (ACNHCompanion.swift): a hosting controller for the game's data-driven interface. NULL in a build without a companion.
+extern void *dm_companion_view_controller(void);
+
 @interface DmRootVC : UIViewController
 @property (nonatomic, strong) DmGameView *game;
 @property (nonatomic, strong) UIView *companion;   // under the pad, in the band a split gives it (DmLayout.h dm_layout): what the game's own screens cannot show there
+@property (nonatomic, strong) UIViewController *companionVC;   // owns the SwiftUI companion; the view alone would let the controller go
 @property (nonatomic, strong) UIView *pad;
 @property (nonatomic, strong) UILabel *fps;
 @property (nonatomic) BOOL launched;
@@ -201,11 +205,13 @@ static void launcher_done(void) { [g_root startGame]; }
     if (getenv("DM_METAL_HUD") && atoi(getenv("DM_METAL_HUD"))) { g_layer.developerHUDProperties = @{@"mode": @"default"}; LOG("front end: Metal performance HUD on (DM_METAL_HUD)"); }   // Apple's HUD over the game: frame rate, frame and GPU time, memory
     else if (getenv("DM_HUD_PER_LAYER")) { g_layer.developerHUDProperties = @{@"mode": @"disabled"}; LOG("front end: Metal performance HUD off (DM_METAL_HUD)"); }   // the shell turns Metal's HUD on for every start (ShellMain.m)
     dm_haptics_apple_init();
-    // The band under the picture in a split (DmLayout.h dm_layout companion): the pad floats over it, so only what no key covers is seen. Hidden while there is no
-    // split: the picture takes the whole view and the pad's own background is all there is. Touches go through it to the pad, which owns the band's hit testing
-    self.companion = [[UIView alloc] initWithFrame:CGRectZero];
+    // The band under the picture in a split (DmLayout.h dm_layout companion): the SwiftUI companion's view, with the pad floating over it. Hidden while
+    // there is no split: the picture takes the whole view and the pad's own background is all there is. The companion takes its own touches; the pad keeps
+    // the ones that land on a key (DmGamepad.m hitTest). A game without a companion answers NULL and keeps the empty placeholder.
+    UIViewController *companionVC = (__bridge_transfer UIViewController *)dm_companion_view_controller();
+    self.companionVC = companionVC;
+    self.companion = companionVC ? companionVC.view : [[UIView alloc] initWithFrame:CGRectZero];
     self.companion.backgroundColor = [UIColor colorWithWhite:0.07 alpha:1];
-    self.companion.userInteractionEnabled = NO;
     self.companion.hidden = YES;
     [self.view addSubview:self.companion];
     self.pad = dm_gamepad_view(self.view.bounds);
@@ -521,7 +527,11 @@ void front_program_handoff(int index, const char *name) {   // front.h; on the g
     else if (err) LOG("[RED] front end: the notification for program %d could not be scheduled: %s", index, err.localizedDescription.UTF8String);
     else LOG("front end: \"Starting %s\" shown, notification for program %d scheduled", nm.UTF8String, index);
 }
-void front_run(void (*guest)(void)) { guest(); }   // Already on main.m's big-stack thread
+void front_run(void (*guest)(void)) {   // Already on main.m's big-stack thread
+    void dm_companion_host_ready(void);
+    dm_companion_host_ready();   // the guest modules are loaded: the companion reader can now answer main's base, size and build ID
+    guest();
+}
 
 // Software keyboard: show a UIAlertController on the main thread, the calling thread waits for the result
 int front_text_input(const char *title, const char *sub, const char *guide, const char *initial, int max_chars, char *out, int out_cap) {

@@ -211,6 +211,20 @@ else [ "$GFXAPI" != nvn ] || t "no pipeline archive ($([ -n "${DM_PSO_GPUS+set}"
 # The packed language (DMLanguage) is the Game language row's default, which settings.py makes the game's first language when it lacks DM_LANG: the screen and DM_LAUNCHER=0 then agree
 LD=$(python3 -c 'import json, sys; print(next((s["default"] for s in json.load(open(sys.argv[1]))["settings"] if s["env"] == "DM_LANG"), ""))' $LJ) || die "launcher settings ($LJ)"
 if [ -n "$LD" ] && [ "$LD" != "$DM_LANG" ]; then t "game language: the game has no $DM_LANG; packing $LD, its first"; export DM_LANG=$LD; fi
+# A profile's companion.json opts the game into the Eden Duo companion: the data-driven interface manifest and its authored MSBT strings are bundled as
+# dm/companion-ui.json, the module's build-ID and input-gate configuration as dm/companion.json, and the component licenses beside it (a build that includes
+# the companion is distributed under GPL-3.0-or-later, with its notices). Games without the file pack no companion and link none.
+if [ -f "$GD/companion.json" ]; then
+  cp "$GD/companion.json" Gen/dm/companion.json || die "copy companion profile"
+  python3 "$IOS/tools/gen_companion.py" "$DM/third_party/eden_duo/acnh" Gen/dm/companion-ui.json || die "generate companion interface"
+  cp "$DM/third_party/eden_duo/LICENSE-GPL-3.0.txt" Gen/dm/companion-license.txt || die "copy companion license"
+  mkdir -p Gen/dm/companion-licenses || die "make companion notices directory"
+  cp "$DM"/third_party/eden_duo/LICENSE-*.txt "$DM/third_party/eden_duo/NOTICES.txt" "$DM/third_party/eden_duo/UPSTREAM.json" Gen/dm/companion-licenses/ || die "copy companion notices"
+  cp "$DM/third_party/zstd/LICENSE" Gen/dm/companion-licenses/LICENSE-ZSTD.txt || die "copy Zstandard license"
+  # Swift compiles the companion renderer only for this game: the other games' apps link no DMCompanion and would fail on the Swift reference.
+  echo "SWIFT_ACTIVE_COMPILATION_CONDITIONS = \$(inherited) DM_COMPANION" >> Gen/dm.xcconfig
+  t "companion: interface, profile and licenses bundled"
+fi
 # Diagnostic build: DM_ENV_FILE=file → dm/env.txt in the bundle (main.m sets one environment variable per line at boot)
 if [ -n "${DM_ENV_FILE:-}" ]; then cp "$DM_ENV_FILE" Gen/dm/env.txt || die "copy DM_ENV_FILE"; t "env: $(grep -v '^#' "$DM_ENV_FILE" | tr '\n' ' ')"; fi
 # The shader libraries go into the archive as DmIOS.app/msl/<folder>, or an NVN game's as the file DmIOS.app/msl/<folder>.img (main.m sets DM_MSL_DIR to msl)

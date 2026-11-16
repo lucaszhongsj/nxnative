@@ -375,6 +375,23 @@ static BOOL gDuoHarnessReduceMotionEnabled;
     XCTAssertEqual(dm_opmode(), 1, @"Lying down keeps the player's docked pick, not the handheld it replaced");
 }
 
+- (void)testSplitPadPassesACompanionTapThroughToTheBand {
+    // A tap on no key inside the band goes to the companion's view below (tabs, item slots); a tap on a key or on the picture stays with the pad.
+    CGRect bounds = CGRectMake(0, 0, 390, 844);
+    DmLayout layout = dm_layout(bounds, UIEdgeInsetsMake(59, 0, 34, 0), NO, CGRectNull, DM_PICTURE_16_9);
+    UIView *pad = [self padForLayout:layout bounds:bounds];
+    CGPoint minus = [self controlCenterNamed:@"−" inPad:pad];
+    XCTAssertEqual([pad hitTest:minus withEvent:nil], pad, @"A key still belongs to the pad");
+    // The band's middle-left is clear of the top menu pill, the thumb groups at 0.58 down and the right-stick area: it must pass through
+    CGPoint clear = CGPointMake(CGRectGetMinX(layout.companion) + 12, CGRectGetMidY(layout.companion));
+    XCTAssertTrue(CGRectContainsPoint(layout.controls, clear));
+    XCTAssertNil([pad hitTest:clear withEvent:nil], @"No key there: the companion below receives the tap");
+    // Landscape has no band: the pad keeps the whole view
+    DmLayout overlay = dm_layout(CGRectMake(0, 0, 844, 390), UIEdgeInsetsZero, NO, CGRectNull, DM_PICTURE_16_9);
+    UIView *landscapePad = [self padForLayout:overlay bounds:CGRectMake(0, 0, 844, 390)];
+    XCTAssertEqual([landscapePad hitTest:CGPointMake(8, 8) withEvent:nil], landscapePad, @"With no split the pad owns the view");
+}
+
 - (void)testProductionRootPutsThePanelUnderThePadAndOutOfItsWay {
     UIViewController *root = [self harnessRootViewController];
     UIView *pad = [root valueForKey:@"pad"];
@@ -385,8 +402,8 @@ static BOOL gDuoHarnessReduceMotionEnabled;
     NSInteger padIndex = [root.view.subviews indexOfObjectIdenticalTo:pad];
     NSInteger panelIndex = [root.view.subviews indexOfObjectIdenticalTo:companion];
     XCTAssertGreaterThan(padIndex, panelIndex, @"The pad is added after the panel, so it floats over it");
-    // The panel takes no touch of its own: the pad owns the band's hit testing (a touch on no key falls through, as before)
-    XCTAssertFalse(companion.isUserInteractionEnabled);
+    // The pad floats over the panel and passes through a tap on no key: the companion's own tabs and item slots then receive it (DmGamepad.m hitTest)
+    XCTAssertTrue(companion.isUserInteractionEnabled);
     [root.view layoutIfNeeded];
     BOOL portrait = root.view.bounds.size.height > root.view.bounds.size.width;
     XCTAssertEqual(companion.hidden, !portrait, @"The panel is shown only where a split gives it a band");
