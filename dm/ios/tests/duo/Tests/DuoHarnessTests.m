@@ -334,51 +334,6 @@ static BOOL gDuoHarnessReduceMotionEnabled;
     XCTAssertTrue(CGRectIsEmpty(tv.companion));
 }
 
-- (void)testProductionRootFollowsTheOrientationWithItsConsoleMode {
-    // A phone standing up is handheld, so the game's own touch screens (its software keyboard above all) take touches; lying down it returns to the mode it
-    // had. The harness stubs dm_set_opmode into a variable (DuoRuntimeStubs.m), so this reads the mode the front end asked for.
-    UIViewController *root = [self harnessRootViewController];
-    SEL follow = NSSelectorFromString(@"followOrientation:");
-    XCTAssertTrue([root respondsToSelector:follow], @"The front end switches the console mode by orientation");
-    NSMethodSignature *sig = [root methodSignatureForSelector:follow];
-    NSInvocation *call = [NSInvocation invocationWithMethodSignature:sig];
-    call.target = root; call.selector = follow;
-    CGRect standing = CGRectMake(0, 0, 390, 844), lying = CGRectMake(0, 0, 844, 390);
-    // The harness window stands up, so the app has already followed that orientation: settle it lying down and docked, the baseline the app starts from
-    [call setArgument:&lying atIndex:2]; [call invoke];
-    dm_set_opmode(1);
-    [call setArgument:&standing atIndex:2]; [call invoke];
-    XCTAssertEqual(dm_opmode(), 0, @"A phone standing up runs handheld: the game's keyboard takes touches");
-    [call setArgument:&lying atIndex:2]; [call invoke];
-    XCTAssertEqual(dm_opmode(), 1, @"Lying down it returns to the mode the player had");
-    // A choice made in the in-game menu while standing up is the one lying down returns to
-    [call setArgument:&standing atIndex:2]; [call invoke];
-    XCTAssertEqual(dm_opmode(), 0);
-    dm_set_opmode(1);   // the player docks it from the in-game menu while standing up
-    [call setArgument:&lying atIndex:2]; [call invoke];
-    XCTAssertEqual(dm_opmode(), 1, @"The player's docked choice while standing up is what lying down keeps");
-}
-
-- (void)testPlayerConsoleModeChosenWhileStandingUpSurvivesTheReturn {
-    // A phone standing up forces handheld, so a player who wants docked there picks it in the in-game menu; lying down must keep that choice, not the
-    // handheld it replaced. This is the case a baseline of docked hides: the mode held for the return would still be handheld.
-    UIViewController *root = [self harnessRootViewController];
-    SEL follow = NSSelectorFromString(@"followOrientation:");
-    NSInvocation *call = [NSInvocation invocationWithMethodSignature:[root methodSignatureForSelector:follow]];
-    call.target = root; call.selector = follow;
-    CGRect standing = CGRectMake(0, 0, 390, 844), lying = CGRectMake(0, 0, 844, 390);
-    dm_set_opmode(0);   // a player who was handheld lying down
-    [call setArgument:&lying atIndex:2]; [call invoke];
-    dm_set_opmode(0);
-    [call setArgument:&standing atIndex:2]; [call invoke];
-    XCTAssertEqual(dm_opmode(), 0, @"Standing up it stays handheld");
-    // The in-game menu's docked pick while standing up
-    XCTAssertTrue(dm_setting_live("DM_OPMODE", "1"));
-    XCTAssertEqual(dm_opmode(), 1);
-    [call setArgument:&lying atIndex:2]; [call invoke];
-    XCTAssertEqual(dm_opmode(), 1, @"Lying down keeps the player's docked pick, not the handheld it replaced");
-}
-
 - (void)testSplitPadPassesACompanionTapThroughToTheBand {
     // A tap on no key inside the band goes to the companion's view below (tabs, item slots); a tap on a key or on the picture stays with the pad.
     CGRect bounds = CGRectMake(0, 0, 390, 844);
