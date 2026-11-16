@@ -230,7 +230,7 @@ if [ -f "$GD/companion.json" ]; then
   python3 "$IOS/tools/gen_companion.py" "$DM/third_party/eden_duo/$UI" Gen/dm/companion-ui.json || die "generate companion interface"
   cp "$DM/third_party/eden_duo/LICENSE-GPL-3.0.txt" Gen/dm/companion-license.txt || die "copy companion license"
   mkdir -p Gen/dm/companion-licenses || die "make companion notices directory"
-  cp "$DM"/third_party/eden_duo/LICENSE-*.txt "$DM/third_party/eden_duo/NOTICES.txt" "$DM/third_party/eden_duo/UPSTREAM.json" Gen/dm/companion-licenses/ || die "copy companion notices"
+  cp "$DM"/third_party/eden_duo/LICENSE-*.txt "$DM/third_party/eden_duo/NOTICES.txt" "$DM/third_party/eden_duo/NOTICES-nxnative.md" "$DM/third_party/eden_duo/UPSTREAM.json" Gen/dm/companion-licenses/ || die "copy companion notices"
   cp "$DM/third_party/zstd/LICENSE" Gen/dm/companion-licenses/LICENSE-ZSTD.txt || die "copy Zstandard license"
   echo "GCC_PREPROCESSOR_DEFINITIONS = \$(inherited) DM_COMPANION=1" >> Gen/dm.xcconfig   # front_ios.m calls the companion's view controller only under it
   t "companion: interface, profile and licenses bundled"

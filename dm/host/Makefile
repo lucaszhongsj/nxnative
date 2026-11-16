@@ -64,6 +64,10 @@ COMPANION_CXX_SRC = companion_apple.mm $(COMPANION_CXX)
 COMPANION_C_SRC = $(COMPANION_C)
 COMPANION_SRC = $(COMPANION_CXX_SRC) $(COMPANION_C_SRC)
 COMPANION_OBJ = $(foreach s,$(COMPANION_SRC),$(COMPANION_DIR)/$(notdir $(basename $(s))).o)
+# Object names are flattened to one directory, so two sources with the same base name would silently share (and overwrite) one object.
+ifneq ($(words $(COMPANION_OBJ)),$(words $(sort $(COMPANION_OBJ))))
+$(error two companion sources share a base name: $(COMPANION_OBJ))
+endif
 COMPANION_LIB = $(COMPANION_DIR)/libcompanion.a
 COMPANION_DEFS = -DDM_HAS_COMPANION=1 -DZSTD_DISABLE_ASM=1 -DZSTD_LEGACY_SUPPORT=0
 # One rule per source: a pattern rule cannot reach zstd's common/ and decompress/ subdirectories from a single % step.
