@@ -344,16 +344,19 @@ static BOOL gDuoHarnessReduceMotionEnabled;
     XCTAssertTrue(CGRectContainsPoint(layout.companion, clear) && CGRectContainsPoint(layout.controls, clear),
                   @"The pad floats over the whole band: clear %@, companion %@, controls %@", NSStringFromCGPoint(clear), NSStringFromCGRect(layout.companion), NSStringFromCGRect(layout.controls));
     XCTAssertEqual([pad hitTest:clear withEvent:nil], pad, @"3D: a clear point stays with the pad, the panel is not tappable");
-    // Tap hides the pad: the same point goes through to the panel
+    // Tap hides the pad over the panel: the panel takes its own touches there
     [pad setValue:@YES forKey:@"tap"];
-    XCTAssertNil([pad hitTest:clear withEvent:nil], @"Tap: the pad is hidden, the panel below receives the tap");
+    XCTAssertNil([pad hitTest:clear withEvent:nil], @"Tap: the panel below receives the tap");
+    // Tap keeps the picture's touches: the pad forwards them to the game's touch screen, its only input in this layout
+    CGPoint picture = CGPointMake(CGRectGetMidX(layout.game), CGRectGetMidY(layout.game));
+    XCTAssertEqual([pad hitTest:picture withEvent:nil], pad, @"Tap: a picture touch stays with the pad for the game");
     [pad setValue:@NO forKey:@"tap"];
-    // Landscape has no band: the 3D pad keeps the whole view, the Tap pad passes it on
+    // Landscape has no band: the pad keeps the whole view in both layouts so the game keeps its touches
     DmLayout overlay = dm_layout(CGRectMake(0, 0, 844, 390), UIEdgeInsetsZero, NO, CGRectNull, DM_PICTURE_16_9);
     UIView *landscapePad = [self padForLayout:overlay bounds:CGRectMake(0, 0, 844, 390)];
     XCTAssertEqual([landscapePad hitTest:CGPointMake(8, 8) withEvent:nil], landscapePad, @"3D: with no split the pad owns the view");
     [landscapePad setValue:@YES forKey:@"tap"];
-    XCTAssertNil([landscapePad hitTest:CGPointMake(8, 8) withEvent:nil], @"Tap: the landscape pad passes the tap on");
+    XCTAssertEqual([landscapePad hitTest:CGPointMake(8, 8) withEvent:nil], landscapePad, @"Tap: the pad keeps landscape touches for the game");
 }
 
 - (void)testProductionRootPutsThePanelUnderThePadAndOutOfItsWay {

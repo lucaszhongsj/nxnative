@@ -451,7 +451,8 @@ int front_web_touch(void);
         if (_padOff && !_layout.onTV && e && e.type == UIEventTypeTouches) [self wakeMenu];
         return nil;
     }
-    if (_tap) return nil;   // Tap hides the pad: every touch goes to the game or the panel, so the panel is tappable here
+    if (_tap && _layout.separated && CGRectContainsPoint(_layout.companion, p)) return nil;   // Tap: the hidden pad lets the panel take its own touches
+    // Tap keeps the picture's touches: the pad forwards them to the game's touch screen, its only input in that layout.
     if (_layout.separated && CGRectContainsPoint(_layout.controls, p)) return self;   // 3D owns the whole band: the panel below is not tappable
     return v;
 }
