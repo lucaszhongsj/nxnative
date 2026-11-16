@@ -106,13 +106,13 @@ static inline DmPadGeo dm_pad_geo_at(CGRect bounds, UIEdgeInsets insets, DmLayou
     g.stickR = DM_PAD_STICK_R * u; g.knobR = DM_PAD_KNOB_R * u;
     g.dpadR = DM_PAD_DPAD_R * u; g.armW = DM_PAD_ARM_W * u; g.armIn = DM_PAD_ARM_IN * u;
     if (g.portrait) {
-        // Two columns of two, mirrored about the band's middle: each thumb owns half the band, the stick above the keys on the left and the
-        // diamond above the right stick on the right, so neither column is squeezed against the other.
+        // Two columns, with each thumb's pair at a fixed height of the band: the stick and the diamond sit together just below the middle,
+        // the D-pad and the right stick together near the bottom, leaving the top of the band clear for the panel.
         CGFloat xl = CGRectGetMinX(s) + s.size.width * 0.25, xr = CGRectGetMinX(s) + s.size.width * 0.75;
-        CGFloat yTop = CGRectGetMinY(s) + s.size.height * 0.30, yLow = CGRectGetMinY(s) + s.size.height * 0.72;
+        CGFloat yTop = CGRectGetMinY(s) + s.size.height * 0.45, yLow = CGRectGetMinY(s) + s.size.height * 0.80;
         g.stick = CGPointMake(xl, yTop);
-        g.dpad = CGPointMake(xl, yLow);
         g.face = CGPointMake(xr, yTop);
+        g.dpad = CGPointMake(xl, yLow);
         g.rstick = CGPointMake(xr, yLow); g.rstickR = g.stickR; g.rstickDrawn = YES;
     } else {
         CGFloat edge = sep ? g.faceGap + g.faceHitR : 0;

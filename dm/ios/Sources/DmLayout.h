@@ -42,10 +42,10 @@ static inline CGRect dm_aspect_fill(CGRect b, CGFloat aspect) {
 static inline BOOL dm_picture_fill(const char *_Nullable value) { return value && !strcmp(value, "fill"); }   // DM_PICTURE_FIT: fit (default) or fill
 
 // Picture shape "auto" (the launcher's Match screen): the window's own shape when it is taller than 16:9 (an iPad's 4:3, an unfolded iPhone Duo's 1.43:1) or
-// wider (a 19.5:9 phone lying down at 2.17:1), else 16:9. A phone standing up takes the shape of half the window: the picture fills the upper 50% of the
-// screen without cropping, the panel the lower 50%. The range is loader.c's (0.9 to 2.4). 0 = 16:9.
-static inline float dm_picture_shape_auto(CGSize window) {
-    double r = window.height > window.width ? window.width / MAX(window.height * 0.5, 1)
+// wider (a 19.5:9 phone lying down at 2.17:1), else 16:9. A phone standing up takes the shape of the band above the panel: half the window less the
+// safe area's top (the Dynamic Island), so the picture fills that band without cropping. The range is loader.c's (0.9 to 2.4). 0 = 16:9.
+static inline float dm_picture_shape_auto(CGSize window, CGFloat topInset) {
+    double r = window.height > window.width ? window.width / MAX((window.height - topInset) * 0.5, 1)
                                             : MAX(window.width, window.height) / MAX(MIN(window.width, window.height), 1);
     return r >= 0.9 && r < 2.4 ? (float)r : 0.0f;
 }
@@ -72,10 +72,12 @@ static inline DmLayout dm_layout(CGRect b, UIEdgeInsets insets, BOOL partiallyOp
     // is computed for that half at launch (dm_picture_shape_auto), so it fills the upper rectangle without bars. A fold sets both edges within the safe area.
     BOOL folded = !CGRectIsNull(division);
     CGRect safe = UIEdgeInsetsInsetRect(b, insets);
-    CGFloat upperBottom = folded ? CGRectGetMinY(division) : CGRectGetMidY(b);
+    // A standing phone splits the area below the safe top (the Dynamic Island) in half: the picture takes the upper half of that area,
+    // the panel the lower half. Both are equal, and neither reaches into the island.
+    CGFloat upperBottom = folded ? CGRectGetMinY(division)
+                                 : CGRectGetMinY(safe) + (CGRectGetMaxY(b) - CGRectGetMinY(safe)) * 0.5;
     CGFloat bandTop = folded ? CGRectGetMaxY(division) : upperBottom;
-    CGRect upper = folded ? CGRectMake(CGRectGetMinX(safe), CGRectGetMinY(safe), safe.size.width, upperBottom - CGRectGetMinY(safe))
-                          : CGRectMake(CGRectGetMinX(b), CGRectGetMinY(b), b.size.width, upperBottom - CGRectGetMinY(b));
+    CGRect upper = CGRectMake(CGRectGetMinX(safe), CGRectGetMinY(safe), safe.size.width, upperBottom - CGRectGetMinY(safe));
     CGRect lower = CGRectMake(CGRectGetMinX(b), bandTop, b.size.width, CGRectGetMaxY(b) - bandTop);
     if (upper.size.height <= 0) return l;
     l.game = dm_aspect_fit(upper, aspect); l.companion = lower; l.controls = lower; l.separated = YES;

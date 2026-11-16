@@ -202,9 +202,10 @@ static void launcher_done(void) { [g_root startGame]; }
             BOOL handheld = dm_opmode() == 0;
             if (handheld && sz.width > sz.height) sz = CGSizeMake(sz.height, sz.width);   // the picture's band is the short side x half the long side
             if (!handheld && sz.width < sz.height) sz = CGSizeMake(sz.height, sz.width);
-            float r = dm_picture_shape_auto(sz);
+            CGFloat topInset = handheld ? self.view.safeAreaInsets.top : 0;
+            float r = dm_picture_shape_auto(sz, topInset);
             char v[16]; if (r > 0) snprintf(v, sizeof v, "%.3f", r); else strcpy(v, "0");
-            setenv("DM_SCREEN_ASPECT", v, 1); LOG("front end: picture shape auto: screen %.0fx%.0f points (%s) → DM_SCREEN_ASPECT=%s", sz.width, sz.height, handheld ? "handheld" : "docked", v);
+            setenv("DM_SCREEN_ASPECT", v, 1); LOG("front end: picture shape auto: screen %.0fx%.0f points (%s, top inset %.0f) → DM_SCREEN_ASPECT=%s", sz.width, sz.height, handheld ? "handheld" : "docked", topInset, v);
         }
     }
     self.fill = dm_picture_fill(getenv("DM_PICTURE_FIT"));
