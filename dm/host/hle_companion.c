@@ -63,11 +63,24 @@ typedef struct { companion_store ops[32]; uint32_t count; } companion_batch;
 
 static int apply_batch(void *context) {
     companion_batch *b = context;
-    // Every byte was checked readable and unchanged below, while the guest threads are suspended by dm_guest_transaction.
+    // The guest threads are suspended here: re-read each target and compare it with the value the caller expected, so a change
+    // between the early check in dm_companion_guest_write_batch and this point is refused rather than overwritten. The readability
+    // test is lock-free (hle_svc.c), so it cannot deadlock on a suspended guest thread that holds the mapping lock; the heap cannot
+    // be resized while the guest is stopped.
+    // Every target is checked before any is written: a refused batch leaves the heap untouched, as the batch is all-or-nothing.
+    // The caller refuses overlapping ranges, so the checks still hold while the second pass writes.
     for (uint32_t i = 0; i < b->count; i++) {
         companion_store *p = &b->ops[i];
-        volatile uint8_t *out = (volatile uint8_t *)(uintptr_t)p->address;
-        for (uint32_t j = 0; j < p->size; j++) out[j] = p->value[j];
+        uint8_t *out = (uint8_t *)(uintptr_t)p->address;
+        if (!dm_guest_heap_readable(p->address, p->size)) return 0;
+        memcpy(p->before, out, p->size);
+        if (memcmp(p->before, p->expect, p->size)) return 0;
+    }
+    for (uint32_t i = 0; i < b->count; i++) {
+        companion_store *p = &b->ops[i];
+        uint8_t *out = (uint8_t *)(uintptr_t)p->address;
+        dm_guest_write_prepare(out, p->size);
+        memcpy(out, p->value, p->size);
     }
     return 1;
 }
