@@ -109,9 +109,6 @@ void dm_companion_ui_dock_insets(double left, double right, double bottom);   //
 @property (nonatomic, strong) UIView *pad;
 @property (nonatomic, strong) UILabel *fps;
 @property (nonatomic) BOOL launched;
-@property (nonatomic) BOOL modeChosen;            // the first layout pass took the console mode; a turn takes it again
-@property (nonatomic) BOOL lastStanding;             // the phone's orientation at that pass, so only a turn takes the mode
-@property (nonatomic) NSInteger profileMode;         // the console mode the profile starts with, which lying down returns to
 @property (nonatomic, strong) id tv;   // the TV scene accessory's registration (iOS 27)
 @property (nonatomic) BOOL fill;   // DM_PICTURE_FIT=fill: in landscape the picture covers the screen, its edges cropped (DmLayout.h dm_layout_picture)
 @property (nonatomic) BOOL partiallyOpen;   // an iPhone Duo's hinge half open (UIHingeInteraction, iOS 27.1)
@@ -201,13 +198,12 @@ static void launcher_done(void) { [g_root startGame]; }
             // The window's bounds are still the other shape on a cold start (the scene turns after this call). Use the screen's physical size and put its
             // edges in the order the scene's orientation says, so a phone launched lying down resolves to its wide shape, not to 16:9.
             CGSize sz = UIScreen.mainScreen.bounds.size;
-            UIWindowScene *scene = self.view.window.windowScene;
-            BOOL portrait = scene ? UIInterfaceOrientationIsPortrait(scene.interfaceOrientation) : sz.height > sz.width;
-            if (!portrait && sz.width < sz.height) sz = CGSizeMake(sz.height, sz.width);
-            if (portrait && sz.width > sz.height) sz = CGSizeMake(sz.height, sz.width);
-            float r = dm_picture_shape_auto(sz);
+            // The console mode is the choice: handheld is the split's 16:9 picture, docked is the screen's own wide shape. Physical rotation changes nothing.
+            BOOL handheld = dm_opmode() == 0;
+            if (!handheld && sz.width < sz.height) sz = CGSizeMake(sz.height, sz.width);
+            float r = handheld ? 0 : dm_picture_shape_auto(sz);
             char v[16]; if (r > 0) snprintf(v, sizeof v, "%.3f", r); else strcpy(v, "0");
-            setenv("DM_SCREEN_ASPECT", v, 1); LOG("front end: picture shape auto: screen %.0fx%.0f points (%s) → DM_SCREEN_ASPECT=%s", sz.width, sz.height, portrait ? "upright" : "lying down", v);
+            setenv("DM_SCREEN_ASPECT", v, 1); LOG("front end: picture shape auto: screen %.0fx%.0f points (%s) → DM_SCREEN_ASPECT=%s", sz.width, sz.height, handheld ? "handheld" : "docked", v);
         }
     }
     self.fill = dm_picture_fill(getenv("DM_PICTURE_FIT"));
@@ -265,18 +261,6 @@ static UIWindow *g_tv;   // the TV scene's window while one shows the picture (t
 - (void)viewDidLayoutSubviews {
     [super viewDidLayoutSubviews];
     CGRect b = self.view.bounds; if (!self.game) return;
-    // The console mode at launch is the phone's: standing up the game's own keyboard needs the handheld mode, lying down the profile's. It is taken once, at
-    // the first layout pass; turning the phone afterwards leaves the mode alone, so the game is never switched under itself.
-    if (!g_tv && !self.modeChosen) {
-        self.modeChosen = YES;
-        self.profileMode = dm_opmode();
-        UIWindowScene *scene = self.view.window.windowScene;
-        BOOL standing = scene ? UIInterfaceOrientationIsPortrait(scene.interfaceOrientation) : b.size.height > b.size.width;
-        int want = standing ? 0 : (int)self.profileMode;
-        if (dm_opmode() != want) { dm_set_opmode(want); dm_gamepad_opmode_changed();
-            LOG("front end: console mode %s, the phone %s", standing ? "handheld" : "the profile's", standing ? "standing up" : "lying down"); }
-        LOG("front end: picture shape %.3f for the phone %s", dm_picture_shape_auto(b.size), standing ? "standing up" : "lying down");
-    }
     CGRect division = CGRectNull;   // an iPhone Duo's fold, as UIKit reports it (iOS 27.1)
     NSMutableArray<NSString *> *regionLog = [NSMutableArray array];
 #if __has_include(<UIKit/UIHingeInteraction.h>)
