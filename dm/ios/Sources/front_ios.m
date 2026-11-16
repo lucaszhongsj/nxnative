@@ -198,10 +198,16 @@ static void launcher_done(void) { [g_root startGame]; }
         // the controls, where a picture of its own 1.78 to 2.16:1 shape would be shorter than the 16:9 one
         const char *a = getenv("DM_SCREEN_ASPECT");
         if (a && !strcmp(a, "auto")) {
-            CGSize sz = self.view.window ? self.view.window.bounds.size : UIScreen.mainScreen.bounds.size;
+            // The window's bounds are still the other shape on a cold start (the scene turns after this call). Use the screen's physical size and put its
+            // edges in the order the scene's orientation says, so a phone launched lying down resolves to its wide shape, not to 16:9.
+            CGSize sz = UIScreen.mainScreen.bounds.size;
+            UIWindowScene *scene = self.view.window.windowScene;
+            BOOL portrait = scene ? UIInterfaceOrientationIsPortrait(scene.interfaceOrientation) : sz.height > sz.width;
+            if (!portrait && sz.width < sz.height) sz = CGSizeMake(sz.height, sz.width);
+            if (portrait && sz.width > sz.height) sz = CGSizeMake(sz.height, sz.width);
             float r = dm_picture_shape_auto(sz);
             char v[16]; if (r > 0) snprintf(v, sizeof v, "%.3f", r); else strcpy(v, "0");
-            setenv("DM_SCREEN_ASPECT", v, 1); LOG("front end: picture shape auto: window %.0fx%.0f points → DM_SCREEN_ASPECT=%s", sz.width, sz.height, v);
+            setenv("DM_SCREEN_ASPECT", v, 1); LOG("front end: picture shape auto: screen %.0fx%.0f points (%s) → DM_SCREEN_ASPECT=%s", sz.width, sz.height, portrait ? "upright" : "lying down", v);
         }
     }
     self.fill = dm_picture_fill(getenv("DM_PICTURE_FIT"));
@@ -259,22 +265,17 @@ static UIWindow *g_tv;   // the TV scene's window while one shows the picture (t
 - (void)viewDidLayoutSubviews {
     [super viewDidLayoutSubviews];
     CGRect b = self.view.bounds; if (!self.game) return;
-    // The console mode follows the phone while no TV shows the picture: standing up the game's own keyboard needs the handheld mode, lying down the one the
-    // profile starts with. Only a turn takes it, so a mode the player picks in the in-game menu stays until the phone turns again.
-    if (!g_tv) {
-        // The scene's orientation, not this view's bounds: a layout pass during the game's own start-up reports a window of the other shape for a moment,
-        // and taking that for a turn would switch the console mode under the game.
+    // The console mode at launch is the phone's: standing up the game's own keyboard needs the handheld mode, lying down the profile's. It is taken once, at
+    // the first layout pass; turning the phone afterwards leaves the mode alone, so the game is never switched under itself.
+    if (!g_tv && !self.modeChosen) {
+        self.modeChosen = YES;
+        self.profileMode = dm_opmode();
         UIWindowScene *scene = self.view.window.windowScene;
         BOOL standing = scene ? UIInterfaceOrientationIsPortrait(scene.interfaceOrientation) : b.size.height > b.size.width;
-        BOOL first = !self.modeChosen;
-        if (first) { self.modeChosen = YES; self.profileMode = dm_opmode(); }
-        if (first || self.lastStanding != standing) {
-            self.lastStanding = standing;
-            int want = standing ? 0 : (int)self.profileMode;
-            if (dm_opmode() != want) { dm_set_opmode(want); dm_gamepad_opmode_changed();
-                LOG("front end: console mode %s, the phone %s", standing ? "handheld" : "the profile's", standing ? "standing up" : "lying down"); }
-            LOG("front end: picture shape %.3f for the phone %s", dm_picture_shape_auto(b.size), standing ? "standing up" : "lying down");
-        }
+        int want = standing ? 0 : (int)self.profileMode;
+        if (dm_opmode() != want) { dm_set_opmode(want); dm_gamepad_opmode_changed();
+            LOG("front end: console mode %s, the phone %s", standing ? "handheld" : "the profile's", standing ? "standing up" : "lying down"); }
+        LOG("front end: picture shape %.3f for the phone %s", dm_picture_shape_auto(b.size), standing ? "standing up" : "lying down");
     }
     CGRect division = CGRectNull;   // an iPhone Duo's fold, as UIKit reports it (iOS 27.1)
     NSMutableArray<NSString *> *regionLog = [NSMutableArray array];
