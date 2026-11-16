@@ -41,6 +41,7 @@ typedef struct {
     BOOL portrait;                        // separated and taller than wide: both thumbs' clusters sit in the controls region's middle band
     CGPoint face; CGFloat faceGap, faceR, faceHitR;   // the A B X Y diamond: centre, key distance from it, key radius, hit radius
     CGPoint stick; CGFloat stickR, knobR;             // the left stick: ring centre and radius, knob radius
+    CGPoint rstick; CGFloat rstickR; BOOL rstickDrawn;   // the right stick: drawn in the split's two columns, the implicit right third otherwise
     CGPoint dpad; CGFloat dpadR, armW, armIn;         // the D-pad (3D only): centre, arm outer edge, arm half-width, arm tip from the centre
     CGPoint drop[4]; CGFloat dropR[4];                // ZL, L, ZR, R: teardrop centres and radii
     CGPoint click[2]; CGFloat clickR;                 // L3, R3 (3D only)
@@ -99,13 +100,20 @@ static inline DmPadGeo dm_pad_geo_at(CGRect bounds, UIEdgeInsets insets, DmLayou
     CGRect s = g.safe, c = g.corner;
     CGPoint thumbL = CGPointMake(CGRectGetMinX(s) + s.size.width * 0.28, CGRectGetMinY(s) + s.size.height * 0.58);
     CGPoint thumbR = CGPointMake(CGRectGetMinX(s) + s.size.width * 0.72, thumbL.y);
-    g.faceGap = DM_PAD_FACE_GAP * u; g.faceR = DM_PAD_FACE_R * u; g.faceHitR = MAX(g.faceR * 1.25, sep ? 22 : 0);
+    g.faceGap = DM_PAD_FACE_GAP * u; g.faceR = DM_PAD_FACE_R * u;
+    // The enlarged target never reaches past its neighbours: a key's centre then selects that key alone, while a point between two keys still presses both.
+    g.faceHitR = MIN(MAX(g.faceR * 1.25, sep ? 22 : 0), 1.2 * g.faceGap);
     g.stickR = DM_PAD_STICK_R * u; g.knobR = DM_PAD_KNOB_R * u;
     g.dpadR = DM_PAD_DPAD_R * u; g.armW = DM_PAD_ARM_W * u; g.armIn = DM_PAD_ARM_IN * u;
     if (g.portrait) {
-        g.face = thumbR;
-        g.stick = thumbL; if (full) g.stick.x -= g.dpadR + 6 * u;
-        g.dpad = CGPointMake(thumbL.x + g.stickR + 6 * u, thumbL.y);
+        // Two columns of two, mirrored about the band's middle: each thumb owns half the band, the stick above the keys on the left and the
+        // diamond above the right stick on the right, so neither column is squeezed against the other.
+        CGFloat xl = CGRectGetMinX(s) + s.size.width * 0.25, xr = CGRectGetMinX(s) + s.size.width * 0.75;
+        CGFloat yTop = CGRectGetMinY(s) + s.size.height * 0.30, yLow = CGRectGetMinY(s) + s.size.height * 0.72;
+        g.stick = CGPointMake(xl, yTop);
+        g.dpad = CGPointMake(xl, yLow);
+        g.face = CGPointMake(xr, yTop);
+        g.rstick = CGPointMake(xr, yLow); g.rstickR = g.stickR; g.rstickDrawn = YES;
     } else {
         CGFloat edge = sep ? g.faceGap + g.faceHitR : 0;
         g.face = dm_pad_side(c, 1, MAX(DM_PAD_FACE_X * u, edge), CGRectGetMaxY(c) - MAX(DM_PAD_Y * u, edge));
@@ -139,13 +147,14 @@ static inline CGPoint dm_pad_drop_tip(const DmPadGeo *g, int i) {
 
 // The drawn shapes as circles and rectangles, for the fit test and for tests: each with the rectangle it must stay inside.
 typedef struct { CGPoint c; CGFloat r; CGRect rect; BOOL isRect; CGRect within; int id; } DmPadShape;
-enum { DM_PAD_SHAPE_FACE = 0, DM_PAD_SHAPE_STICK = 4, DM_PAD_SHAPE_DPAD, DM_PAD_SHAPE_DROP, DM_PAD_SHAPE_TIP = 10, DM_PAD_SHAPE_CLICK = 14, DM_PAD_SHAPE_PILL = 16, DM_PAD_SHAPE_SWAP = 18 };
+enum { DM_PAD_SHAPE_FACE = 0, DM_PAD_SHAPE_STICK = 4, DM_PAD_SHAPE_DPAD, DM_PAD_SHAPE_DROP, DM_PAD_SHAPE_TIP = 10, DM_PAD_SHAPE_CLICK = 14, DM_PAD_SHAPE_PILL = 16, DM_PAD_SHAPE_SWAP = 18, DM_PAD_SHAPE_RSTICK = 19 };
 static inline int dm_pad_shapes(const DmPadGeo *g, BOOL full, DmPadShape out[_Nonnull 20]) {
     int n = 0;
     CGRect safe = CGRectIsNull(g->customBounds) ? g->safe : g->customBounds;
     CGRect corner = CGRectIsNull(g->customBounds) ? g->corner : g->customBounds;
     for (int i = 0; i < 4; i++) out[n++] = (DmPadShape){dm_pad_face_key(g, i), g->faceR, CGRectNull, NO, corner, DM_PAD_SHAPE_FACE + i};
     out[n++] = (DmPadShape){g->stick, g->stickR, CGRectNull, NO, corner, DM_PAD_SHAPE_STICK};
+    if (g->rstickDrawn) out[n++] = (DmPadShape){g->rstick, g->rstickR, CGRectNull, NO, corner, DM_PAD_SHAPE_RSTICK};
     if (full) out[n++] = (DmPadShape){g->dpad, hypot(g->dpadR, g->armW), CGRectNull, NO, corner, DM_PAD_SHAPE_DPAD};
     for (int i = 0; i < 4; i++) {
         out[n++] = (DmPadShape){g->drop[i], g->dropR[i], CGRectNull, NO, safe, DM_PAD_SHAPE_DROP + i};

@@ -167,7 +167,7 @@ static void pads_start(void);   // Physical controllers, below
     uint64_t _faceBits, _dpadBits, _btnBits;
     NSMapTable<UITouch *, NSNumber *> *_faceOf;    // which keys each touch on the diamond currently holds
     CAShapeLayer *_key[B_N]; CATextLayer *_label[B_N];   // one layer per key
-    CAShapeLayer *_ring, *_knob;                   // the left stick (the right one is not drawn)
+    CAShapeLayer *_ring, *_knob, *_rring, *_rknob;   // the sticks; the right one is drawn only where the geometry gives it a place (DmPadGeo.rstickDrawn)
     CALayer *_hint; CATextLayer *_hintText; NSString *_hintWords;   // the 3D layout's right-stick hint: words only, once per launch (see "The right-stick hint")
     DmMenuButton *_menu;                           // opens the in-game menu (GameMenu.swift)
     UIView *_padHint; CAShapeLayer *_padHintBg;    // controller quit hint below _menu: shown once per launch with keycap pills, fades with _menu
@@ -235,6 +235,10 @@ static BOOL fullOnly(int b) { return b == B_LS || b == B_RS || b >= B_LEFT; }   
         _knob = shape(_controls);
         CAShapeLayer *in = [CAShapeLayer layer]; in.fillColor = nil; in.strokeColor = k_line.CGColor; in.lineWidth = 1.5;   // inner ring of the knob
         [_knob addSublayer:in];
+        _rring = shape(_controls); _rring.fillColor = k_ringFill.CGColor;
+        _rknob = shape(_controls);
+        CAShapeLayer *rin = [CAShapeLayer layer]; rin.fillColor = nil; rin.strokeColor = k_line.CGColor; rin.lineWidth = 1.5;
+        [_rknob addSublayer:rin];
         static NSString *const names[B_N] = {@"A", @"B", @"X", @"Y", @"L3", @"R3", @"L", @"R", @"ZL", @"ZR", @"+", @"−"};
         for (int b = 0; b < B_N; b++) {
             _key[b] = shape(_controls);
@@ -281,6 +285,7 @@ static BOOL fullOnly(int b) { return b == B_LS || b == B_RS || b >= B_LEFT; }   
     [CATransaction begin]; [CATransaction setDisableActions:YES];
     for (int b = 0; b < B_N; b++) _key[b].hidden = _tap || (fullOnly(b) && !_full);
     _ring.hidden = _knob.hidden = _tap;
+    _rring.hidden = _rknob.hidden = _tap || !self.geo->rstickDrawn;
     [CATransaction commit];
 }
 - (int)padLayout { return _tap ? 2 : _full ? 1 : 0; }
@@ -331,9 +336,13 @@ static BOOL fullOnly(int b) { return b == B_LS || b == B_RS || b >= B_LEFT; }   
 - (CGFloat)faceHitR { return self.geo->faceHitR; }
 - (CGPoint)facePos:(int)b { return dm_pad_face_key(self.geo, b - B_A); }   // B_A..B_Y are A, B, X, Y: the geometry's order
 - (CGPoint)stickHome { return self.geo->stick; }
-- (CGPoint)stickCentre:(int)i { return i ? _rCentre : self.stickHome; }
-- (CGFloat)stickR:(int)i { return i ? K_RSTICK_R * self.u : self.geo->stickR; }
-- (BOOL)inRightArea:(CGPoint)p { CGRect b = _layout.controls; return p.x >= CGRectGetMaxX(b) - b.size.width * K_RSWIPE; }
+- (CGPoint)stickCentre:(int)i { return i ? (self.geo->rstickDrawn ? self.geo->rstick : _rCentre) : self.stickHome; }
+- (CGFloat)stickR:(int)i { return i ? (self.geo->rstickDrawn ? self.geo->rstickR : K_RSTICK_R * self.u) : self.geo->stickR; }
+// The right stick: its own circle where the split draws one, the right third of the controls otherwise (centred where the touch lands).
+- (BOOL)inRightArea:(CGPoint)p {
+    if (self.geo->rstickDrawn) return dist(p, self.geo->rstick) <= self.geo->rstickR * 1.15;
+    CGRect b = _layout.controls; return p.x >= CGRectGetMaxX(b) - b.size.width * K_RSWIPE;
+}
 - (CGPoint)dpadCenter { return self.geo->dpad; }
 - (CGFloat)dpadR { return self.geo->dpadR; }
 static BOOL isDrop(int b) { return b == B_ZL || b == B_L || b == B_ZR || b == B_R; }
@@ -355,7 +364,7 @@ static int lockedKey(int c) {   // DmPadGeometry.h's control → the key it pres
     if (_tap || _padOff || (_layout.separated && !CGRectContainsPoint(_layout.controls, p))) return YES;
     return dm_pad_menu_takes(self.geo, _full, _layout.separated, p);
 }
-- (uint64_t)faceAt:(CGPoint)p {   // keys under the finger in the diamond (between two keys both count)
+- (uint64_t)faceAt:(CGPoint)p {   // keys under the finger in the diamond (between two keys both count; the hit radius stops short of a neighbouring key's centre)
     uint64_t m = 0; CGFloat r = self.faceHitR;
     for (int b = B_A; b <= B_Y; b++) if (dist(p, [self facePos:b]) <= r) m |= 1ull << b;
     return m;
@@ -463,7 +472,7 @@ int front_web_touch(void);
         if (hit.kind == DM_PAD_HIT_KEY) { [_owner setObject:@(C_BTN | (uint64_t)lockedKey(hit.key) << 8) forKey:t]; continue; }
         if (_tap) { game |= [self gameBegin:t]; continue; }
         int kind = hit.kind == DM_PAD_HIT_FACE ? C_FACE : hit.kind == DM_PAD_HIT_DPAD ? C_DPAD : hit.kind == DM_PAD_HIT_STICK ? C_STICK : C_NONE, idx = 0;
-        if (kind == C_NONE && _full && !_stick[1] && [self inRightArea:p]) { kind = C_STICK; idx = 1; _rCentre = p; [self hideHint]; }   // the right stick: centred where the touch lands (the hint's job is done)
+        if (kind == C_NONE && _full && !_stick[1] && [self inRightArea:p]) { kind = C_STICK; idx = 1; if (!self.geo->rstickDrawn) _rCentre = p; [self hideHint]; }   // the right stick: its drawn centre, or where the touch lands in the right third
         if (kind == C_FACE) { [_owner setObject:@(C_FACE) forKey:t]; [_faceOf setObject:@([self faceAt:p]) forKey:t]; }
         else if (kind == C_DPAD) [_owner setObject:@(C_DPAD) forKey:t];
         else if (kind == C_STICK) { [_owner setObject:@(C_STICK | (uint64_t)idx << 8) forKey:t]; _stick[idx] = t; _stickNow[idx] = p; }
@@ -478,7 +487,7 @@ int front_web_touch(void);
         uint64_t v = [_owner objectForKey:t].unsignedLongLongValue; int c = (int)(v & 0xff); CGPoint p = [t locationInView:self];
         if (c == C_FACE) [_faceOf setObject:@([self faceAt:p]) forKey:t];
         else if (c == C_STICK) { _stickNow[v >> 8] = p;
-            if ((v >> 8) == 1) { CGFloat d = dist(p, _rCentre), R = [self stickR:1];   // the right stick's centre follows a finger past its radius, so turning back responds at once
+            if ((v >> 8) == 1 && !self.geo->rstickDrawn) { CGFloat d = dist(p, _rCentre), R = [self stickR:1];   // the right stick's centre follows a finger past its radius, so turning back responds at once (a drawn stick keeps its centre)
                 if (d > R) _rCentre = CGPointMake(p.x - (p.x - _rCentre.x) * R / d, p.y - (p.y - _rCentre.y) * R / d); } }
         else if (c == C_GAME) game = YES;
     }
@@ -562,6 +571,13 @@ static void placeLabel(CATextLayer *t, CGPoint c, CGFloat fs) {
     setPath(_knob, circlePath(CGPointMake(k, k), k));
     CAShapeLayer *in = (CAShapeLayer *)_knob.sublayers.firstObject; CGPathRef ip = circlePath(CGPointMake(k, k), k * 0.62);
     in.frame = _knob.bounds; in.path = ip; CGPathRelease(ip);
+    if (self.geo->rstickDrawn) {   // the split's right stick, drawn like the left one (DmPadGeometry.h)
+        setPath(_rring, circlePath(self.geo->rstick, self.geo->rstickR));
+        _rknob.bounds = _knob.bounds;
+        setPath(_rknob, circlePath(CGPointMake(k, k), k));
+        CAShapeLayer *rin = (CAShapeLayer *)_rknob.sublayers.firstObject; CGPathRef rp = circlePath(CGPointMake(k, k), k * 0.62);
+        rin.frame = _rknob.bounds; rin.path = rp; CGPathRelease(rp);
+    }
     [CATransaction commit];
     [self placeHint];
     if (!_padHint.hidden) [self placePadHint];
@@ -577,6 +593,7 @@ static void placeLabel(CATextLayer *t, CGPoint c, CGFloat fs) {
 // empty turns it off; without it the words are English.
 static BOOL g_hintShown;   // once per launch
 - (void)placeHint {
+    if (self.geo->rstickDrawn) { if (!_hint.hidden) [self hideHint]; return; }   // the stick is drawn: nothing to explain
     if (g_hintShown && _hint.hidden) return;
     if (!_full || _tap || _padOff || !_hintWords.length || CGRectIsEmpty(self.bounds)) { if (!_hint.hidden) [self hideHint]; return; }
     CGFloat u = self.u, fs = fmin(fmax(15 * u, 13), 20);
@@ -614,6 +631,8 @@ static BOOL g_hintShown;   // once per launch
         _key[b].fillColor = (on ? k_on : k_idle).CGColor; _label[b].foregroundColor = (on ? k_textOn : k_text).CGColor; }
     CGPoint h = self.stickHome, o = [self knobOffset:0];
     _knob.position = CGPointMake(h.x + o.x, h.y + o.y); _knob.fillColor = (_stick[0] ? k_on : k_idle).CGColor;
+    if (self.geo->rstickDrawn) { CGPoint rh = [self stickCentre:1], ro = [self knobOffset:1];
+        _rknob.position = CGPointMake(rh.x + ro.x, rh.y + ro.y); _rknob.fillColor = (_stick[1] ? k_on : k_idle).CGColor; }
     [CATransaction commit];
 }
 
