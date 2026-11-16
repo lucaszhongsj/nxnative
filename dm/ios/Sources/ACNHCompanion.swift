@@ -158,11 +158,29 @@ struct ACNHCompanionView: View {
 }
 
 #if os(iOS)
+@MainActor private weak var activeCompanionModel: CompanionModel?
+
+// front_ios.m: whether the band is shown, a physical controller is in use, and the pad is hidden, and the safe-area parts of the
+// band its content must avoid (home indicator, notch). The front end owns these; the renderer only reacts to them.
+@MainActor @_cdecl("dm_companion_ui_state")
+public func dmCompanionUIState(_ hidden: Int32, _ physical: Int32, _ presented: Int32) {
+    guard let model = activeCompanionModel else { return }
+    model.setPresentation(controlsHidden: hidden != 0, physicalController: physical != 0, presented: presented != 0)
+}
+
+@MainActor @_cdecl("dm_companion_ui_dock_insets")
+public func dmCompanionUIDockInsets(_ left: Double, _ right: Double, _ bottom: Double) {
+    guard let model = activeCompanionModel else { return }
+    let insets = EdgeInsets(top: 0, leading: left, bottom: bottom, trailing: right)
+    if model.dockInsets != insets { model.dockInsets = insets }
+}
+
 // The front end embeds this hosting controller's view as the band under the picture (front_ios.m), with the touch pad floating above it. It inherits the
 // game root's orientation policy; no canvas rotation is needed: the view is laid out by the root, not presented full screen.
 @MainActor @_cdecl("dm_companion_view_controller")
 public func dmCompanionViewController() -> UnsafeMutableRawPointer {
     let model = CompanionModel()
+    activeCompanionModel = model
     let controller = DmHostingController(rootView: ACNHCompanionView(model: model))
     controller.view.backgroundColor = .clear
     controller.view.clipsToBounds = true

@@ -98,6 +98,8 @@ static void tv_attach(void);
 // defines DM_COMPANION (build_ipa.sh) and compiles the renderer, so nothing refers to this symbol in the other games' apps.
 #if DM_COMPANION
 extern void *dm_companion_view_controller(void);
+void dm_companion_ui_state(int hidden, int physical, int presented);   // ACNHCompanion.swift: band shown, controller in use, pad hidden
+void dm_companion_ui_dock_insets(double left, double right, double bottom);   // the band's parts under the safe area
 #endif
 
 @interface DmRootVC : UIViewController
@@ -142,6 +144,10 @@ static void launcher_done(void) { [g_root startGame]; }
             [weakSelf hingeChanged:update.hinge];
         }]];
     }
+#endif
+#if DM_COMPANION
+    [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(appStateChanged:) name:UIApplicationWillResignActiveNotification object:nil];
+    [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(appStateChanged:) name:UIApplicationDidBecomeActiveNotification object:nil];
 #endif
     front_ios_power_watch();
     front_ios_notify_setup();
@@ -220,7 +226,13 @@ static void launcher_done(void) { [g_root startGame]; }
     self.companion = companionVC ? companionVC.view : [[UIView alloc] initWithFrame:CGRectZero];
     self.companion.backgroundColor = [UIColor colorWithWhite:0.07 alpha:1];
     self.companion.hidden = YES;
-    [self.view addSubview:self.companion];
+    if (companionVC) {   // a child, not only a subview: SwiftUI's appearance callbacks and safe-area propagation follow containment
+        [self addChildViewController:companionVC];
+        [self.view addSubview:companionVC.view];
+        [companionVC didMoveToParentViewController:self];
+    } else {
+        [self.view addSubview:self.companion];
+    }
     self.pad = dm_gamepad_view(self.view.bounds);
     self.pad.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
     [self.view addSubview:self.pad];
@@ -249,6 +261,16 @@ static UIWindow *g_tv;   // the TV scene's window while one shows the picture (t
         if (dm_opmode() != m) { dm_set_opmode(m); dm_gamepad_opmode_changed(); LOG("front end: console mode %s again, lying down", m ? "docked" : "handheld"); }
     }
 }
+#if DM_COMPANION
+- (void)appStateChanged:(NSNotification *)note {   // the panel stops sampling while the app is in the background; the band is laid out again on return
+    if (!self.companionVC) return;
+    BOOL physical = dm_gamepad_controller_connected();
+    // The notification says which transition happened: applicationState may still read Active when WillResignActive arrives.
+    BOOL active = [note.name isEqualToString:UIApplicationDidBecomeActiveNotification];
+    dm_companion_ui_state(physical, physical, active && !self.companion.hidden);
+    [self.view setNeedsLayout];
+}
+#endif
 - (void)viewDidLayoutSubviews {
     [super viewDidLayoutSubviews];
     CGRect b = self.view.bounds; if (!self.game) return;
@@ -277,6 +299,21 @@ static UIWindow *g_tv;   // the TV scene's window while one shows the picture (t
     if (@available(iOS 27.1, *)) hingeClosed = self.hingeStatus == UIHingeStatusClosed;
 #endif
     layout.customControlsFullBounds = dm_layout_custom_controls_full_bounds(b, hingeClosed);
+#if DM_COMPANION
+    if (self.companionVC) {   // the renderer follows the band's presentation (and stops sampling while it is hidden), and lays its content out of the safe area
+        BOOL physical = dm_gamepad_controller_connected();
+        BOOL presented = layout.separated && UIApplication.sharedApplication.applicationState == UIApplicationStateActive;
+        dm_companion_ui_state(physical, physical, presented);
+        if (layout.separated) {
+            CGRect safe = UIEdgeInsetsInsetRect(b, self.view.safeAreaInsets);
+            dm_companion_ui_dock_insets(MAX(0, CGRectGetMinX(safe) - CGRectGetMinX(layout.companion)),
+                                        MAX(0, CGRectGetMaxX(layout.companion) - CGRectGetMaxX(safe)),
+                                        MAX(0, CGRectGetMaxY(layout.companion) - CGRectGetMaxY(safe)));
+        } else {
+            dm_companion_ui_dock_insets(0, 0, 0);
+        }
+    }
+#endif
     NSString *line = [NSString stringWithFormat:@"%@, hinge %ld%s, divisions %@, picture %@, controls %@", onTV ? @"pad only (picture on the TV)" : layout.separated ? @"split" : self.fill ? @"overlay, Fill" : @"overlay",
                       (long)self.hingeStatus, self.partiallyOpen ? " (half open)" : "", regionLog, NSStringFromCGRect(layout.game), NSStringFromCGRect(layout.controls)];
     if (![line isEqualToString:self.layoutLog]) { self.layoutLog = line; LOG("front end: layout %s", line.UTF8String); }
