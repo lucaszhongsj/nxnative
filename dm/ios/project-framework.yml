@@ -155,6 +155,12 @@ targets:
       - path: Sources/DmGamepad.m
       - path: Sources/GameMenu.swift
       - path: Sources/LauncherSettings.swift
+      # The split's band: front_ios.m calls dm_companion_view_controller under DM_COMPANION, which only a game with
+      # companion.json defines. Gen/dm.xcconfig's EXCLUDED_SOURCE_FILE_NAMES drops the two renderer files by name in the
+      # game that has none, as it does for the app target.
+      - path: Sources/ACNHCompanion.swift
+      - path: Sources/EdenCompanion.swift
+      - path: Sources/DmHostingController.swift
       - path: Sources/CloudSaves.m
       - path: Sources/SaveSync.m
       - path: Sources/DataBookmark.m
@@ -186,7 +192,7 @@ targets:
       ENABLE_BITCODE: NO
       GCC_C_LANGUAGE_STANDARD: gnu11
       SWIFT_VERSION: "5.0"
-      OTHER_SWIFT_FLAGS: $(inherited) -Xcc -include -Xcc "$(SRCROOT)/Gen/framework/objc_namespace.h" -import-objc-header "$(SRCROOT)/Sources/DmGameMenu.h"
+      OTHER_SWIFT_FLAGS: $(inherited) -Xcc -include -Xcc "$(SRCROOT)/Gen/framework/objc_namespace.h" -import-objc-header "$(SRCROOT)/Sources/DmShellGame-Bridging-Header.h"
       OTHER_CFLAGS: $(inherited) -mcpu=apple-a18 -include "$(SRCROOT)/Gen/framework/objc_namespace.h"
       OTHER_LDFLAGS: $(inherited) -framework UIKit -framework UserNotifications -Wl,-exported_symbols_list,"$(SRCROOT)/Gen/framework/exported_symbols.txt"
       CLANG_ENABLE_OBJC_ARC: YES
