@@ -827,7 +827,7 @@ private func edenLabelKey(_ text:String,_ scale:Double,_ color:Any?)->String {
                 var nav=context;nav.clip(to:Path(layout.navArt));nav.translateBy(x:layout.navOffset.x,y:layout.navOffset.y);nav.scaleBy(x:layout.navScale,y:layout.navScale);draw(navNodes,f,&nav)
 
             }
-            .background(edenColor(manifest.root["background"],"#FFFFF1C3"))
+            .background(edenColor(manifest.root["background"],"#FF000000"))
             .contentShape(layout.touchShape)
             .gesture(DragGesture(minimumDistance:0).updating($dragTouch){_,active,_ in active=true}.onChanged{g in
                 let inBody=layout.body.contains(g.startLocation)
