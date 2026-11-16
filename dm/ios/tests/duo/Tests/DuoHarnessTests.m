@@ -284,8 +284,8 @@ static BOOL gDuoHarnessReduceMotionEnabled;
     XCTAssertEqualWithAccuracy(dm_picture_shape_auto(CGSizeMake(744, 1133)), 1133.0 / 744.0, 0.001);
     XCTAssertEqualWithAccuracy(dm_picture_shape_auto(CGSizeMake(1032, 1376)), 1376.0 / 1032.0, 0.001, @"An unfolded Duo standing up is 3:4 by its long side");
     XCTAssertEqualWithAccuracy(dm_picture_shape_auto(CGSizeMake(1376, 1032)), 1376.0 / 1032.0, 0.001, @"An unfolded Duo lying down is 4:3");
-    // A window wider than 16:9 stays 16:9 until loader.c takes the wider range the screen-shape work for phones lying down needs
-    XCTAssertEqual(dm_picture_shape_auto(CGSizeMake(844, 390)), 0.0f, @"A 19.5:9 phone lying down");
+    // A window wider than 16:9 keeps its own shape: loader.c takes 1.3 to 2.4, so a phone lying down at 19.5:9 is a shape to render in
+    XCTAssertEqualWithAccuracy(dm_picture_shape_auto(CGSizeMake(844, 390)), 844.0 / 390.0, 0.001, @"A 19.5:9 phone lying down");
     XCTAssertEqualWithAccuracy(dm_picture_shape_auto(CGSizeMake(1024, 768)), 1024.0 / 768.0, 0.001, @"An iPad lying down is 4:3");
     // A square window has no shape of its own to take
     XCTAssertEqual(dm_picture_shape_auto(CGSizeMake(600, 600)), 0.0f);
@@ -1480,7 +1480,8 @@ static BOOL gDuoHarnessReduceMotionEnabled;
         XCTAssertEqual(duo_harness_state().players[0].buttons, DM_BTN_A);
         [self waitForView:menu hidden:YES];
         XCTAssertNotEqual([pad hitTest:menu.center withEvent:nil], menu, @"The gear fades out after idle seconds with a controller connected");
-        DuoFakeTouch *wake = [self touchAt:CGPointMake(CGRectGetMidX(pad.bounds), CGRectGetMidY(pad.bounds)) time:1];
+        // On the picture, not in the band under it: a split gives the band to the companion's own view (DmGamepad.m hitTest)
+        DuoFakeTouch *wake = [self touchAt:CGPointMake(CGRectGetMidX(game.frame), CGRectGetMidY(game.frame)) time:1];
         [self beginTouches:@[wake] onPad:pad];
         XCTAssertEqual(duo_harness_input().touch_count, 1, @"The touch that wakes the gear also reaches the game");
         [self endTouches:@[wake] onPad:pad cancelled:NO];
