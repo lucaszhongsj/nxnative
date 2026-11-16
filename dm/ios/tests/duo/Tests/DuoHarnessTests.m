@@ -390,25 +390,21 @@ static BOOL gDuoHarnessReduceMotionEnabled;
 
         CGRect lower = layout.controls;
         CGFloat u = MIN(MIN(lower.size.height / 430.0, lower.size.width / 700.0), 1.3);
-        CGPoint leftAnchor = CGPointMake(CGRectGetMinX(lower) + 0.28 * lower.size.width,
-                                         CGRectGetMinY(lower) + 0.58 * lower.size.height);
-        CGPoint rightAnchor = CGPointMake(CGRectGetMinX(lower) + 0.72 * lower.size.width, leftAnchor.y);
+        CGPoint stickCenter = CGPointMake(CGRectGetMinX(lower) + 0.25 * lower.size.width,
+                                          CGRectGetMinY(lower) + 0.30 * lower.size.height);
+        CGPoint faceCenter = CGPointMake(CGRectGetMinX(lower) + 0.75 * lower.size.width, stickCenter.y);
         CGRect stickRing = [self largestShapePathBoundsInLayer:pad.layer];
         CGPoint renderedStick = CGPointMake(CGRectGetMidX(stickRing), CGRectGetMidY(stickRing));
-        CGPoint expectedStick = CGPointMake(leftAnchor.x - (48 * u + 6 * u), leftAnchor.y);
-        XCTAssertEqualWithAccuracy(renderedStick.x, expectedStick.x, 0.5,
-                                   @"The 3D joystick should sit left of the D-pad with their pair centered at the left anchor (case %lu)", (unsigned long)i);
-        XCTAssertEqualWithAccuracy(renderedStick.y, expectedStick.y, 0.5);
+        XCTAssertEqualWithAccuracy(renderedStick.x, stickCenter.x, 0.5,
+                                   @"The 3D joystick sits above the D-pad in the left column (case %lu)", (unsigned long)i);
+        XCTAssertEqualWithAccuracy(renderedStick.y, stickCenter.y, 0.5);
 
         CGPoint faces = [self faceDiamondCenterInPad:pad];
-        XCTAssertEqualWithAccuracy(faces.x, rightAnchor.x, 0.5,
-                                   @"The ABXY diamond should be centered at the right portrait anchor (case %lu)", (unsigned long)i);
-        XCTAssertEqualWithAccuracy(faces.y, rightAnchor.y, 0.5);
+        XCTAssertEqualWithAccuracy(faces.x, faceCenter.x, 0.5,
+                                   @"The ABXY diamond sits above the right stick in the right column (case %lu)", (unsigned long)i);
+        XCTAssertEqualWithAccuracy(faces.y, faceCenter.y, 0.5);
 
-        CGPoint dpadCenter = CGPointMake(leftAnchor.x + (77 * u + 6 * u), leftAnchor.y);
-        CGFloat artGap = dpadCenter.x - 48 * u - CGRectGetMaxX(stickRing);
-        XCTAssertEqualWithAccuracy(artGap, 12 * u, 0.5,
-                                   @"The rendered joystick and D-pad hit center should preserve a 12 scaled-point gap (case %lu)", (unsigned long)i);
+        CGPoint dpadCenter = CGPointMake(stickCenter.x, CGRectGetMinY(lower) + 0.72 * lower.size.height);
         DuoFakeTouch *right = [self touchAt:CGPointMake(dpadCenter.x + 0.6 * 48 * u, dpadCenter.y) time:1];
         [self beginTouches:@[right] onPad:pad];
         XCTAssertEqual(duo_harness_input().buttons, DM_BTN_RIGHT,
@@ -435,25 +431,25 @@ static BOOL gDuoHarnessReduceMotionEnabled;
 
     CGRect lower = layout.controls;
     CGFloat u = MIN(MIN(lower.size.height / 430.0, lower.size.width / 700.0), 1.3);
-    CGPoint leftAnchor = CGPointMake(CGRectGetMinX(lower) + 0.28 * lower.size.width,
-                                     CGRectGetMinY(lower) + 0.58 * lower.size.height);
-    CGPoint rightAnchor = CGPointMake(CGRectGetMinX(lower) + 0.72 * lower.size.width, leftAnchor.y);
+    CGPoint stickCenter = CGPointMake(CGRectGetMinX(lower) + 0.25 * lower.size.width,
+                                      CGRectGetMinY(lower) + 0.30 * lower.size.height);
+    CGPoint faceCenter = CGPointMake(CGRectGetMinX(lower) + 0.75 * lower.size.width, stickCenter.y);
     CGRect stickRing = [self largestShapePathBoundsInLayer:pad.layer];
-    XCTAssertEqualWithAccuracy(CGRectGetMidX(stickRing), leftAnchor.x, 0.5,
-                               @"In 2D, the left stick itself occupies the left portrait anchor");
-    XCTAssertEqualWithAccuracy(CGRectGetMidY(stickRing), leftAnchor.y, 0.5);
+    XCTAssertEqualWithAccuracy(CGRectGetMidX(stickRing), stickCenter.x, 0.5,
+                               @"In 2D, the left stick itself occupies the left column's upper row");
+    XCTAssertEqualWithAccuracy(CGRectGetMidY(stickRing), stickCenter.y, 0.5);
     CGPoint faces = [self faceDiamondCenterInPad:pad];
-    XCTAssertEqualWithAccuracy(faces.x, rightAnchor.x, 0.5);
-    XCTAssertEqualWithAccuracy(faces.y, rightAnchor.y, 0.5);
+    XCTAssertEqualWithAccuracy(faces.x, faceCenter.x, 0.5);
+    XCTAssertEqualWithAccuracy(faces.y, faceCenter.y, 0.5);
 
-    DuoFakeTouch *stick = [self touchAt:leftAnchor time:1];
+    DuoFakeTouch *stick = [self touchAt:stickCenter time:1];
     [self beginTouches:@[stick] onPad:pad];
-    [self moveTouch:stick to:CGPointMake(leftAnchor.x + 30 * u, leftAnchor.y) onPad:pad];
+    [self moveTouch:stick to:CGPointMake(stickCenter.x + 30 * u, stickCenter.y) onPad:pad];
     XCTAssertGreaterThan(duo_harness_input().lx, 0,
                          @"A touch at the visible 2D stick must drive the left-stick mapping");
     [self endTouches:@[stick] onPad:pad cancelled:NO];
 
-    CGPoint hiddenDpad = CGPointMake(leftAnchor.x + (77 + 6 + 0.6 * 48) * u, leftAnchor.y);
+    CGPoint hiddenDpad = CGPointMake(stickCenter.x + 0.6 * 48 * u, CGRectGetMinY(lower) + 0.72 * lower.size.height);
     DuoFakeTouch *dpad = [self touchAt:hiddenDpad time:2];
     [self beginTouches:@[dpad] onPad:pad];
     XCTAssertEqual(duo_harness_input().buttons & DM_BTN_RIGHT, 0,
@@ -468,11 +464,10 @@ static BOOL gDuoHarnessReduceMotionEnabled;
     UIView *pad = [self padForLayout:layout bounds:bounds];
     CGRect lower = layout.controls;
     CGFloat u = MIN(MIN(lower.size.height / 430.0, lower.size.width / 700.0), 1.3);
-    CGPoint leftAnchor = CGPointMake(CGRectGetMinX(lower) + 0.28 * lower.size.width,
-                                     CGRectGetMinY(lower) + 0.58 * lower.size.height);
-    CGPoint stickCenter = CGPointMake(leftAnchor.x - 54 * u, leftAnchor.y);
-    CGPoint dpadCenter = CGPointMake(leftAnchor.x + 83 * u, leftAnchor.y);
-    CGPoint faceA = CGPointMake(CGRectGetMinX(lower) + 0.72 * lower.size.width + 50 * u, leftAnchor.y);
+    CGPoint stickCenter = CGPointMake(CGRectGetMinX(lower) + 0.25 * lower.size.width,
+                                      CGRectGetMinY(lower) + 0.30 * lower.size.height);
+    CGPoint dpadCenter = CGPointMake(stickCenter.x, CGRectGetMinY(lower) + 0.72 * lower.size.height);
+    CGPoint faceA = CGPointMake(CGRectGetMinX(lower) + 0.75 * lower.size.width + 50 * u, stickCenter.y);
     CGPoint video = CGPointMake(CGRectGetMidX(layout.game), CGRectGetMidY(layout.game));
     DuoFakeTouch *stick = [self touchAt:stickCenter time:1];
     DuoFakeTouch *right = [self touchAt:CGPointMake(dpadCenter.x + 0.6 * 48 * u, dpadCenter.y) time:1];
@@ -1250,8 +1245,8 @@ static BOOL gDuoHarnessReduceMotionEnabled;
     CGRect safe = CGRectIntersection(layout.controls, UIEdgeInsetsInsetRect(bounds, UIEdgeInsetsZero));
     CGFloat u = layout.separated ? MIN(MIN(safe.size.height / 430.0, safe.size.width / 700.0), 1.3) : MIN(bounds.size.height / 430.0, 1.3);
     if (layout.separated && bounds.size.height > bounds.size.width) {
-        CGPoint faceCenter = CGPointMake(CGRectGetMinX(safe) + 0.72 * safe.size.width,
-                                         CGRectGetMinY(safe) + 0.58 * safe.size.height);
+        CGPoint faceCenter = CGPointMake(CGRectGetMinX(safe) + 0.75 * safe.size.width,
+                                         CGRectGetMinY(safe) + 0.30 * safe.size.height);
         return CGPointMake(faceCenter.x + 50 * u, faceCenter.y);
     }
     return CGPointMake(CGRectGetMaxX(safe) - 81 * u + 50 * u, CGRectGetMaxY(safe) - 82 * u);
