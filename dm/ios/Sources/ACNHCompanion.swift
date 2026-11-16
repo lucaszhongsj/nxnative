@@ -44,23 +44,24 @@ struct CompanionMarker: Identifiable {
     let load: ImageLoader
     private var timer: Timer?
     private var interactionSamples: AnyCancellable?
-    // The module's ObjC adapter. This file joins the target only where the profile has companion.json (build_ipa.sh), which is also the only build
-    // that links the adapter; a test injects reader / sender / images and gets no engine.
-    private let native: DMCompanion?
+    // The module's adapter, reached through the C bridge in companion_apple.h. This file joins the target only where the profile has
+    // companion.json (build_ipa.sh), which is also the only build that links the adapter; a test injects reader / sender / images and
+    // gets no engine.
+    private let native: UnsafeMutableRawPointer?
     init(reader: Reader? = nil, sender: Sender? = nil, images: ImageLoader? = nil) {
-        let engine = reader == nil ? DMCompanion.shared() : nil
+        let engine: UnsafeMutableRawPointer? = reader == nil ? dm_companion_engine() : nil
         native = engine
-        read = reader ?? { engine?.snapshot as? [String: Any] ?? [:] }
-        send = sender ?? { name, value in engine?.action(name, argument: value) }
+        read = reader ?? { engine.map { dm_companion_engine_snapshot($0) as? [String: Any] ?? [:] } ?? [:] }
+        send = sender ?? { name, value in if let engine { dm_companion_engine_action(engine, name, value) } }
         load = images ?? { key, completion in
             guard let engine else { completion(nil, 0, 0); return }
-            engine.image(key) { data, w, h in completion(data, Int(w), Int(h)) }
+            dm_companion_engine_image(engine, key) { data, w, h in completion(data, Int(w), Int(h)) }
         }
-        if let engine {
-            interactionSamples = NotificationCenter.default.publisher(for: Notification.Name("DmCompanionInteractionSampled"), object: engine)
+        if engine != nil {
+            interactionSamples = NotificationCenter.default.publisher(for: Notification.Name("DmCompanionInteractionSampled"))
                 .sink { [weak self] _ in Task { @MainActor in self?.poll() } }
         }
-        engine?.start()
+        if let engine { dm_companion_engine_start(engine) }
         poll()
         schedulePolling()
     }
@@ -83,7 +84,7 @@ struct CompanionMarker: Identifiable {
     func visible(_ value: Bool) {
         if !value && page == .bag { action("bag_cancel", 0) }
         presented=value
-        native?.setVisible(value)
+        if let native { dm_companion_engine_set_visible(native, value) }
         schedulePolling();if value {poll()}
     }
     func setPresentation(controlsHidden: Bool, physicalController: Bool, presented: Bool) {

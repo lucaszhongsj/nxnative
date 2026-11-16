@@ -345,3 +345,14 @@ static BOOL writePNG(NSData *rgba,NSUInteger w,NSUInteger h,NSString *path) {
 }
 @end
 extern "C" void dm_companion_trace_start(const char *directory) { if(directory && *directory)[DMCompanion.shared trace:@(directory)]; }
+// What the renderer's Swift calls (companion_apple.h): the adapter crossed as an opaque pointer, since the class's name in this
+// image is the framework's own (extern "C" keeps the bridge symbols plain and the Swift side needs no header of ours).
+extern "C" void *dm_companion_engine(void) { return (__bridge void *)DMCompanion.shared; }
+extern "C" void dm_companion_engine_start(void *engine) { [(__bridge DMCompanion *)engine start]; }
+extern "C" NSDictionary *dm_companion_engine_snapshot(void *engine) { return [(__bridge DMCompanion *)engine snapshot]; }
+extern "C" void dm_companion_engine_action(void *engine, const char *name, long long value) { if(name)[(__bridge DMCompanion *)engine action:@(name) argument:value]; }
+extern "C" void dm_companion_engine_image(void *engine, const char *key, void (^done)(NSData *, int, int)) {
+    if(!key || !done)return;
+    [(__bridge DMCompanion *)engine image:@(key) completion:^(NSData *pixels,NSUInteger width,NSUInteger height){ done(pixels,(int)width,(int)height); }];
+}
+extern "C" void dm_companion_engine_set_visible(void *engine, bool visible) { [(__bridge DMCompanion *)engine setVisible:visible]; }
