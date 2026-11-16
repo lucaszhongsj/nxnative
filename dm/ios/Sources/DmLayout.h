@@ -45,8 +45,8 @@ static inline BOOL dm_picture_fill(const char *_Nullable value) { return value &
 // wider (a 19.5:9 phone lying down at 2.17:1), else 16:9. A phone standing up takes the shape of its picture's band instead (half the window): the splash
 // of a wide screen turned on its side, so the game fills the band without cropping. The range is loader.c's (0.9 to 2.4). 0 = 16:9.
 static inline float dm_picture_shape_auto(CGSize window) {
-    double r = window.height > window.width ? window.width / MAX(window.height * 0.5, 1)
-                                            : MAX(window.width, window.height) / MAX(MIN(window.width, window.height), 1);
+    if (window.height > window.width) return 0.0f;   // standing up: 16:9, which the split's band fits whole
+    double r = MAX(window.width, window.height) / MAX(MIN(window.width, window.height), 1);
     return r >= 0.9 && r < 2.4 ? (float)r : 0.0f;
 }
 
