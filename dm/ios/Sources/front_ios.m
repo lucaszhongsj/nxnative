@@ -113,8 +113,6 @@ void dm_companion_ui_dock_insets(double left, double right, double bottom);   //
 @property (nonatomic) BOOL fill;   // DM_PICTURE_FIT=fill: in landscape the picture covers the screen, its edges cropped (DmLayout.h dm_layout_picture)
 @property (nonatomic) BOOL partiallyOpen;   // an iPhone Duo's hinge half open (UIHingeInteraction, iOS 27.1)
 @property (nonatomic) NSInteger hingeStatus;
-@property (nonatomic) BOOL standing;   // the last orientation followOrientation saw: YES with the phone up
-@property (nonatomic) int modeWhenLying;   // the console mode to go back to when the phone lies down; -1 = standing, nothing to restore
 @property (nonatomic, copy) NSString *layoutLog;   // the last layout line logged
 #if __has_include(<UIKit/UIHingeInteraction.h>)
 - (void)hingeChanged:(UIHinge *)hinge API_AVAILABLE(ios(27.1));
@@ -187,7 +185,6 @@ static void launcher_done(void) { [g_root startGame]; }
         lb.text = @"Game files not found.\nPut the RomFS folder into this App's Documents as \"romfs\" (Files app), then restart.";
         [self.view addSubview:lb]; return;
     }
-    self.modeWhenLying = -1;   // the first layout pass sets the mode for the orientation the game starts in
     dm_cloud_saves_env();   // DM_SAVE_SYNC from the launcher's Cloud saves pick, before the game's first save mount reads it (CloudSaves.m, save_sync.h)
     front_hud_env();   // before the process's first Metal device, which reads MTL_HUD_ENABLED (an env file's DM_METAL_HUD sets it in main.m already; GitHub issue #840)
     const char *dev = front_ios_device_check();   // that first device: a GPU without BC textures is refused here, not at launch, so the launcher's HUD switch counts
@@ -244,23 +241,8 @@ static void launcher_done(void) { [g_root startGame]; }
     front_ios_boot();
 }
 static UIWindow *g_tv;   // the TV scene's window while one shows the picture (tv_attach)
-// Console mode follows the screen's orientation while no TV shows the picture: a phone standing up is handheld, so the game's own touch screens (its software
-// keyboard above all) take touches, and the picture is the handheld 1280x720 one; lying down it returns to the mode the player had. A TV docks the game
-// whatever the phone does (tv_attach / tv_detach own the mode then). A choice made in the in-game menu while standing up is the one lying down returns to.
-// The switch is dm_set_opmode, which pushes the console mode change notification the game watches, so it follows while it runs.
-- (void)followOrientation:(CGRect)b {
-    if (g_tv) return;   // the picture is on the TV: docked there
-    BOOL standing = b.size.height > b.size.width;
-    if (standing == self.standing) return;
-    self.standing = standing;
-    if (standing) {
-        self.modeWhenLying = dm_opmode();
-        if (self.modeWhenLying != 0) { dm_set_opmode(0); dm_gamepad_opmode_changed(); LOG("front end: console mode handheld, a phone standing up (the game's own keyboard takes touches)"); }
-    } else if (self.modeWhenLying >= 0) {
-        int m = self.modeWhenLying; self.modeWhenLying = -1;
-        if (dm_opmode() != m) { dm_set_opmode(m); dm_gamepad_opmode_changed(); LOG("front end: console mode %s again, lying down", m ? "docked" : "handheld"); }
-    }
-}
+// The console mode is the player's (the game profile's DM_OPMODE and the in-game menu): turning the phone changes where the picture and the band
+// go, never what the game believes it is running on. A TV still docks the game while it shows the picture (tv_attach / tv_detach own the mode then).
 #if DM_COMPANION
 - (void)appStateChanged:(NSNotification *)note {   // the panel stops sampling while the app is in the background; the band is laid out again on return
     if (!self.companionVC) return;
@@ -274,7 +256,6 @@ static UIWindow *g_tv;   // the TV scene's window while one shows the picture (t
 - (void)viewDidLayoutSubviews {
     [super viewDidLayoutSubviews];
     CGRect b = self.view.bounds; if (!self.game) return;
-    [self followOrientation:b];
     CGRect division = CGRectNull;   // an iPhone Duo's fold, as UIKit reports it (iOS 27.1)
     NSMutableArray<NSString *> *regionLog = [NSMutableArray array];
 #if __has_include(<UIKit/UIHingeInteraction.h>)
@@ -398,7 +379,6 @@ bool dm_setting_live(const char *env, const char *value) {
         if (!value) return true;
         int m = atoi(value) ? 1 : 0;
         if (g_tv_mode_was >= 0) { g_tv_mode_was = m; LOG("front end: console mode %s once the TV is unplugged (in-game menu)", m ? "docked" : "handheld"); return true; }
-        if (g_root.standing) g_root.modeWhenLying = m;   // the player chose it while standing up: lying down keeps that choice, not the one it replaced
         dm_set_opmode(m); dm_gamepad_opmode_changed(); LOG("front end: console mode %s (in-game menu)", m ? "docked" : "handheld");
         return true;
     }
