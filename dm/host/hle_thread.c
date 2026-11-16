@@ -728,6 +728,27 @@ int thr_list(pthread_t *out, int max) {
     g_unlock();
     return n;
 }
+// A companion's expect-guarded inventory write: stop every guest thread, run body, resume. G pins the thread objects and keeps
+// StartThread / ExitThread from mutating the list; a new pthread still in its prologue cannot reach guest code until it takes G.
+// Refuse from a guest thread (it would suspend itself) or when G is held elsewhere. The ports come from the heap: MAX_H of them
+// would be 16 KB of stack, and this runs on the companion's sampling queue.
+int dm_guest_transaction(int (*body)(void *), void *context) {
+    if (!body || pthread_getspecific(g_keythr) || pthread_mutex_trylock(&G)) return 0;
+    mach_port_t self = pthread_mach_thread_np(pthread_self());
+    int n = 0, cap = 0, ok = 1;
+    mach_port_t *ports = NULL;
+    for (thr_t *t = g_all; t; t = t->all) if (t->started && !t->exited && !t->host_owned && t->mport) {
+        if (t->mport == self) { ok = 0; break; }
+        if (n == cap) { mach_port_t *p = realloc(ports, (size_t)(cap = cap ? cap * 2 : 16) * sizeof *p); if (!p) { ok = 0; break; } ports = p; }
+        if (thread_suspend(t->mport) != KERN_SUCCESS) { ok = 0; break; }
+        ports[n++] = t->mport;
+    }
+    if (ok) ok = body(context);
+    while (n) thread_resume(ports[--n]);
+    free(ports); pthread_mutex_unlock(&G);
+    return ok;
+}
+
 // Soak readings (DM_SOAK): handle table usage, live guest threads, total thread objects (including exited but not yet freed)
 void thr_counts(int *handles, int *live, int *objs) {
     int nh = 0, nl = 0, no = 0;

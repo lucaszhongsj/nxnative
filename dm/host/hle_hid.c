@@ -39,6 +39,7 @@ _Static_assert(sizeof(NpadState) == 0x28, "NpadState");
 // their own path because a connected controller publishes its whole state on every change (a DualShock 4's sticks change all the time), which overwrote them on the shared one;
 // the separate paths also keep scripted input out of DM_REC, which records the physical ones (rec_read)
 static _Atomic uint64_t g_btn, g_axes, g_latch, g_sc_btn, g_sc_axes, g_sc_latch, g_pad_btn[DM_PLAYERS], g_pad_axes[DM_PLAYERS], g_pad_latch[DM_PLAYERS];
+static _Atomic uint64_t g_companion_btn, g_companion_latch;   // the portrait companion's short key presses (dm_companion_input)
 static _Atomic uint64_t g_peek_latch;   // presses since the last dm_input_peek (the applet's reader)
 static _Atomic int g_hold;              // an applet holds the input (dm_input_hold)
 static _Atomic int64_t g_sampling = 1 << 16;   // starts high so the history entries below the newest keep positive sampling numbers
@@ -85,7 +86,7 @@ static int32_t pick(int32_t a, int32_t b);
 static int32_t ax(uint64_t v, int i);
 void dm_input_hold(int on) {
     if (atomic_exchange(&g_hold, on) == on) return;
-    atomic_store(&g_latch, 0); atomic_store(&g_sc_latch, 0); for (int p = 0; p < DM_PLAYERS; p++) atomic_store(&g_pad_latch[p], 0);   // a press made for the applet is not the game's
+    atomic_store(&g_latch, 0); atomic_store(&g_sc_latch, 0); atomic_store(&g_companion_latch, 0); for (int p = 0; p < DM_PLAYERS; p++) atomic_store(&g_pad_latch[p], 0);   // a press made for the applet is not the game's
 }
 void dm_input_peek(uint64_t *buttons, int32_t axes[4]) {
     uint64_t b = atomic_load(&g_btn) | atomic_load(&g_sc_btn) | atomic_exchange(&g_peek_latch, 0), k = atomic_load(&g_axes), c = atomic_load(&g_sc_axes);
@@ -94,6 +95,11 @@ void dm_input_peek(uint64_t *buttons, int32_t axes[4]) {
     *buttons = b & 0xffffull;
 }
 void dm_pad_set(uint64_t buttons, int32_t lx, int32_t ly, int32_t rx, int32_t ry) { dm_pad_set_player(0, buttons, lx, ly, rx, ry); }
+// The portrait companion's item-menu drive publishes short A / D-pad presses here; latch the edges so a press shorter than a frame is still read.
+void dm_companion_input(uint64_t buttons) {
+    uint64_t old = atomic_exchange(&g_companion_btn, buttons); atomic_fetch_or(&g_companion_latch, buttons & ~old);
+}
+void dm_companion_input_reset(void) { atomic_store(&g_companion_btn, 0); atomic_store(&g_companion_latch, 0); }
 static void script_set(uint64_t buttons, int32_t lx, int32_t ly, int32_t rx, int32_t ry) {
     uint64_t old = atomic_exchange(&g_sc_btn, buttons); atomic_fetch_or(&g_sc_latch, buttons & ~old); atomic_fetch_or(&g_peek_latch, buttons & ~old); atomic_store(&g_sc_axes, pack(lx, ly, rx, ry));
     shake_note(0);
@@ -629,6 +635,7 @@ static void fill(NpadState *s, uint32_t id, uint32_t style) {
     if (!pl) {   // the physical sources so far (DM_REC records them, DM_BTN_SHAKE only from player 1's own controller and the keyboard, as shake_note), then the scripted path
         if (atomic_load_explicit(&g_rec_on, memory_order_relaxed)) rec_read((b & 0xffffull) | ((atomic_load(&g_btn) | atomic_load(&g_pad_btn[0])) & DM_BTN_SHAKE), a);
         b |= atomic_load(&g_sc_btn) | atomic_exchange(&g_sc_latch, 0);
+        b |= atomic_load(&g_companion_btn) | atomic_exchange(&g_companion_latch, 0);
         uint64_t c = atomic_load(&g_sc_axes); for (int i = 0; i < 4; i++) a[i] = pick(a[i], ax(c, i));
     }
     if (atomic_load(&g_hold)) { b = 0; memset(a, 0, sizeof a); }   // an applet is in front: the game reads nothing (the latches were taken all the same)
