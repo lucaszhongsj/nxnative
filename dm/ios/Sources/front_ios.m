@@ -109,7 +109,9 @@ void dm_companion_ui_dock_insets(double left, double right, double bottom);   //
 @property (nonatomic, strong) UIView *pad;
 @property (nonatomic, strong) UILabel *fps;
 @property (nonatomic) BOOL launched;
-@property (nonatomic) BOOL launchModeChosen;   // the first layout pass took the console mode the game starts in
+@property (nonatomic) BOOL modeChosen;            // the first layout pass took the console mode; a turn takes it again
+@property (nonatomic) BOOL lastStanding;             // the phone's orientation at that pass, so only a turn takes the mode
+@property (nonatomic) NSInteger profileMode;         // the console mode the profile starts with, which lying down returns to
 @property (nonatomic, strong) id tv;   // the TV scene accessory's registration (iOS 27)
 @property (nonatomic) BOOL fill;   // DM_PICTURE_FIT=fill: in landscape the picture covers the screen, its edges cropped (DmLayout.h dm_layout_picture)
 @property (nonatomic) BOOL partiallyOpen;   // an iPhone Duo's hinge half open (UIHingeInteraction, iOS 27.1)
@@ -257,11 +259,18 @@ static UIWindow *g_tv;   // the TV scene's window while one shows the picture (t
 - (void)viewDidLayoutSubviews {
     [super viewDidLayoutSubviews];
     CGRect b = self.view.bounds; if (!self.game) return;
-    // The console mode belongs to the player once the game runs, but the one it starts in follows the phone: standing up the game's own keyboard needs
-    // the handheld mode, so the first layout pass takes it, and turning the phone afterwards changes only where the picture and the band go.
-    if (!self.launchModeChosen) {
-        self.launchModeChosen = YES;
-        if (b.size.height > b.size.width && !g_tv && dm_opmode() != 0) { dm_set_opmode(0); dm_gamepad_opmode_changed(); LOG("front end: console mode handheld, the phone starts standing up"); }
+    // The console mode follows the phone while no TV shows the picture: standing up the game's own keyboard needs the handheld mode, lying down the one the
+    // profile starts with. Only a turn takes it, so a mode the player picks in the in-game menu stays until the phone turns again.
+    if (!g_tv) {
+        BOOL standing = b.size.height > b.size.width, first = !self.modeChosen;
+        if (first) { self.modeChosen = YES; self.profileMode = dm_opmode(); }
+        if (first || self.lastStanding != standing) {
+            self.lastStanding = standing;
+            int want = standing ? 0 : (int)self.profileMode;
+            if (dm_opmode() != want) { dm_set_opmode(want); dm_gamepad_opmode_changed();
+                LOG("front end: console mode %s, the phone %s", standing ? "handheld" : "the profile's", standing ? "standing up" : "lying down"); }
+            LOG("front end: picture shape %.3f for the phone %s", dm_picture_shape_auto(b.size), standing ? "standing up" : "lying down");
+        }
     }
     CGRect division = CGRectNull;   // an iPhone Duo's fold, as UIKit reports it (iOS 27.1)
     NSMutableArray<NSString *> *regionLog = [NSMutableArray array];

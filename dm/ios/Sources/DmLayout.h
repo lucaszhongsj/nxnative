@@ -42,12 +42,12 @@ static inline CGRect dm_aspect_fill(CGRect b, CGFloat aspect) {
 static inline BOOL dm_picture_fill(const char *_Nullable value) { return value && !strcmp(value, "fill"); }   // DM_PICTURE_FIT: fit (default) or fill
 
 // Picture shape "auto" (the launcher's Match screen): the window's own shape when it is taller than 16:9 (an iPad's 4:3, an unfolded iPhone Duo's 1.43:1) or
-// wider (a 19.5:9 phone lying down at 2.17:1), else 16:9. A phone standing up keeps 16:9: its picture's band takes the height the picture's own width asks
-// for (dm_layout), so a 16:9 picture fills the width with no bars and the band keeps the rest of the window. The range is loader.c's (1.3 to 2.4). 0 = 16:9.
+// wider (a 19.5:9 phone lying down at 2.17:1), else 16:9. A phone standing up takes the shape of its picture's band instead (half the window): the splash
+// of a wide screen turned on its side, so the game fills the band without cropping. The range is loader.c's (0.9 to 2.4). 0 = 16:9.
 static inline float dm_picture_shape_auto(CGSize window) {
-    double r = MAX(window.width, window.height) / MAX(MIN(window.width, window.height), 1);
-    if (window.height > window.width && r >= 1.77) r = 0;   // a phone standing up is not a wide screen
-    return r >= 1.3 && r < 2.4 ? (float)r : 0.0f;
+    double r = window.height > window.width ? window.width / MAX(window.height * 0.5, 1)
+                                            : MAX(window.width, window.height) / MAX(MIN(window.width, window.height), 1);
+    return r >= 0.9 && r < 2.4 ? (float)r : 0.0f;
 }
 
 static inline CGRect dm_horizontal_division(CGRect b, CGRect division) {
