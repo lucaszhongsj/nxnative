@@ -248,11 +248,15 @@ static BOOL gDuoHarnessReduceMotionEnabled;
         // No fold: the band starts where the picture's own width puts its bottom (DmLayout.h dm_layout), never past the midpoint
         CGFloat splitY = MIN(CGRectGetMidY(bounds), CGRectGetMinY(safe) + safe.size.width / DM_PICTURE_16_9);
         XCTAssertTrue(layout.separated);
-        XCTAssertTrue(CGRectEqualToRect(layout.controls, CGRectMake(0, splitY, bounds.size.width, bounds.size.height - splitY)));
+        CGFloat foot = MIN(floor((bounds.size.height - splitY) * 0.34), 240);
+        XCTAssertTrue(CGRectEqualToRect(layout.companion, CGRectMake(0, splitY, bounds.size.width, bounds.size.height - splitY - foot)),
+                      @"The panel keeps the band less the pad's foot");
+        XCTAssertTrue(CGRectEqualToRect(layout.controls, CGRectMake(0, bounds.size.height - foot, bounds.size.width, foot)),
+                      @"The pad takes a foot of the window under the panel");
         XCTAssertEqualWithAccuracy(layout.game.size.width / layout.game.size.height, 16.0 / 9.0, 0.001);
         XCTAssertGreaterThanOrEqual(CGRectGetMinY(layout.game), CGRectGetMinY(safe));
         XCTAssertLessThanOrEqual(CGRectGetMaxY(layout.game), splitY);
-        XCTAssertLessThanOrEqual(CGRectGetMaxY(layout.game), CGRectGetMinY(layout.controls), @"The band's top leaves no video/control overlap");
+        XCTAssertLessThanOrEqual(CGRectGetMaxY(layout.game), CGRectGetMinY(layout.companion), @"The band's top leaves no video/panel overlap");
     }
 }
 

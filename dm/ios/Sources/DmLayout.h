@@ -5,11 +5,10 @@
 
 NS_ASSUME_NONNULL_BEGIN
 
-// game: the picture. companion: the band under it, where a phone standing up shows what the game's own screens cannot (the pad floats over it, so the
-// panel is only where no key is drawn). controls: the pad's area, which in a split is the companion's band. Zero and unused where separated is NO.
-// A split's companion and controls are the same rectangle: DmGamepad.m owns the band's hit testing and takes every touch in it (one on no control
-// goes to gameBegin, which a split refuses outside the picture), so the panel takes no touch of its own. A panel that must be touched needs that
-// dispatch changed first.
+// game: the picture. companion: the band under it, where a phone standing up shows what the game's own screens cannot. controls: the pad's area, which in
+// a split is the bottom of that band. Zero and unused where separated is NO. Standing up with no fold the band splits in two: the panel keeps it, less a
+// foot of the window the pad takes, so the panel is seen whole. A Duo's half-open lower screen keeps one rectangle for both, the pad over the panel there.
+// DmGamepad.m owns the band's hit testing: a touch on the panel's part goes to the panel's view below, one on the pad's foot to the pad.
 typedef struct { CGRect game, companion, controls; BOOL separated, topSafeOnly, customControlsFullBounds, onTV; } DmLayout;
 
 static inline BOOL dm_layout_custom_controls_full_bounds(CGRect bounds, BOOL hingeClosed) {
@@ -80,7 +79,14 @@ static inline DmLayout dm_layout(CGRect b, UIEdgeInsets insets, BOOL partiallyOp
     CGRect upper = CGRectMake(CGRectGetMinX(safe), CGRectGetMinY(safe), safe.size.width, upperBottom - CGRectGetMinY(safe));
     CGRect lower = CGRectMake(CGRectGetMinX(b), bandTop, b.size.width, CGRectGetMaxY(b) - bandTop);
     if (upper.size.height <= 0 || CGRectGetMaxY(safe) <= CGRectGetMinY(lower)) return l;
-    l.game = dm_aspect_fit(upper, aspect); l.controls = lower; l.companion = lower; l.separated = YES;
+    l.game = dm_aspect_fit(upper, aspect); l.companion = lower; l.controls = lower; l.separated = YES;
+    if (CGRectIsNull(division)) {
+        // A phone standing up with no fold gives the pad a foot of the window and the panel the rest of it, so the panel is seen whole. A
+        // Duo's half-open lower screen keeps one band for both: its fold sets both edges and the pad belongs over the panel there.
+        CGFloat foot = MIN(floor(lower.size.height * 0.34), 240);
+        l.controls = CGRectMake(CGRectGetMinX(lower), CGRectGetMaxY(lower) - foot, lower.size.width, foot);
+        l.companion = CGRectMake(CGRectGetMinX(lower), CGRectGetMinY(lower), lower.size.width, lower.size.height - foot);
+    }
     return l;
 }
 
