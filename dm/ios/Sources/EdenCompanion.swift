@@ -87,9 +87,19 @@ final class EdenManifest {
     let footerWidgets:[String:ClosedRange<Int>]
     let widePockets: Bool
     init(data:Data?=nil) {
-        let bytes=data ?? Bundle.main.url(forResource:"companion-ui",withExtension:"json",subdirectory:"dm").flatMap{try? Data(contentsOf:$0)}
+        // The companion's files ship in the game's framework (build_ipa.sh writes Gen/dm into it); a build without one keeps them in the app bundle.
+        var bytes=data, source="given"
+        if bytes == nil {
+            for b in [Bundle(for:EdenManifest.self),Bundle.main] {
+                guard let u=b.url(forResource:"companion-ui",withExtension:"json",subdirectory:"dm"),let d=try? Data(contentsOf:u) else { continue }
+                bytes=d; source=u.path; break
+            }
+        }
         root=(bytes.flatMap{try? JSONSerialization.jsonObject(with:$0)} as? [String:Any]) ?? [:]
         pages=Dictionary(uniqueKeysWithValues:((root["pages"] as? [[String:Any]]) ?? []).compactMap{d in (d["id"] as? String).map{($0,d)}})
+        // One line: which bundle the interface came from, so an empty panel names its cause in the log
+        let where_ = bytes == nil ? "not found" : "\(bytes!.count) bytes from \(source)"
+        FileHandle.standardError.write(Data("companion: interface \(where_), \(pages.count) pages\n".utf8))
         let pockets = pages["bag"]?["widgets"] as? [[String:Any]] ?? []
         // The pinned layout groups each slot's art and targets, then each
         // slot's selection bubble. Check both groups before moving them.
