@@ -248,11 +248,10 @@ static BOOL gDuoHarnessReduceMotionEnabled;
         // No fold: the band starts where the picture's own width puts its bottom (DmLayout.h dm_layout), never past the midpoint
         CGFloat splitY = MIN(CGRectGetMidY(bounds), CGRectGetMinY(safe) + safe.size.width / DM_PICTURE_16_9);
         XCTAssertTrue(layout.separated);
-        CGFloat foot = MIN(floor((bounds.size.height - splitY) * 0.34), 240);
-        XCTAssertTrue(CGRectEqualToRect(layout.companion, CGRectMake(0, splitY, bounds.size.width, bounds.size.height - splitY - foot)),
-                      @"The panel keeps the band less the pad's foot");
-        XCTAssertTrue(CGRectEqualToRect(layout.controls, CGRectMake(0, bounds.size.height - foot, bounds.size.width, foot)),
-                      @"The pad takes a foot of the window under the panel");
+        XCTAssertTrue(CGRectEqualToRect(layout.companion, CGRectMake(0, splitY, bounds.size.width, bounds.size.height - splitY)),
+                      @"The panel keeps the whole band under the picture");
+        XCTAssertTrue(CGRectEqualToRect(layout.controls, layout.companion),
+                      @"The pad floats over the whole band");
         XCTAssertEqualWithAccuracy(layout.game.size.width / layout.game.size.height, 16.0 / 9.0, 0.001);
         XCTAssertGreaterThanOrEqual(CGRectGetMinY(layout.game), CGRectGetMinY(safe));
         XCTAssertLessThanOrEqual(CGRectGetMaxY(layout.game), splitY);
@@ -283,16 +282,16 @@ static BOOL gDuoHarnessReduceMotionEnabled;
     XCTAssertEqual(dm_picture_shape_auto(CGSizeMake(390, 844)), 0.0f, @"An iPhone 14 standing up keeps 16:9");
     XCTAssertEqual(dm_picture_shape_auto(CGSizeMake(375, 667)), 0.0f, @"An iPhone SE standing up keeps 16:9");
     XCTAssertEqual(dm_picture_shape_auto(CGSizeMake(430, 932)), 0.0f, @"An iPhone Pro Max standing up keeps 16:9");
-    // An iPad or an unfolded Duo standing up is 1.33 to 1.52 and keeps its own shape, which fills the upper part better than 16:9
-    XCTAssertEqualWithAccuracy(dm_picture_shape_auto(CGSizeMake(820, 1180)), 1180.0 / 820.0, 0.001);
-    XCTAssertEqualWithAccuracy(dm_picture_shape_auto(CGSizeMake(744, 1133)), 1133.0 / 744.0, 0.001);
-    XCTAssertEqualWithAccuracy(dm_picture_shape_auto(CGSizeMake(1032, 1376)), 1376.0 / 1032.0, 0.001, @"An unfolded Duo standing up is 3:4 by its long side");
+    // An iPad or an unfolded Duo standing up also keeps 16:9: the wide portrait shape was reverted while its start-up crash was investigated
+    XCTAssertEqual(dm_picture_shape_auto(CGSizeMake(820, 1180)), 0.0f);
+    XCTAssertEqual(dm_picture_shape_auto(CGSizeMake(744, 1133)), 0.0f);
+    XCTAssertEqual(dm_picture_shape_auto(CGSizeMake(1032, 1376)), 0.0f, @"An unfolded Duo standing up keeps 16:9");
     XCTAssertEqualWithAccuracy(dm_picture_shape_auto(CGSizeMake(1376, 1032)), 1376.0 / 1032.0, 0.001, @"An unfolded Duo lying down is 4:3");
     // A window wider than 16:9 keeps its own shape: loader.c takes 1.3 to 2.4, so a phone lying down at 19.5:9 is a shape to render in
     XCTAssertEqualWithAccuracy(dm_picture_shape_auto(CGSizeMake(844, 390)), 844.0 / 390.0, 0.001, @"A 19.5:9 phone lying down");
     XCTAssertEqualWithAccuracy(dm_picture_shape_auto(CGSizeMake(1024, 768)), 1024.0 / 768.0, 0.001, @"An iPad lying down is 4:3");
-    // A square window has no shape of its own to take
-    XCTAssertEqual(dm_picture_shape_auto(CGSizeMake(600, 600)), 0.0f);
+    // A square window takes its own shape while lying down (height is not greater than width)
+    XCTAssertEqualWithAccuracy(dm_picture_shape_auto(CGSizeMake(600, 600)), 1.0f, 0.001);
     XCTAssertEqual(dm_picture_shape_auto(CGSizeZero), 0.0f);
 }
 
@@ -306,9 +305,9 @@ static BOOL gDuoHarnessReduceMotionEnabled;
     XCTAssertEqualWithAccuracy(CGRectGetMinY(layout.game), 59, 0.5, @"It starts at the safe area's top: no bar above it");
     XCTAssertEqualWithAccuracy(CGRectGetMaxY(layout.game), CGRectGetMinY(layout.companion), 0.5, @"No bar between the picture and the band");
     XCTAssertEqualWithAccuracy(CGRectGetMinY(layout.companion), 59 + 390 * 9.0 / 16.0, 0.5);
-    CGFloat band = 844 - (59 + 390 * 9.0 / 16.0), foot = MIN(floor(band * 0.34), 240);
-    XCTAssertEqualWithAccuracy(layout.companion.size.height, band - foot, 0.5, @"The panel keeps the band less the pad's foot");
-    XCTAssertEqualWithAccuracy(layout.controls.size.height, foot, 0.5);
+    CGFloat band = 844 - (59 + 390 * 9.0 / 16.0);
+    XCTAssertEqualWithAccuracy(layout.companion.size.height, band, 0.5, @"The panel keeps the whole band under the picture");
+    XCTAssertTrue(CGRectEqualToRect(layout.controls, layout.companion), @"The pad floats over the whole band");
     XCTAssertEqualWithAccuracy(CGRectGetMaxY(layout.controls), 844, 0.5);
     // The picture never takes more than half the window: an iPad's 4:3 keeps the midpoint it had, so the band keeps at least half
     DmLayout ipad = dm_layout(CGRectMake(0, 0, 820, 1180), UIEdgeInsetsMake(24, 0, 20, 0), NO, CGRectNull, 1180.0 / 820.0);
@@ -317,11 +316,10 @@ static BOOL gDuoHarnessReduceMotionEnabled;
 }
 
 - (void)testCompanionTakesTheBandUnderThePictureAndNoOtherLayoutHasOne {
-    // A phone standing up with no fold gives the pad a foot of the band and the panel the rest of it
+    // A phone standing up with no fold floats the pad over the whole band under the picture
     DmLayout split = dm_layout(CGRectMake(0, 0, 390, 844), UIEdgeInsetsMake(59, 0, 34, 0), NO, CGRectNull, DM_PICTURE_16_9);
     XCTAssertTrue(split.separated);
-    XCTAssertLessThanOrEqual(CGRectGetMaxY(split.companion), CGRectGetMinY(split.controls), @"The panel stays above the pad's foot: %@ against %@", NSStringFromCGRect(split.companion), NSStringFromCGRect(split.controls));
-    XCTAssertEqualWithAccuracy(CGRectGetMaxX(split.companion), CGRectGetMaxX(split.controls), 0.5);
+    XCTAssertTrue(CGRectEqualToRect(split.companion, split.controls), @"The pad floats over the panel's whole band: %@ against %@", NSStringFromCGRect(split.companion), NSStringFromCGRect(split.controls));
     XCTAssertLessThanOrEqual(CGRectGetMaxY(split.game), CGRectGetMinY(split.companion), @"The picture stays above the band");
     // A Duo's fold moves the band with the controls
     DmLayout folded = dm_layout(CGRectMake(0, 0, 669, 951), UIEdgeInsetsMake(62, 0, 34, 0), NO, CGRectMake(0, 455.5, 669, 40), DM_PICTURE_16_9);
@@ -346,8 +344,8 @@ static BOOL gDuoHarnessReduceMotionEnabled;
     XCTAssertEqual([pad hitTest:minus withEvent:nil], pad, @"A key still belongs to the pad");
     // The band's middle-left is clear of the top menu pill, the thumb groups at 0.58 down and the right-stick area: it must pass through
     CGPoint clear = CGPointMake(CGRectGetMinX(layout.companion) + 12, CGRectGetMidY(layout.companion));
-    XCTAssertTrue(CGRectContainsPoint(layout.companion, clear) && !CGRectContainsPoint(layout.controls, clear),
-                  @"The panel's band is its own, above the pad's foot");
+    XCTAssertTrue(CGRectContainsPoint(layout.companion, clear) && CGRectContainsPoint(layout.controls, clear),
+                  @"The pad floats over the whole band: a clear point is on both");
     XCTAssertNil([pad hitTest:clear withEvent:nil], @"No key there: the companion below receives the tap");
     // Landscape has no band: the pad keeps the whole view
     DmLayout overlay = dm_layout(CGRectMake(0, 0, 844, 390), UIEdgeInsetsZero, NO, CGRectNull, DM_PICTURE_16_9);

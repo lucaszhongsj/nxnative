@@ -451,8 +451,8 @@ int front_web_touch(void);
         if (_padOff && !_layout.onTV && e && e.type == UIEventTypeTouches) [self wakeMenu];
         return nil;
     }
-    if (_layout.separated && CGRectContainsPoint(_layout.companion, p) && !CGRectContainsPoint(_layout.controls, p)) return nil;   // the panel's own band, above the pad's foot
-    if (_layout.separated && CGRectContainsPoint(_layout.controls, p) && ![self controlAt:p]) return nil;   // the companion's view below takes the tap (tabs, item slots)
+    if (_tap) return nil;   // the Tap layout has no controls: the whole view, band included, belongs to the game or the panel
+    if (_layout.separated && CGRectContainsPoint(_layout.companion, p) && ![self controlAt:p]) return nil;   // a tap on no key goes through to the panel (tabs, item slots)
     return v;
 }
 - (void)touchesBegan:(NSSet<UITouch *> *)ts withEvent:(UIEvent *)e {
