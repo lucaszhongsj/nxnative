@@ -27,7 +27,7 @@ static inline dm_companion_surface_layout dm_companion_surface_make_safe(CGSize 
     CGFloat bottom=fmin(size.height,fmax(0,dock.bottom));
     // The authored dock runs from its artwork's top edge (966) to the foot of the selected tab
     // (1080); the icons and their labels sit inside that strip.
-    CGFloat art_height=120,gesture_edge=fmin(bottom,11);
+    CGFloat art_height=128,gesture_edge=fmin(bottom,11);
     CGFloat square=fmin(size.width,size.height);
     CGFloat h=size.height-square;
     if(h<24){h=fmin(size.height,44+gesture_edge);square=size.height-h;}
