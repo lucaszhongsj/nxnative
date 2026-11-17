@@ -276,7 +276,7 @@ static BOOL envTruthy(const char *v) {
         _hintText = [CATextLayer layer]; _hintText.string = _hintWords; _hintText.alignmentMode = kCAAlignmentCenter;
         _hintText.foregroundColor = [UIColor colorWithWhite:1 alpha:0.9].CGColor; [_hint addSublayer:_hintText]; [_controls addSublayer:_hint];
         const char *navHint = getenv("DM_NAV_HINT");   // the shell passes the player's language; empty turns the hint off
-        _navHintWords = navHint ? [NSString stringWithUTF8String:navHint] : @"Triple-tap the bar to switch to touch";
+        _navHintWords = navHint ? [NSString stringWithUTF8String:navHint] : @"三击底栏切到触控";
         _navHint = [CALayer layer]; _navHint.backgroundColor = [UIColor colorWithWhite:0 alpha:0.5].CGColor; _navHint.opacity = 0; _navHint.hidden = YES;
         _navHintText = [CATextLayer layer]; _navHintText.string = _navHintWords; _navHintText.alignmentMode = kCAAlignmentCenter;
         _navHintText.foregroundColor = [UIColor colorWithWhite:1 alpha:0.9].CGColor; [_navHint addSublayer:_navHintText]; [self.layer addSublayer:_navHint];
@@ -664,8 +664,8 @@ static BOOL g_hintShown;   // once per launch
 }
 // ---- The bottom bar's hint ----
 // The 3D layout's bottom bar is where a triple tap switches to Tap, and nothing on screen says so. The first time the 3D layout
-// shows in a launch, a few words over the bar say it, after the right-stick hint has gone. DM_NAV_HINT carries the words
-// (the shell's language), empty turns it off; without it the words are English.
+// shows in a launch, a few words over the bar say it, after the right-stick hint has gone. The words sit on the bar itself, where
+// the triple tap lands. DM_NAV_HINT carries the words (the shell's language), empty turns it off.
 static BOOL g_navHintShown;   // once per launch
 - (void)placeNavHint {
     BOOL fits = _full && !_tap && !_padOff && _layout.separated && _navHintWords.length && !CGRectIsEmpty(self.bounds);
@@ -674,7 +674,9 @@ static BOOL g_navHintShown;   // once per launch
     UIFont *font = [UIFont systemFontOfSize:fs weight:UIFontWeightSemibold];
     CGSize t = [_navHintWords sizeWithAttributes:@{NSFontAttributeName: font}];
     CGFloat boxW = fmin(ceil(t.width) + 2 * fs, CGRectGetWidth(_layout.controls) - 16), boxH = ceil(t.height) + fs * 0.8;
-    CGRect r = CGRectMake(CGRectGetMidX(_layout.controls) - boxW / 2, CGRectGetMaxY(_layout.controls) - 56 - 8 - boxH, boxW, boxH);
+    // Centred on the bottom 56 points, the strip the triple tap reads (touchesBegan), so the words mark the place to tap.
+    CGRect bar = CGRectMake(CGRectGetMinX(_layout.controls), CGRectGetMaxY(_layout.controls) - 56, CGRectGetWidth(_layout.controls), 56);
+    CGRect r = CGRectMake(CGRectGetMidX(bar) - boxW / 2, CGRectGetMidY(bar) - boxH / 2, boxW, boxH);
     if (CGRectGetMinY(r) < self.safeAreaInsets.top) { if (!_navHint.hidden) { _navHint.hidden = YES; _navHint.opacity = 0; } return; }
     [CATransaction begin]; [CATransaction setDisableActions:YES];
     _navHint.frame = r; _navHint.cornerRadius = boxH / 2;
@@ -692,7 +694,7 @@ static BOOL g_navHintShown;   // once per launch
         DmGamepad *s = weak; if (!s || s->_navHint.hidden) return;
         [CATransaction begin]; [CATransaction setAnimationDuration:0.3]; s->_navHint.opacity = 1; [CATransaction commit];
     });
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(5.4 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(9.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
         DmGamepad *s = weak; if (!s) return;
         [CATransaction begin]; [CATransaction setAnimationDuration:0.4];
         [CATransaction setCompletionBlock:^{ s->_navHint.hidden = YES; }];
