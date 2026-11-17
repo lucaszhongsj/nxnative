@@ -305,6 +305,13 @@ static BOOL envTruthy(const char *v) {
     if (!_padOff) _menu.alpha = 1;
     [CATransaction commit];
     if (!_padOff) [self wakeMenu];
+    [self updateCompanionBackground];
+}
+// The band keeps its wallpaper alone while a 3D layout floats the pad over it (front_ios.m). Weak, so a build without the
+// renderer links the pad all the same.
+extern void dm_companion_ui_background(int on) __attribute__((weak));
+- (void)updateCompanionBackground {
+    if (dm_companion_ui_background) dm_companion_ui_background(_full && !_tap && !_padOff && _layout.separated);
 }
 - (int)padLayout { return _tap ? 2 : _full ? 1 : 0; }
 - (BOOL)tapOffered { return !_layout.onTV; }   // a TV has no picture on the phone for a touch to land on
@@ -330,6 +337,7 @@ static BOOL envTruthy(const char *v) {
     if (_layout.onTV && _tap) { _tap = NO; _full = NO; }   // Tap has no picture on the phone to map a touch onto
     [self updateControlVisibility];
     [self setNeedsLayout];
+    [self updateCompanionBackground];
 }
 - (const DmPadGeo *)geo {   // DmPadGeometry.h, computed again whenever the bounds, the safe area, the split or the layout changed
     CGRect b = self.bounds; UIEdgeInsets i = self.safeAreaInsets;

@@ -101,7 +101,18 @@ static void tv_attach(void);
 extern void *dm_companion_view_controller(void);
 void dm_companion_ui_state(int hidden, int physical, int presented);   // ACNHCompanion.swift: band shown, controller in use, pad hidden
 void dm_companion_ui_dock_insets(double left, double right, double bottom);   // the band's parts under the safe area
+extern void dm_companion_background_state(int on);
 #endif
+
+// DmGamepad.m: a 3D layout floats the pad over the band, so the band keeps only its wallpaper until Tap comes back. Always
+// defined, so a build without the renderer still links the pad.
+void dm_companion_ui_background(int on) {
+#if DM_COMPANION
+    dm_companion_background_state(on);
+#else
+    (void)on;
+#endif
+}
 
 @interface DmRootVC : UIViewController
 @property (nonatomic, strong) DmGameView *game;

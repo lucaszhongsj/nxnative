@@ -217,7 +217,7 @@ struct EdenFrame {
         if let d=value as? [String:Any]{return d.mapValues{expand($0,i)}};return value
     }
     static func rectangle(_ any:Any?)->CGRect {guard let a=any as? [NSNumber],a.count==4 else{return .zero};return CGRect(x:a[0].doubleValue,y:a[1].doubleValue,width:a[2].doubleValue,height:a[3].doubleValue)}
-    @MainActor init(model:CompanionModel,manifest:EdenManifest,local:[String:Double],extraWidth:Double=0) {
+    @MainActor init(model:CompanionModel,manifest:EdenManifest,local:[String:Double],extraWidth:Double=0,backgroundOnly:Bool=false) {
         var bindingsLocal=local;bindingsLocal["ui.page"]=Double(model.page.rawValue)
         let b=EdenBindings(model.values,bindingsLocal.merging(["module_ready":Double(model.number("module_ready")),"acnh.font":1]){a,_ in a},manifest);bindings=b
         var pg=b.number("ui.pg");if pg==0 && model.ready{pg=Double(model.page.rawValue)}
@@ -303,7 +303,9 @@ struct EdenFrame {
                 result.append(EdenNode(id:last*256+offset,data:["type":"rect","bg":color ?? "#00000000","pill":true,"apple_scrollbar":id],rect:rect,clip:r))
             }
         }
-        nodes=result.sorted { $0.id < $1.id }
+        let sorted=result.sorted { $0.id < $1.id }
+        // A 3D layout floats its pad over the band: only the wallpaper stays, so the controls read against one surface.
+        nodes=backgroundOnly ? sorted.filter { $0.data["type"] as? String == "image" && $0.rect.width >= 1240 } : sorted
     }
     static func scrollLimit(_ spec:[String:Any], _ bindings:EdenBindings) -> Double {
         let cols = max(1,bindings.value(spec["cols"]))
@@ -860,7 +862,7 @@ private func edenLabelKey(_ text:String,_ scale:Double,_ color:Any?,_ weight:Str
             #else
             let layout=EdenSurfaceLayout(geometry.size)
             #endif
-            let f=EdenFrame(model:model,manifest:manifest,local:local,extraWidth:layout.extraWidth)
+            let f=EdenFrame(model:model,manifest:manifest,local:local,extraWidth:layout.extraWidth,backgroundOnly:model.backgroundOnly)
             let (bodyNodes,footerNodes)=f.sections(renderNodes(f))
             let hasDock=footerNodes.contains(where: { $0.isDockArtwork })
             let navNodes=footerNodes.filter { !$0.isDockArtwork }

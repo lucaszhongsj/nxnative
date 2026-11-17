@@ -42,6 +42,7 @@ struct CompanionMarker: Identifiable {
     private var pendingPage: CompanionPage?   // a pick the adapter has not confirmed yet: its page's keys are not in the snapshot until it does
     @Published var islandName = ""
     @Published var controlsHidden = false
+    @Published var backgroundOnly = false   // a 3D layout: the band shows its wallpaper alone, the pad floating over it
     @Published var externalController = false
     @Published var dockInsets = EdgeInsets()
     @Published private(set) var presented = true
@@ -182,6 +183,14 @@ struct ACNHCompanionView: View {
 public func dmCompanionUIState(_ hidden: Int32, _ physical: Int32, _ presented: Int32) {
     guard let model = activeCompanionModel else { return }
     model.setPresentation(controlsHidden: hidden != 0, physicalController: physical != 0, presented: presented != 0)
+}
+
+// DmGamepad.m: the 3D layout floats the pad over the band, so the band keeps only its wallpaper until Tap comes back.
+@MainActor @_cdecl("dm_companion_background_state")
+public func dmCompanionBackgroundState(_ on: Int32) {
+    guard let model = activeCompanionModel else { return }
+    let want = on != 0
+    if model.backgroundOnly != want { model.backgroundOnly = want }
 }
 
 @MainActor @_cdecl("dm_companion_ui_dock_insets")
