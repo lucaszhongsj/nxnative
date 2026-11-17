@@ -666,7 +666,8 @@ static BOOL g_hintShown;   // once per launch
 // The 3D layout's bottom bar is where a triple tap switches to Tap, and nothing on screen says so. The first time the 3D layout
 // shows in a launch, a few words over the bar say it, after the right-stick hint has gone. The words sit on the bar itself, where
 // the triple tap lands. DM_NAV_HINT carries the words (the shell's language), empty turns it off.
-static BOOL g_navHintShown;   // once per launch
+static BOOL g_navHintShown;    // once per launch, set when the words fade in
+static BOOL g_navHintPending;  // a fade-in waits for the right-stick hint to go
 - (void)placeNavHint {
     BOOL fits = _full && !_tap && !_padOff && _layout.separated && _navHintWords.length && !CGRectIsEmpty(self.bounds);
     if (!fits) { if (!_navHint.hidden) { _navHint.hidden = YES; _navHint.opacity = 0; } return; }
@@ -674,9 +675,12 @@ static BOOL g_navHintShown;   // once per launch
     UIFont *font = [UIFont systemFontOfSize:fs weight:UIFontWeightSemibold];
     CGSize t = [_navHintWords sizeWithAttributes:@{NSFontAttributeName: font}];
     CGFloat boxW = fmin(ceil(t.width) + 2 * fs, CGRectGetWidth(_layout.controls) - 16), boxH = ceil(t.height) + fs * 0.8;
-    // Centred on the bottom 56 points, the strip the triple tap reads (touchesBegan), so the words mark the place to tap.
+    // Centred on the bottom 56 points, the strip the triple tap reads (touchesBegan), so the words mark the place to tap. A phone
+    // without a home indicator has no strip of its own below the pad's lower row: there the words sit just above the bar.
     CGRect bar = CGRectMake(CGRectGetMinX(_layout.controls), CGRectGetMaxY(_layout.controls) - 56, CGRectGetWidth(_layout.controls), 56);
-    CGRect r = CGRectMake(CGRectGetMidX(bar) - boxW / 2, CGRectGetMidY(bar) - boxH / 2, boxW, boxH);
+    CGRect r = self.safeAreaInsets.bottom > 0
+        ? CGRectMake(CGRectGetMidX(bar) - boxW / 2, CGRectGetMidY(bar) - boxH / 2, boxW, boxH)
+        : CGRectMake(CGRectGetMidX(bar) - boxW / 2, CGRectGetMinY(bar) - 8 - boxH, boxW, boxH);
     if (CGRectGetMinY(r) < self.safeAreaInsets.top) { if (!_navHint.hidden) { _navHint.hidden = YES; _navHint.opacity = 0; } return; }
     [CATransaction begin]; [CATransaction setDisableActions:YES];
     _navHint.frame = r; _navHint.cornerRadius = boxH / 2;
@@ -684,21 +688,23 @@ static BOOL g_navHintShown;   // once per launch
     _navHintText.contentsScale = MAX(self.traitCollection.displayScale, 1);
     _navHintText.frame = CGRectMake(0, (boxH - ceil(t.height)) / 2, boxW, ceil(t.height));
     [CATransaction commit];
-    if (g_navHintShown) return;   // already shown once: only follow the layout
-    g_navHintShown = YES;
-    LOG("front end: bottom-bar hint shown");
+    if (g_navHintShown || g_navHintPending) return;   // shown once, or its fade-in is already waiting
+    g_navHintPending = YES;
     _navHint.hidden = NO;
     __weak DmGamepad *weak = self;
-    // The right-stick hint has the screen first; this one follows it, then fades.
+    // The right-stick hint has the screen first; this one follows it, then stays long enough to read.
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(2.6 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-        DmGamepad *s = weak; if (!s || s->_navHint.hidden) return;
+        DmGamepad *s = weak; g_navHintPending = NO;
+        if (!s || s->_navHint.hidden) return;   // left the layout before it showed: the next layout tries again
+        g_navHintShown = YES;
+        LOG("front end: bottom-bar hint shown");
         [CATransaction begin]; [CATransaction setAnimationDuration:0.3]; s->_navHint.opacity = 1; [CATransaction commit];
-    });
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(9.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-        DmGamepad *s = weak; if (!s) return;
-        [CATransaction begin]; [CATransaction setAnimationDuration:0.4];
-        [CATransaction setCompletionBlock:^{ s->_navHint.hidden = YES; }];
-        s->_navHint.opacity = 0; [CATransaction commit];
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(6.4 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+            DmGamepad *s2 = weak; if (!s2) return;
+            [CATransaction begin]; [CATransaction setAnimationDuration:0.4];
+            [CATransaction setCompletionBlock:^{ s2->_navHint.hidden = YES; }];
+            s2->_navHint.opacity = 0; [CATransaction commit];
+        });
     });
 }
 - (void)safeAreaInsetsDidChange { [super safeAreaInsetsDidChange]; [self setNeedsLayout]; }
