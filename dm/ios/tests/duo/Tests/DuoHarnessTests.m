@@ -12,6 +12,7 @@
 #endif
 #import "DmLayout.h"
 #import "DmPadGeometry.h"
+#import "companion_layout.h"
 #import "DmGameMenu.h"
 #import "audio_session_policy.h"
 #import "DuoHarnessRuntime.h"
@@ -387,6 +388,29 @@ static BOOL gDuoHarnessReduceMotionEnabled;
         XCTAssertLessThanOrEqual(CGRectGetMaxY([(UIView *)[root valueForKey:@"game"] frame]), CGRectGetMinY(companion.frame),
                                  @"The picture stays in the upper half");
     }
+}
+
+- (void)testCompanionBarKeepsTheCanvasDockRatio {
+    // A standing phone's bar is the canvas's own dock row (114 of 968 body + 114 dock) plus the home
+    // indicator's strip, so the panel keeps the ratio its pages were authored with.
+    dm_companion_surface_layout phone = dm_companion_surface_make_safe(CGSizeMake(393, 426), 0, (dm_companion_dock_insets){0, 0, 34});
+    XCTAssertEqualWithAccuracy(phone.nav_scale, 393.0 / 1240.0, 0.0005);
+    XCTAssertEqualWithAccuracy(phone.footer.size.height, 114 * (393.0 / 1240.0) + 34, 0.6);
+    XCTAssertEqualWithAccuracy(phone.content.size.height, 426 - phone.footer.size.height, 0.6);
+    XCTAssertEqualWithAccuracy(CGRectGetMaxY(phone.nav_art), 426 - 34, 0.6, @"The dock's foot sits on the gesture edge");
+    XCTAssertEqualWithAccuracy(CGRectGetMinY(phone.nav_art), CGRectGetMinY(phone.footer) - 14 * phone.nav_scale, 0.6,
+                               @"The capsule window rises 14 canvas points above the dock row");
+    // A standing band with no home indicator: the bar is the canvas row alone.
+    dm_companion_surface_layout flat = dm_companion_surface_make_safe(CGSizeMake(375, 426), 0, (dm_companion_dock_insets){0});
+    XCTAssertEqualWithAccuracy(flat.footer.size.height, 114 * (375.0 / 1240.0), 0.6);
+    // A narrow standing band scales by its width: the content keeps all the height above the bar.
+    dm_companion_surface_layout narrow = dm_companion_surface_make_safe(CGSizeMake(320, 426), 0, (dm_companion_dock_insets){0, 0, 34});
+    XCTAssertEqualWithAccuracy(narrow.footer.size.height, 114 * (320.0 / 1240.0) + 34, 0.6);
+    XCTAssertEqualWithAccuracy(narrow.content.size.height + narrow.footer.size.height, 426, 0.6);
+    // A wide panel (an iPad's lower half) keeps the fitted square it had.
+    dm_companion_surface_layout wide = dm_companion_surface_make_safe(CGSizeMake(820, 590), 0, (dm_companion_dock_insets){0});
+    XCTAssertEqualWithAccuracy(wide.body.size.width, 546, 0.6);
+    XCTAssertEqualWithAccuracy(wide.body.size.height, 546, 0.6);
 }
 
 - (void)testPortraitControlsUseAnchoredGroupsWithASeparatedThreeDimensionalLeftPair {

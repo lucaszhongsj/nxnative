@@ -25,37 +25,54 @@ static inline dm_companion_surface_layout dm_companion_surface_make_safe(CGSize 
     dm_companion_surface_layout p={0};
     if(!isfinite(size.width)||!isfinite(size.height)||size.width<=0||size.height<=0)return p;
     CGFloat bottom=fmin(size.height,fmax(0,dock.bottom));
-    // The authored dock runs from its artwork's top edge (966) to the foot of the selected tab
-    // (1080); the icons and their labels sit inside that strip.
-    CGFloat art_height=128,gesture_edge=fmin(bottom,11);
-    CGFloat square=fmin(size.width,size.height);
-    CGFloat h=size.height-square;
-    if(h<24){h=fmin(size.height,44+gesture_edge);square=size.height-h;}
+    CGFloat rail=controls?dm_companion_rail_width(size.width):0;
     // A standing phone's panel is taller than it is wide: the body takes the whole panel and the
     // content fits the canvas inside it above the footer, so the picture keeps its shape and no
     // authored widget is cropped. A wide panel keeps the fitted square between the rails.
     const int standing=size.height>size.width;
-    p.body=standing ? CGRectMake(0,0,size.width,size.height) : CGRectMake((size.width-square)/2,0,square,square);
-    CGFloat padding=fmin(11,fmax(1.5,fmin(bottom*.31,11))),target_scale=fmin(.62,size.width/1240);
-    // The bar owns its old strip plus the home-indicator strip: its background and hit area run to the screen's
-    // bottom edge. A wide panel's body keeps its square, so the extra height comes from its empty lower band; a
-    // standing phone's body runs to the screen's foot and its content stops above the bar. The authored row
-    // stays centred above the gesture edge.
-    CGFloat plate=fmin(size.height,fmax(h,fmax(44+gesture_edge,art_height*target_scale+2*padding)));
-    CGFloat nav_top=fmax(0,size.height-bottom-plate),nav_height=size.height-nav_top;
-    p.footer=CGRectMake(0,nav_top,size.width,nav_height);
-    CGFloat rail=controls?dm_companion_rail_width(size.width):0;
-    p.nav_scale=fmax(.001,fmin(target_scale,fmax(0,plate-2*padding)/art_height));
-    // The bar runs the screen's full width and centres in the footer's whole height, so the
-    // artwork covers the icons and labels and the strip does not sit above an empty band.
-    CGFloat nav_w=fmin(size.width,1240*p.nav_scale),nav_h=fmin(plate,art_height*p.nav_scale);
-    CGFloat nav_x=(size.width-nav_w)/2;
-    p.nav_art=CGRectMake(nav_x,nav_top+(nav_height-nav_h)/2,nav_w,nav_h);
-    p.nav_controls=CGRectMake(nav_x,nav_top,nav_w,nav_height);
-    p.nav_offset=CGPointMake(nav_x,CGRectGetMidY(p.nav_art)-1019.5*p.nav_scale);
-    // The footer is drawn over the body and takes its touches, so a standing phone's content stops at
-    // the bar's top edge: no widget is hidden under the bar or unreachable there.
-    p.content=standing ? CGRectMake(0,0,size.width,nav_top) : CGRectMake(p.body.origin.x+rail,0,fmax(1,p.body.size.width-2*rail),p.body.size.height);
+    if(standing){
+        // The bar is the canvas's own dock row: 114 of the canvas's 1082 points (968 body + 114
+        // dock, which overlap by 2) scale with the body, so the bar keeps the ratio the page was
+        // authored with. The home indicator's strip is added below it; the bar's background and
+        // hit area still run to the screen's foot.
+        CGFloat scale=fmax(.001,fmin(size.width/1240.0,(size.height-bottom)/1082.0));
+        CGFloat nav_top=fmax(0,size.height-bottom-114*scale),nav_height=size.height-nav_top;
+        p.body=CGRectMake(0,0,size.width,size.height);
+        p.footer=CGRectMake(0,nav_top,size.width,nav_height);
+        p.nav_scale=scale;
+        // The art window carries the selected tab's capsule (canvas 952..1080, 128): its foot sits
+        // on the gesture edge, 14 canvas points above the dock row's own top.
+        CGFloat nav_w=1240*scale,nav_h=128*scale,nav_x=(size.width-nav_w)/2;
+        p.nav_art=CGRectMake(nav_x,nav_top-(128-114)*scale,nav_w,nav_h);
+        p.nav_controls=p.footer;
+        p.nav_offset=CGPointMake(nav_x,CGRectGetMidY(p.nav_art)-1019.5*scale);
+        // The footer is drawn over the body and takes its touches, so the content stops at the
+        // bar's top edge: no widget is hidden under the bar or unreachable there.
+        p.content=CGRectMake(0,0,size.width,nav_top);
+    }else{
+        // The authored dock runs from its artwork's top edge (966) to the foot of the selected tab
+        // (1080); the icons and their labels sit inside that strip.
+        CGFloat art_height=128,gesture_edge=fmin(bottom,11);
+        CGFloat square=fmin(size.width,size.height);
+        CGFloat h=size.height-square;
+        if(h<24){h=fmin(size.height,44+gesture_edge);square=size.height-h;}
+        p.body=CGRectMake((size.width-square)/2,0,square,square);
+        CGFloat padding=fmin(11,fmax(1.5,fmin(bottom*.31,11))),target_scale=fmin(.62,size.width/1240);
+        // The bar owns its old strip plus the home-indicator strip: its background and hit area run to the screen's
+        // bottom edge. A wide panel's body keeps its square, so the extra height comes from its empty lower band.
+        CGFloat plate=fmin(size.height,fmax(h,fmax(44+gesture_edge,art_height*target_scale+2*padding)));
+        CGFloat nav_top=fmax(0,size.height-bottom-plate),nav_height=size.height-nav_top;
+        p.footer=CGRectMake(0,nav_top,size.width,nav_height);
+        p.nav_scale=fmax(.001,fmin(target_scale,fmax(0,plate-2*padding)/art_height));
+        // The bar runs the screen's full width and centres in the footer's whole height, so the
+        // artwork covers the icons and labels and the strip does not sit above an empty band.
+        CGFloat nav_w=fmin(size.width,1240*p.nav_scale),nav_h=fmin(plate,art_height*p.nav_scale);
+        CGFloat nav_x=(size.width-nav_w)/2;
+        p.nav_art=CGRectMake(nav_x,nav_top+(nav_height-nav_h)/2,nav_w,nav_h);
+        p.nav_controls=CGRectMake(nav_x,nav_top,nav_w,nav_height);
+        p.nav_offset=CGPointMake(nav_x,CGRectGetMidY(p.nav_art)-1019.5*p.nav_scale);
+        p.content=CGRectMake(p.body.origin.x+rail,0,fmax(1,p.body.size.width-2*rail),p.body.size.height);
+    }
     CGFloat edge=fmin(10,rail*.15);
     p.left=CGRectMake(edge,0,fmax(0,rail-edge),p.body.size.height);p.right=CGRectMake(size.width-rail,0,fmax(0,rail-edge),p.body.size.height);
     p.body_scale=fmax(.001,fmin(p.content.size.width/1240,p.content.size.height/968));
