@@ -47,15 +47,14 @@ static inline CGRect dm_aspect_fill(CGRect b, CGFloat aspect) {
 
 static inline BOOL dm_picture_fill(const char *_Nullable value) { return value && !strcmp(value, "fill"); }   // DM_PICTURE_FIT: fit (default) or fill
 
-// Picture shape "auto" (the launcher's Match screen): the window's own shape when it is wider than 16:9 (a 19.5:9 phone lying down at 2.17:1), else 16:9.
-// A phone standing up asks for 1.43 as well (1920x1344, 1280x896): a game's screen-shape stubs translate the shape into its own sizes, and the shapes a game
-// accepts are the ones the adapter was built for (ACNH's adapter follows DM_SCREEN_ASPECT from 1.3 to 1.77; a square or a 0.92 portrait one crashes it).
-// The range is loader.c's (0.9 to 2.4). 0 = 16:9.
-#define DM_PICTURE_PORTRAIT 1.43f   // the shape a standing phone asks for: the adapter's own ratio (1920x1344)
-
+// Picture shape "auto" (the launcher's Match screen): the shape of the area the picture fills, so its background covers that
+// area with nothing cropped. Lying down that is the screen's own wide shape (a 19.5:9 phone at 2.17:1); standing up it is the
+// upper half's shape (twice the screen's width / its height: 0.92 on a 19.5:9 phone). A game's screen-shape stubs translate the
+// shape into its own sizes, and the shapes a game accepts are the ones the adapter was built for; the range is loader.c's (0.9 to
+// 2.4). 0 = 16:9.
 static inline float dm_picture_shape_auto(CGSize window, CGFloat topInset) {
     (void)topInset;
-    if (window.height > window.width) return DM_PICTURE_PORTRAIT;   // standing up: the adapter's taller shape
+    if (window.height > window.width) return (float)(2 * window.width / MAX(window.height, 1));   // standing up: the upper half's shape
     double r = MAX(window.width, window.height) / MAX(MIN(window.width, window.height), 1);
     return r >= 0.9 && r < 2.4 ? (float)r : 0.0f;
 }
@@ -72,9 +71,9 @@ static inline DmLayout dm_layout(CGRect b, UIEdgeInsets insets, BOOL partiallyOp
     division = dm_horizontal_division(b, division);
     BOOL portrait = b.size.height > b.size.width;
     if (!portrait && (!partiallyOpen || CGRectIsNull(division))) return l;
-    // A phone standing up with no fold splits the screen at its midpoint: the picture takes the upper half, the panel the lower half. The guest's
-    // picture keeps its own shape (16:9), which does not fit that half, so the picture is cropped to fill it (dm_aspect_fill): the sides are cut, never
-    // stretched. A fold sets both edges within the safe area.
+    // A phone standing up with no fold splits the screen at its midpoint: the picture takes the upper half, the panel the lower half. Picture shape
+    // "auto" asks for that half's own shape, so the fitted picture fills it exactly; a shape that does not match (a manual DM_SCREEN_ASPECT) keeps its
+    // whole picture and leaves bars instead of cropping it. A fold sets both edges within the safe area.
     BOOL folded = NO;   // the iPhone Duo's fold is retired: a split is the phone standing up, with no fold
     CGRect safe = UIEdgeInsetsInsetRect(b, insets);
     CGFloat upperBottom = folded ? CGRectGetMinY(division) : CGRectGetMidY(b);
@@ -83,9 +82,8 @@ static inline DmLayout dm_layout(CGRect b, UIEdgeInsets insets, BOOL partiallyOp
                           : CGRectMake(CGRectGetMinX(b), CGRectGetMinY(b), b.size.width, upperBottom - CGRectGetMinY(b));
     CGRect lower = CGRectMake(CGRectGetMinX(b), bandTop, b.size.width, CGRectGetMaxY(b) - bandTop);
     if (upper.size.height <= 0) return l;
-    // A standing phone crops the guest's picture to fill the upper half, so the picture takes half the screen. The picture is wider than the upper half
-    // (16:9 in a tall half), so its sides are cropped: the guest keeps its shape, nothing is stretched. A fold keeps the picture fitted, so it stays whole.
-    l.game = (portrait && !folded && aspect > 0 && aspect < DM_PICTURE_16_9) ? dm_aspect_fill(upper, aspect) : dm_aspect_fit(upper, aspect);
+    // The picture keeps its whole shape: with "auto" that shape is the upper half's, so the fitted rectangle fills it exactly. Nothing is stretched.
+    l.game = dm_aspect_fit(upper, aspect);
     l.companion = lower; l.controls = lower; l.separated = YES;
     return l;
 }

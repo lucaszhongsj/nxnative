@@ -254,7 +254,8 @@ static BOOL gDuoHarnessReduceMotionEnabled;
         XCTAssertTrue(CGRectEqualToRect(layout.controls, layout.companion),
                       @"The pad floats over the whole band");
         XCTAssertEqualWithAccuracy(layout.game.size.width / layout.game.size.height, aspect, 0.001);
-        XCTAssertEqualWithAccuracy(layout.game.size.height, splitY, 0.5, @"The cropped picture fills the upper half");
+        XCTAssertEqualWithAccuracy(layout.game.size.height, splitY, 0.5, @"The picture fills the upper half");
+        XCTAssertEqualWithAccuracy(layout.game.size.width, bounds.size.width, 0.5, @"Its sides are not cropped: %@", NSStringFromCGRect(layout.game));
         XCTAssertLessThanOrEqual(CGRectGetMaxY(layout.game), CGRectGetMinY(layout.companion), @"The band's top leaves no video/panel overlap");
     }
 }
@@ -278,33 +279,33 @@ static BOOL gDuoHarnessReduceMotionEnabled;
 }
 
 - (void)testPictureShapeAutoFillsHalfTheScreenWhenStandingUp {
-    // A phone standing up keeps the guest's own 16:9 picture (a shape the game accepts): the front end crops it to fill the upper half
-    XCTAssertEqualWithAccuracy(dm_picture_shape_auto(CGSizeMake(390, 844), 59), DM_PICTURE_PORTRAIT, 0.001);
-    XCTAssertEqualWithAccuracy(dm_picture_shape_auto(CGSizeMake(375, 667), 50), DM_PICTURE_PORTRAIT, 0.001);
-    XCTAssertEqualWithAccuracy(dm_picture_shape_auto(CGSizeMake(430, 932), 59), DM_PICTURE_PORTRAIT, 0.001);
-    XCTAssertEqualWithAccuracy(dm_picture_shape_auto(CGSizeMake(820, 1180), 24), DM_PICTURE_PORTRAIT, 0.001);
-    XCTAssertEqualWithAccuracy(dm_picture_shape_auto(CGSizeMake(744, 1133), 24), DM_PICTURE_PORTRAIT, 0.001);
-    XCTAssertEqualWithAccuracy(dm_picture_shape_auto(CGSizeMake(1032, 1376), 24), DM_PICTURE_PORTRAIT, 0.001, @"An unfolded Duo standing up");
+    // A phone standing up asks for the upper half's own shape, so the picture fills that half with nothing cropped.
+    XCTAssertEqualWithAccuracy(dm_picture_shape_auto(CGSizeMake(390, 844), 59), 2 * 390.0 / 844.0, 0.001);
+    XCTAssertEqualWithAccuracy(dm_picture_shape_auto(CGSizeMake(375, 667), 50), 2 * 375.0 / 667.0, 0.001);
+    XCTAssertEqualWithAccuracy(dm_picture_shape_auto(CGSizeMake(430, 932), 59), 2 * 430.0 / 932.0, 0.001);
+    XCTAssertEqualWithAccuracy(dm_picture_shape_auto(CGSizeMake(820, 1180), 24), 2 * 820.0 / 1180.0, 0.001);
+    XCTAssertEqualWithAccuracy(dm_picture_shape_auto(CGSizeMake(744, 1133), 24), 2 * 744.0 / 1133.0, 0.001);
+    XCTAssertEqualWithAccuracy(dm_picture_shape_auto(CGSizeMake(1032, 1376), 24), 2 * 1032.0 / 1376.0, 0.001, @"An unfolded Duo standing up");
     XCTAssertEqualWithAccuracy(dm_picture_shape_auto(CGSizeMake(1376, 1032), 0), 1376.0 / 1032.0, 0.001, @"An unfolded Duo lying down is 4:3");
-    // A window wider than 16:9 keeps its own shape: loader.c takes 1.3 to 2.4, so a phone lying down at 19.5:9 is a shape to render in
+    // A window wider than 16:9 keeps its own shape: loader.c takes 0.9 to 2.4, so a phone lying down at 19.5:9 is a shape to render in
     XCTAssertEqualWithAccuracy(dm_picture_shape_auto(CGSizeMake(844, 390), 0), 844.0 / 390.0, 0.001, @"A 19.5:9 phone lying down");
     XCTAssertEqualWithAccuracy(dm_picture_shape_auto(CGSizeMake(1024, 768), 0), 1024.0 / 768.0, 0.001, @"An iPad lying down is 4:3");
     // A square window takes its own shape while lying down (height is not greater than width)
     XCTAssertEqualWithAccuracy(dm_picture_shape_auto(CGSizeMake(600, 600), 0), 1.0f, 0.001);
     XCTAssertEqual(dm_picture_shape_auto(CGSizeZero, 0), 0.0f);
-    // The screen's own shape by its orientation: a phone lying down keeps its wide shape (the wide picture patch renders it uncropped), a phone standing up
-    // asks for the standing shape.
-    XCTAssertEqualWithAccuracy(dm_picture_shape_auto(CGSizeMake(402, 874), 0), DM_PICTURE_PORTRAIT, 0.001, @"An iPhone 17 Pro standing up");
+    // The screen's own shape by its orientation: a phone lying down keeps its wide shape, a phone standing up asks for the upper half's shape.
+    XCTAssertEqualWithAccuracy(dm_picture_shape_auto(CGSizeMake(402, 874), 0), 2 * 402.0 / 874.0, 0.001, @"An iPhone 17 Pro standing up");
+    XCTAssertEqualWithAccuracy(dm_picture_shape_auto(CGSizeMake(874, 402), 0), 874.0 / 402.0, 0.001, @"The same phone lying down");
 }
 
 - (void)testPortraitWithoutHingeStatusStillSplitsVideoAboveControls {
     // A phone standing up splits the screen at its midpoint: the picture fills the upper half, the panel the lower half
     DmLayout layout = dm_layout(CGRectMake(0, 0, 390, 844), UIEdgeInsetsMake(59, 0, 34, 0), NO, CGRectNull, dm_picture_shape_auto(CGSizeMake(390, 844), 59));
     XCTAssertTrue(layout.separated);
-    XCTAssertEqualWithAccuracy(layout.game.size.height, 422, 0.5, @"The cropped picture fills the upper half's height: %@", NSStringFromCGRect(layout.game));
+    XCTAssertEqualWithAccuracy(layout.game.size.height, 422, 0.5, @"The picture fills the upper half's height: %@", NSStringFromCGRect(layout.game));
     XCTAssertEqualWithAccuracy(CGRectGetMinY(layout.game), 0, 0.5, @"It starts at the top of the screen");
     XCTAssertEqualWithAccuracy(CGRectGetMaxY(layout.game), CGRectGetMinY(layout.companion), 0.5, @"No bar between the picture and the band");
-    XCTAssertGreaterThan(layout.game.size.width, 390, @"The picture is wider than the screen: its sides are cropped");
+    XCTAssertEqualWithAccuracy(layout.game.size.width, 390, 0.5, @"The picture is the screen's width: its sides are not cropped");
     XCTAssertEqualWithAccuracy(CGRectGetMinY(layout.companion), 422, 0.5);
     XCTAssertEqualWithAccuracy(layout.companion.size.height, 422, 0.5, @"The panel keeps the lower half");
     XCTAssertTrue(CGRectEqualToRect(layout.controls, layout.companion), @"The pad floats over the whole band");
@@ -313,7 +314,8 @@ static BOOL gDuoHarnessReduceMotionEnabled;
     DmLayout ipad = dm_layout(CGRectMake(0, 0, 820, 1180), UIEdgeInsetsMake(24, 0, 20, 0), NO, CGRectNull, dm_picture_shape_auto(CGSizeMake(820, 1180), 24));
     XCTAssertTrue(ipad.separated);
     XCTAssertEqualWithAccuracy(CGRectGetMinY(ipad.companion), 590, 0.5, @"An iPad splits at its midpoint");
-    XCTAssertEqualWithAccuracy(ipad.game.size.height, 590, 0.5, @"The cropped picture fills the upper half");
+    XCTAssertEqualWithAccuracy(ipad.game.size.height, 590, 0.5, @"The picture fills the upper half");
+    XCTAssertEqualWithAccuracy(ipad.game.size.width, 820, 0.5, @"Its sides are not cropped");
 }
 
 - (void)testCompanionTakesTheBandUnderThePictureAndNoOtherLayoutHasOne {

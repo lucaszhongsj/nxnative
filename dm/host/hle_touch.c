@@ -17,10 +17,11 @@ static struct { int down, pend; float x, y; } g_gf[16];   // the gesture recogni
 static pthread_mutex_t g_tl = PTHREAD_MUTEX_INITIALIZER;
 static int64_t g_tsamp; static uint64_t g_tlast_ns;
 
-// On a picture wider than 16:9 the game's interface keeps a 16:9 projection (view.s's Lscreen_projection scales the layout projection's x by
-// (16/9)/r), so it is drawn centred across that fraction of the width while the picture itself fills the screen. The front end normalises a
-// touch on the whole picture, so map it back onto that centred rectangle: a control is hit where it is drawn, and the screen's edges reach the
-// interface's edges (a touch outside it clamps there). 16:9 and taller pictures are left alone.
+// On a picture that is not 16:9 the game's interface keeps a 16:9 projection (view.s's Lscreen_projection keeps one axis and scales the other),
+// so it is drawn centred in a 16:9 rectangle while the picture itself fills the screen. The front end normalises a touch on the whole picture, so
+// map it back onto that centred rectangle: a control is hit where it is drawn, and the screen's edges reach the interface's edges (a touch outside
+// it clamps there). A wider picture centres the interface across a fraction of the width, so x maps; a taller one centres it across a fraction of
+// the height, so y maps. 16:9 is left alone.
 __attribute__((weak)) uint8_t *dm_fps_state;   // loader.c defines it; a unit test that links only this file has no frame step page, and NULL means 16:9
 static float ui_x(float x) {
     if (!dm_fps_state) return x;
@@ -29,12 +30,19 @@ static float ui_x(float x) {
     float v = 0.5f + (x - 0.5f) / ((16.0f / 9.0f) / r);
     return v < 0 ? 0 : v > 1 ? 1 : v;
 }
+static float ui_y(float y) {
+    if (!dm_fps_state) return y;
+    float r; memcpy(&r, dm_fps_state + 0x58, 4);
+    if (!(r > 0.0f) || !(r < 16.0f / 9.0f)) return y;
+    float v = 0.5f + (y - 0.5f) * ((16.0f / 9.0f) / r);
+    return v < 0 ? 0 : v > 1 ? 1 : v;
+}
 static void touch_apply(const dm_touch *t, int n) {
     pthread_mutex_lock(&g_tl);
     int seen[16] = {0};
     for (int i = 0; i < n; i++) {
         uint32_t id = t[i].id; if (id >= 16) continue;
-        float tx = ui_x(t[i].x), ty = t[i].y;
+        float tx = ui_x(t[i].x), ty = ui_y(t[i].y);
         seen[id] = 1;
         if (!g_gf[id].down) g_gf[id].pend = 1;
         g_gf[id].down = 1; g_gf[id].x = tx; g_gf[id].y = ty;
