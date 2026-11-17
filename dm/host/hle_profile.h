@@ -27,6 +27,7 @@ struct dm_profile {
     int present_display, core_preempt, alloc_big_align, fps_target, fps_hold, present_snap, pso_mtl4;
     int shared_font_ttf;         // -1 = decide by the SDK version (hle_sdk16.c font_skip)
     int pad_layout, opmode, perf_boost;
+    int touch_forward;           // 3D: touches that hit no control go to the game (off unless the game needs its touch screen)
     char feedback_snap[DM_PROF_STR];
     int tex_flush_upload, tex_dirty_upload, tex_dyn_slots, gpu_ts_segment, vconv_range;
     int nvn_api_major, nvn_api_minor;   // major 0 = decide by the SDK version (hle_nvn.c nvn_api)

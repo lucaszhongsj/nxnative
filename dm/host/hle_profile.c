@@ -76,6 +76,9 @@ static uint64_t num(const char *v, uint64_t dflt) {
 #ifndef DM_GAME_PAD_LAYOUT
 #define DM_GAME_PAD_LAYOUT 0
 #endif
+#ifndef DM_GAME_TOUCH_FORWARD
+#define DM_GAME_TOUCH_FORWARD 0
+#endif
 #ifndef DM_GAME_OPMODE
 #define DM_GAME_OPMODE 1
 #endif
@@ -150,6 +153,7 @@ static void defaults(void) {
     P.shared_font_ttf = -1;
 #endif
     P.pad_layout = DM_GAME_PAD_LAYOUT; P.opmode = DM_GAME_OPMODE; P.perf_boost = DM_GAME_PERF_BOOST;
+    P.touch_forward = DM_GAME_TOUCH_FORWARD;
     copy_str(P.feedback_snap, sizeof P.feedback_snap, DM_GAME_FEEDBACK_SNAP);
     P.tex_flush_upload = DM_GAME_TEX_FLUSH_UPLOAD; P.tex_dirty_upload = DM_GAME_TEX_DIRTY_UPLOAD;
     P.tex_dyn_slots = DM_GAME_TEX_DYN_SLOTS; P.gpu_ts_segment = DM_GAME_GPU_TS_SEGMENT; P.vconv_range = DM_GAME_VCONV_RANGE;
@@ -210,6 +214,7 @@ static void set_kv(const char *k, const char *v) {
     else if (!strcmp(k, "pso_mtl4")) P.pso_mtl4 = truthy(v);
     else if (!strcmp(k, "shared_font")) P.shared_font_ttf = !strcmp(v, "auto") || !strcmp(v, "-1") ? -1 : !strcmp(v, "ttf") || !strcmp(v, "1");   // auto: by the SDK version (hle_sdk16.c)
     else if (!strcmp(k, "pad_layout")) P.pad_layout = !strcmp(v, "full") || !strcmp(v, "1") ? 1 : !strcmp(v, "touch") || !strcmp(v, "2") ? 2 : 0;
+    else if (!strcmp(k, "touch_forward")) P.touch_forward = truthy(v);   // 3D's unclaimed touches reach the game (default off)
     else if (!strcmp(k, "op_mode")) P.opmode = !strcmp(v, "console") ? 1 : !strcmp(v, "handheld") ? 0 : truthy(v);
     else if (!strcmp(k, "perf_mode")) P.perf_boost = !strcmp(v, "boost") ? 1 : !strcmp(v, "follow") ? 0 : truthy(v);
     else if (!strcmp(k, "feedback_snap")) copy_str(P.feedback_snap, sizeof P.feedback_snap, v);
@@ -264,7 +269,7 @@ static void read_file(const char *path) {
 static void read_env(void) {
     static const char *keys[] = {"TITLE_ID","NAME","ROMFS_MARKER","PROGRAM_ID","MODULES","MEM_RESERVE","MEM_ALIAS","MEM_STACK","APP_POOL",
         "MEM_USED","SYS_RESOURCE","MEM_MAP_LIMIT","PRESENT_INTERVAL","CORE_PREEMPT","ALLOC_BIG_ALIGN","FPS_TARGET","FPS_HOLD","PRESENT_SNAP",
-        "PSO_MTL4","SHARED_FONT","PAD_LAYOUT","OP_MODE","PERF_MODE","FEEDBACK_SNAP","TEX_FLUSH_UPLOAD","TEX_DIRTY_UPLOAD",
+        "PSO_MTL4","SHARED_FONT","PAD_LAYOUT","TOUCH_FORWARD","OP_MODE","PERF_MODE","FEEDBACK_SNAP","TEX_FLUSH_UPLOAD","TEX_DIRTY_UPLOAD",
         "TEX_DYN_SLOTS","GPU_TIMESTAMPS","VCONV_RANGE","DEVICE_API","STDALLOC_CAP","SHADER_KEY_SKIP","TEX_BC_CPU","UE_TEXTURE_POOL","ENC_THREAD","DRAW_BARRIERS","GAME_ARGS","GAME_ENV", NULL};
     char k[64], name[96];
     for (int i = 0; keys[i]; i++) {
@@ -301,9 +306,9 @@ void dm_profile_log(void) {
         (unsigned long long)p->program_id, (unsigned long long)p->mem_reserve, (unsigned long long)p->mem_alias,
         (unsigned long long)p->mem_stack, (unsigned long long)p->app_pool, (unsigned long long)p->mem_used,
         (unsigned long long)p->sys_resource, p->mem_map_limit);
-    LOG("  switches present_display %d core_preempt %d big_align %d fps %d hold %d snap %d pso4 %d font_ttf %d pad %d opmode %d boost %d",
+    LOG("  switches present_display %d core_preempt %d big_align %d fps %d hold %d snap %d pso4 %d font_ttf %d pad %d touch_forward %d opmode %d boost %d",
         p->present_display, p->core_preempt, p->alloc_big_align, p->fps_target, p->fps_hold, p->present_snap, p->pso_mtl4,
-        p->shared_font_ttf, p->pad_layout, p->opmode, p->perf_boost);
+        p->shared_font_ttf, p->pad_layout, p->touch_forward, p->opmode, p->perf_boost);
     LOG("  graphics flush %d dirty %d dynslots %d gputs %d vconv %d nvn_api %d.%d  versions %d",
         p->tex_flush_upload, p->tex_dirty_upload, p->tex_dyn_slots, p->gpu_ts_segment, p->vconv_range,
         p->nvn_api_major, p->nvn_api_minor, p->nver);

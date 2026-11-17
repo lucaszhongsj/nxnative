@@ -16,6 +16,8 @@ app_category	public.app-category.games
 pad_layout	full
 # Hagi (hagi.config): the Wii pointer is the touch screen in handheld mode
 op_mode	handheld
+# the 3D layout's touches that hit no control are the pointer
+touch_forward	on
 
 # ---- Versions ----
 build	v393216	1.1.4	main=b21e3733e11d6fcf1a8d57ce51bef4a5	subsdk0=3b1090649ca17ee83e29f43600b63be5	sdk=cdb385c299fdba2786299ea08a86ca25

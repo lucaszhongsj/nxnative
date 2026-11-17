@@ -105,7 +105,7 @@ A light tap from the phone when you press an on-screen button.
 
 ### Touch controls size and left stick
 
-**Size** (small, medium or large) sets the size of the on-screen controls, and **Left stick** (corner, higher or inward) where the left stick sits. They are the same two choices as in the shell's settings, for a game's own app. A size that does not fit the screen moves toward medium, and the player's arrangement of single controls in the shell (`DM_TOUCH_LAYOUT`) is not edited here. The controller layout (2D, 3D, Tap) stays in the in-game menu.
+**Size** (small, medium or large) sets the size of the on-screen controls, and **Left stick** (corner, higher or inward) where the left stick sits. They are the same two choices as in the shell's settings, for a game's own app. A size that does not fit the screen moves toward medium, and the player's arrangement of single controls in the shell (`DM_TOUCH_LAYOUT`) is not edited here. The controller layout (3D and Tap; 2D is no longer offered, though a saved 2D choice still applies) stays in the in-game menu.
 
 ### Game rumble
 
@@ -274,9 +274,9 @@ iCloud Drive takes a moment to carry a file from one device to the other. Quit t
 
 ## In-game menu
 
-On the iPhone and iPad the gear at the top centre of the touch controls opens a menu while the game runs. With a physical controller connected on the device screen, the gear fades out after 3 idle seconds and returns for 3 seconds when you touch the screen. It holds **Console mode**, **Picture**, the **Frame-rate counter** and **Mix with other audio**, then **Controller layout** (**2D**, **3D**, and **Tap**, no controls and every touch to the game, in handheld mode), **Touch feedback** and **Game rumble**: the settings that take effect at once. A choice opens to show its options, the current one ticked. The menu's text keeps one size whatever the system text size, so it stays short over the game. A change is remembered as on the settings screen, which shows it at the next start; a setting `Documents/env.txt` fixes is shown, not changed. The other settings need the game to start again, so they are only on the settings screen: close the app fully and open it again.
+On the iPhone and iPad the gear at the top centre of the touch controls opens a menu while the game runs. With a physical controller connected on the device screen, the gear fades out after 3 idle seconds and returns for 3 seconds when you touch the screen. It holds **Console mode**, **Picture**, the **Frame-rate counter** and **Mix with other audio**, then **Controller layout** (**3D**, and **Tap**, no controls and every touch to the game; 2D is no longer offered, though a saved 2D choice still applies), **Touch feedback** and **Game rumble**: the settings that take effect at once. A choice opens to show its options, the current one ticked. The menu's text keeps one size whatever the system text size, so it stays short over the game. A change is remembered as on the settings screen, which shows it at the next start; a setting `Documents/env.txt` fixes is shown, not changed. The other settings need the game to start again, so they are only on the settings screen: close the app fully and open it again.
 
-Console mode changes as on a Switch put in or taken out of its dock. While a TV shows the game it stays **Docked**, and the mode you pick applies when the TV is disconnected. **Docked** removes the Tap layout, as a docked Switch reads no touch screen.
+Console mode changes as on a Switch put in or taken out of its dock. While a TV shows the game it stays **Docked**, and the mode you pick applies when the TV is disconnected. The console mode does not change the controller layout or what reaches the game's touch screen: **Tap** keeps sending every touch while docked, and 3D forwards only where the game's profile asks for its touch screen. On a TV (the picture on an external screen) **Tap** is not offered and falls back to 2D: the phone shows no picture for a touch to land on. In portrait, double-tapping the panel's bottom bar switches between **Tap** and **3D** at once.
 
 ## TV
 

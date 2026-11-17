@@ -500,8 +500,8 @@ def heap_signals(log, g):
 
 
 # ---- Checking the rules against the hand-made profiles ----
-DEFAULTS = {'op_mode': 'console', 'pad_layout': 'simple'}
-NO_SIGNAL = {'pad_layout', 'op_mode'}   # no static signal outside the engine presets; the player switches the pad layout in game, DM_OPMODE in env.txt sets the mode
+DEFAULTS = {'op_mode': 'console', 'pad_layout': 'simple', 'touch_forward': 'off'}
+NO_SIGNAL = {'pad_layout', 'touch_forward', 'op_mode'}   # no static signal outside the engine presets; the player switches the pad layout in game, DM_OPMODE in env.txt sets the mode
 
 
 def find_extraction(root, g):   # (ExeFS, RomFS manifest or folder) for a profile: its survey, else a work folder's extraction of the packed version

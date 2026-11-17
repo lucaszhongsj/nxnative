@@ -3,6 +3,9 @@
 // Build: clang -O1 -I.. -I../gen/<game> -o build/t_profile_runtime t_profile_runtime.c ../hle_profile.c
 #include "../dm.h"
 #include "../hle_profile.h"
+#ifndef DM_GAME_TOUCH_FORWARD
+#define DM_GAME_TOUCH_FORWARD 0   // a profile header written before the key existed
+#endif
 #include <assert.h>
 #include <errno.h>
 #include <sys/wait.h>
@@ -25,6 +28,7 @@ static int child_file(const char *path) {
     CHECK(p->tex_bc_cpu == 1 && p->ue_texture_pool == 1000 && p->enc_thread == 1 && p->draw_barriers_game == 1 && p->core_preempt == 1 && p->fps_target == 30);
     CHECK(p->shared_font_ttf == 1 && p->nvn_api_major == 55 && p->nvn_api_minor == 12);
     CHECK(p->nver == 1 && !strcmp(p->ver[0].build, "abcd") && !strcmp(p->ver[0].ver, "2.0.1"));
+    CHECK(p->pad_layout == 0 && p->touch_forward == 1);   // simple is 2D, touch_forward is on
     return 0;
 }
 // the "none" spellings game.py writes for a game that leaves a key out: they must undo the compiled game's value
@@ -33,13 +37,15 @@ static int child_none(const char *path) {
     const struct dm_profile *p = dm_profile();
     CHECK(p->shader_skip_len == 0 && p->shared_font_ttf == -1 && p->nvn_api_major == 0 && p->stdalloc_cap == 0);
     CHECK(p->tex_bc_cpu == 0 && p->ue_texture_pool == 0 && p->enc_thread == 0 && p->draw_barriers_game == 0);
+    CHECK(p->touch_forward == 0);   // 3D forwarding is off unless the profile turns it on
     return 0;
 }
 static int child_env(void) {   // DM_PROF_<KEY> wins over the file and over the compiled profile
     unsetenv("DM_PROFILE");
     setenv("DM_PROF_STDALLOC_CAP", "0x40000000", 1); setenv("DM_PROF_SHADER_KEY_SKIP", "0x30+0x10", 1); setenv("DM_PROF_ENC_THREAD", "1", 1);
+    setenv("DM_PROF_TOUCH_FORWARD", "1", 1);
     const struct dm_profile *p = dm_profile();
-    CHECK(p->stdalloc_cap == 0x40000000ull && p->shader_skip_off == 0x30 && p->shader_skip_len == 0x10 && p->enc_thread == 1);
+    CHECK(p->stdalloc_cap == 0x40000000ull && p->shader_skip_off == 0x30 && p->shader_skip_len == 0x10 && p->enc_thread == 1 && p->touch_forward == 1);
     return 0;
 }
 static int child_compiled(void) {   // no DM_PROFILE: exactly the header
@@ -54,6 +60,7 @@ static int child_compiled(void) {   // no DM_PROFILE: exactly the header
     CHECK(p->shader_skip_off == DM_GAME_SHADER_KEY_SKIP_OFF && p->shader_skip_len == DM_GAME_SHADER_KEY_SKIP_LEN);
     CHECK(p->tex_bc_cpu == DM_GAME_TEX_BC_CPU && p->ue_texture_pool == DM_GAME_UE_TEXTURE_POOL && p->enc_thread == DM_GAME_ENC_THREAD && p->draw_barriers_game == DM_GAME_DRAW_BARRIERS_GAME);
     CHECK(p->core_preempt == DM_GAME_CORE_PREEMPT && p->fps_target == DM_GAME_FPS_TARGET);
+    CHECK(p->touch_forward == DM_GAME_TOUCH_FORWARD);
 #ifdef DM_GAME_NVN_API_MAJOR
     CHECK(p->nvn_api_major == DM_GAME_NVN_API_MAJOR && p->nvn_api_minor == DM_GAME_NVN_API_MINOR);
 #else
@@ -84,8 +91,8 @@ int main(int argc, char **argv) {
     if (write_file(full, "# values that differ from any compiled profile\n"
             "title_id\t0100000000001234\nprogram_id\t0x0100000000001234\nname\tRuntime Test\nmodules\tmain subsdk0 sdk\ngame_args\t-foo=1 -bar\n"
             "stdalloc_cap\t0x180000000\nshader_key_skip\t0x770+0x78\ntex_bc_cpu\t1\nue_texture_pool\t1000\nenc_thread\t1\ndraw_barriers\tgame\ncore_preempt\t1\nfps_target\t30\n"
-            "shared_font\tttf\ndevice_api\t55.12\nbuild\tabcd\t2.0.1\tdisplay\n")) return 1;
-    if (write_file(none, "shader_key_skip\t0x0+0x0\nshared_font\tauto\ndevice_api\t0.0\nstdalloc_cap\t0x0\ntex_bc_cpu\t0\nue_texture_pool\t0\nenc_thread\t0\ndraw_barriers\t0\n")) return 1;
+            "shared_font\tttf\ndevice_api\t55.12\nbuild\tabcd\t2.0.1\tdisplay\npad_layout\tsimple\ntouch_forward\ton\n")) return 1;
+    if (write_file(none, "shader_key_skip\t0x0+0x0\nshared_font\tauto\ndevice_api\t0.0\nstdalloc_cap\t0x0\ntex_bc_cpu\t0\nue_texture_pool\t0\nenc_thread\t0\ndraw_barriers\t0\ntouch_forward\toff\n")) return 1;
     const char *cases[][2] = {{"file", full}, {"none", none}, {"env", NULL}, {"compiled", NULL}};
     int bad = 0;
     for (int i = 0; i < 4; i++) {
