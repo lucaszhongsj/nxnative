@@ -59,12 +59,12 @@ static const CGFloat
     DM_PAD_DROP_TIP = 1.45,                                   // teardrop tip distance from the centre (times the radius)
     DM_PAD_CORNER_IN = 0.5,                                   // how far the bottom-corner controls reach into the side safe-area inset
     DM_PAD_FACE_X = 81, DM_PAD_Y = 82,                        // diamond centre from the outer edge; diamond and stick centre from the bottom
-    DM_PAD_FACE_GAP = 85, DM_PAD_FACE_R = 18,                 // diamond: key distance from the centre, key radius; a 15 mm reach between keys, in the thumb's range
+    DM_PAD_FACE_GAP = 50, DM_PAD_FACE_R = 27,                 // diamond: key distance from the centre, key radius; the keys' outer edge is 77 u from the centre
     DM_PAD_PILL_DX = 52, DM_PAD_PILL_Y = 22, DM_PAD_PILL_W = 50, DM_PAD_PILL_H = 28,   // − / +: centre from the midline and from the top, size
     DM_PAD_SWAP_R = 15,                                       // menu button: top centre, level with − / +
     DM_PAD_STICK_X = 81, DM_PAD_STICK_R = 77, DM_PAD_KNOB_R = 30,   // left stick: mirrors the diamond
-    DM_PAD_LOW_X = 231, DM_PAD_LOW_Y = 64,                    // D-pad centre from the outer edge and the bottom
-    DM_PAD_DPAD_R = 85, DM_PAD_ARM_W = 27, DM_PAD_ARM_IN = 18,   // D-pad: same reach as the ABXY diamond, both orientations
+    DM_PAD_LOW_X = 250, DM_PAD_LOW_Y = 82,                    // D-pad centre from the outer edge and the bottom
+    DM_PAD_DPAD_R = 77, DM_PAD_ARM_W = 27, DM_PAD_ARM_IN = 18,   // D-pad: the ABXY diamond's reach (its tip is at the key's outer edge, 77 u), both orientations
     DM_PAD_CLICK_X = 102, DM_PAD_CLICK_R = 17;                // L3 / R3: centre from the outer edge (level with ZL / ZR), radius
 
 // DM_TOUCH_SIZE: small, medium (also unset, empty or unknown) or large.
@@ -98,11 +98,9 @@ static inline DmPadGeo dm_pad_geo_at(CGRect bounds, UIEdgeInsets insets, DmLayou
     g.corner = sep ? g.safe : UIEdgeInsetsInsetRect(bounds, ci);
     g.portrait = sep && bounds.size.height > bounds.size.width;
     CGRect s = g.safe, c = g.corner;
-    CGPoint thumbL = CGPointMake(CGRectGetMinX(s) + s.size.width * 0.28, CGRectGetMinY(s) + s.size.height * 0.58);
-    CGPoint thumbR = CGPointMake(CGRectGetMinX(s) + s.size.width * 0.72, thumbL.y);
     g.faceGap = DM_PAD_FACE_GAP * u; g.faceR = DM_PAD_FACE_R * u;
-    // The enlarged target reaches the midpoint between two keys (both count there) but never a neighbour's centre: a key's centre selects that key alone.
-    g.faceHitR = MIN(MAX(g.faceR * 1.25, sep ? g.faceGap * 0.75 : 0), 1.2 * g.faceGap);
+    // The hit circle is what is drawn, at least 22 points: the same circle dm_pad_hit and DmGamepad.m's faceAt use.
+    g.faceHitR = MAX(g.faceR, 22);
     g.stickR = DM_PAD_STICK_R * u; g.knobR = DM_PAD_KNOB_R * u;
     g.dpadR = DM_PAD_DPAD_R * u; g.armW = DM_PAD_ARM_W * u; g.armIn = DM_PAD_ARM_IN * u;
     if (g.portrait) {

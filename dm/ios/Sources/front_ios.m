@@ -307,10 +307,17 @@ static UIWindow *g_tv;   // the TV scene's window while one shows the picture (t
     if (![line isEqualToString:self.layoutLog]) { self.layoutLog = line; LOG("front end: layout %s", line.UTF8String); }
     self.pad.frame = b;
     dm_gamepad_arrange(self.pad, layout);
-    if (self.fps) {   // the top row's free stretch: right of DmGamepad.m's L3 key (102 + 17 of its units from the safe edge), level with − / + (22 units down); u is its unit
+    if (self.fps) {
+        // The frame-rate counter: in the top row's free stretch (right of DmGamepad.m's L3 key, 102 + 17 of its units from the safe edge, level with − / +)
+        // in the overlay layout; under the menu gear in a split, where the top row is crowded. u is the gamepad's unit.
         CGRect s = CGRectIntersection(layout.controls, UIEdgeInsetsInsetRect(b, gameInsets));
         CGFloat u = layout.separated ? MIN(MIN(s.size.height / 430.0, s.size.width / 700.0), 1.3) : MIN(b.size.height / 430.0, 1.3);
-        self.fps.frame = CGRectMake(floor(CGRectGetMinX(s) + 130 * u), floor(CGRectGetMinY(s) + 22 * u - 11), 64, 22);
+        if (layout.separated) {
+            CGFloat gear = 15 * u;   // the menu gear's radius (DmGamepad.m DM_PAD_SWAP_R), at the top centre
+            self.fps.frame = CGRectMake(floor(CGRectGetMidX(s) - 32), floor(CGRectGetMinY(s) + gear * 2 + 4), 64, 22);
+        } else {
+            self.fps.frame = CGRectMake(floor(CGRectGetMinX(s) + 130 * u), floor(CGRectGetMinY(s) + 22 * u - 11), 64, 22);
+        }
     }
 }
 - (void)showFPS:(BOOL)on {   // the frame-rate counter: DM_SHOW_FPS at Play, then the in-game menu

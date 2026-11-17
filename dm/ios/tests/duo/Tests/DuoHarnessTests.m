@@ -253,7 +253,7 @@ static BOOL gDuoHarnessReduceMotionEnabled;
         XCTAssertTrue(CGRectEqualToRect(layout.controls, layout.companion),
                       @"The pad floats over the whole band");
         XCTAssertEqualWithAccuracy(layout.game.size.width / layout.game.size.height, aspect, 0.001);
-        XCTAssertEqualWithAccuracy(layout.game.size.height, MIN(bounds.size.width, splitY), 0.5, @"The square picture fits the upper half");
+        XCTAssertEqualWithAccuracy(layout.game.size.height, splitY, 0.5, @"The cropped picture fills the upper half");
         XCTAssertLessThanOrEqual(CGRectGetMaxY(layout.game), CGRectGetMinY(layout.companion), @"The band's top leaves no video/panel overlap");
     }
 }
@@ -277,13 +277,13 @@ static BOOL gDuoHarnessReduceMotionEnabled;
 }
 
 - (void)testPictureShapeAutoFillsHalfTheScreenWhenStandingUp {
-    // A phone standing up takes the shape of half the window, so the picture fills the upper 50% and the panel the lower 50%
-    XCTAssertEqualWithAccuracy(dm_picture_shape_auto(CGSizeMake(390, 844), 59), 1.0f, 0.001);
-    XCTAssertEqualWithAccuracy(dm_picture_shape_auto(CGSizeMake(375, 667), 50), 1.0f, 0.001);
-    XCTAssertEqualWithAccuracy(dm_picture_shape_auto(CGSizeMake(430, 932), 59), 1.0f, 0.001);
-    XCTAssertEqualWithAccuracy(dm_picture_shape_auto(CGSizeMake(820, 1180), 24), 1.0f, 0.001);
-    XCTAssertEqualWithAccuracy(dm_picture_shape_auto(CGSizeMake(744, 1133), 24), 1.0f, 0.001);
-    XCTAssertEqualWithAccuracy(dm_picture_shape_auto(CGSizeMake(1032, 1376), 24), 1.0f, 0.001, @"An unfolded Duo standing up");
+    // A phone standing up keeps the guest's own 16:9 picture (a shape the game accepts): the front end crops it to fill the upper half
+    XCTAssertEqualWithAccuracy(dm_picture_shape_auto(CGSizeMake(390, 844), 59), DM_PICTURE_PORTRAIT, 0.001);
+    XCTAssertEqualWithAccuracy(dm_picture_shape_auto(CGSizeMake(375, 667), 50), DM_PICTURE_PORTRAIT, 0.001);
+    XCTAssertEqualWithAccuracy(dm_picture_shape_auto(CGSizeMake(430, 932), 59), DM_PICTURE_PORTRAIT, 0.001);
+    XCTAssertEqualWithAccuracy(dm_picture_shape_auto(CGSizeMake(820, 1180), 24), DM_PICTURE_PORTRAIT, 0.001);
+    XCTAssertEqualWithAccuracy(dm_picture_shape_auto(CGSizeMake(744, 1133), 24), DM_PICTURE_PORTRAIT, 0.001);
+    XCTAssertEqualWithAccuracy(dm_picture_shape_auto(CGSizeMake(1032, 1376), 24), DM_PICTURE_PORTRAIT, 0.001, @"An unfolded Duo standing up");
     XCTAssertEqualWithAccuracy(dm_picture_shape_auto(CGSizeMake(1376, 1032), 0), 1376.0 / 1032.0, 0.001, @"An unfolded Duo lying down is 4:3");
     // A window wider than 16:9 keeps its own shape: loader.c takes 1.3 to 2.4, so a phone lying down at 19.5:9 is a shape to render in
     XCTAssertEqualWithAccuracy(dm_picture_shape_auto(CGSizeMake(844, 390), 0), 844.0 / 390.0, 0.001, @"A 19.5:9 phone lying down");
@@ -297,10 +297,10 @@ static BOOL gDuoHarnessReduceMotionEnabled;
     // A phone standing up splits the screen at its midpoint: the picture fills the upper half, the panel the lower half
     DmLayout layout = dm_layout(CGRectMake(0, 0, 390, 844), UIEdgeInsetsMake(59, 0, 34, 0), NO, CGRectNull, dm_picture_shape_auto(CGSizeMake(390, 844), 59));
     XCTAssertTrue(layout.separated);
-    XCTAssertEqualWithAccuracy(layout.game.size.width, 390, 0.5);
-    XCTAssertEqualWithAccuracy(layout.game.size.height, 390, 0.5, @"The square picture is 390x390: %@", NSStringFromCGRect(layout.game));
-    XCTAssertEqualWithAccuracy(CGRectGetMinY(layout.game), 16, 0.5, @"It is centred in the upper half");
-    XCTAssertLessThanOrEqual(CGRectGetMaxY(layout.game), CGRectGetMinY(layout.companion), @"The picture stays above the band");
+    XCTAssertEqualWithAccuracy(layout.game.size.height, 422, 0.5, @"The cropped picture fills the upper half's height: %@", NSStringFromCGRect(layout.game));
+    XCTAssertEqualWithAccuracy(CGRectGetMinY(layout.game), 0, 0.5, @"It starts at the top of the screen");
+    XCTAssertEqualWithAccuracy(CGRectGetMaxY(layout.game), CGRectGetMinY(layout.companion), 0.5, @"No bar between the picture and the band");
+    XCTAssertGreaterThan(layout.game.size.width, 390, @"The picture is wider than the screen: its sides are cropped");
     XCTAssertEqualWithAccuracy(CGRectGetMinY(layout.companion), 422, 0.5);
     XCTAssertEqualWithAccuracy(layout.companion.size.height, 422, 0.5, @"The panel keeps the lower half");
     XCTAssertTrue(CGRectEqualToRect(layout.controls, layout.companion), @"The pad floats over the whole band");
@@ -309,7 +309,7 @@ static BOOL gDuoHarnessReduceMotionEnabled;
     DmLayout ipad = dm_layout(CGRectMake(0, 0, 820, 1180), UIEdgeInsetsMake(24, 0, 20, 0), NO, CGRectNull, dm_picture_shape_auto(CGSizeMake(820, 1180), 24));
     XCTAssertTrue(ipad.separated);
     XCTAssertEqualWithAccuracy(CGRectGetMinY(ipad.companion), 590, 0.5, @"An iPad splits at its midpoint");
-    XCTAssertEqualWithAccuracy(ipad.game.size.height, 590, 0.5, @"The square picture fits the upper half");
+    XCTAssertEqualWithAccuracy(ipad.game.size.height, 590, 0.5, @"The cropped picture fills the upper half");
 }
 
 - (void)testCompanionTakesTheBandUnderThePictureAndNoOtherLayoutHasOne {
@@ -414,7 +414,7 @@ static BOOL gDuoHarnessReduceMotionEnabled;
         XCTAssertEqualWithAccuracy(faces.y, faceCenter.y, 0.5);
 
         CGPoint dpadCenter = CGPointMake(stickCenter.x, CGRectGetMinY(lower) + 0.80 * lower.size.height);
-        DuoFakeTouch *right = [self touchAt:CGPointMake(dpadCenter.x + 0.6 * 85 * u, dpadCenter.y) time:1];
+        DuoFakeTouch *right = [self touchAt:CGPointMake(dpadCenter.x + 0.6 * 77 * u, dpadCenter.y) time:1];
         [self beginTouches:@[right] onPad:pad];
         XCTAssertEqual(duo_harness_input().buttons, DM_BTN_RIGHT,
                        @"The D-pad hit target should share its specified portrait position (case %lu)", (unsigned long)i);
@@ -424,9 +424,9 @@ static BOOL gDuoHarnessReduceMotionEnabled;
                                     @"The joystick remains inside the lower safe area (case %lu)", (unsigned long)i);
         XCTAssertLessThanOrEqual(CGRectGetMaxX(stickRing), CGRectGetMaxX(lower) + 0.5,
                                  @"The joystick remains inside the lower safe area (case %lu)", (unsigned long)i);
-        XCTAssertGreaterThanOrEqual(faces.x - 149 * u, CGRectGetMinX(lower) - 0.5,
+        XCTAssertGreaterThanOrEqual(faces.x - 77 * u, CGRectGetMinX(lower) - 0.5,
                                     @"The face cluster's expanded targets remain inside the lower safe area (case %lu)", (unsigned long)i);
-        XCTAssertLessThanOrEqual(faces.x + 149 * u, CGRectGetMaxX(lower) + 0.5,
+        XCTAssertLessThanOrEqual(faces.x + 77 * u, CGRectGetMaxX(lower) + 0.5,
                                  @"The face cluster's expanded targets remain inside the lower safe area (case %lu)", (unsigned long)i);
     }
 }
@@ -458,7 +458,7 @@ static BOOL gDuoHarnessReduceMotionEnabled;
                          @"A touch at the visible 2D stick must drive the left-stick mapping");
     [self endTouches:@[stick] onPad:pad cancelled:NO];
 
-    CGPoint hiddenDpad = CGPointMake(stickCenter.x + 0.6 * 85 * u, CGRectGetMinY(lower) + 0.80 * lower.size.height);
+    CGPoint hiddenDpad = CGPointMake(stickCenter.x + 0.6 * 77 * u, CGRectGetMinY(lower) + 0.80 * lower.size.height);
     DuoFakeTouch *dpad = [self touchAt:hiddenDpad time:2];
     [self beginTouches:@[dpad] onPad:pad];
     XCTAssertEqual(duo_harness_input().buttons & DM_BTN_RIGHT, 0,
@@ -479,7 +479,7 @@ static BOOL gDuoHarnessReduceMotionEnabled;
     CGPoint faceA = CGPointMake(CGRectGetMinX(lower) + 0.75 * lower.size.width + 50 * u, stickCenter.y);
     CGPoint video = CGPointMake(CGRectGetMidX(layout.game), CGRectGetMidY(layout.game));
     DuoFakeTouch *stick = [self touchAt:stickCenter time:1];
-    DuoFakeTouch *right = [self touchAt:CGPointMake(dpadCenter.x + 0.6 * 85 * u, dpadCenter.y) time:1];
+    DuoFakeTouch *right = [self touchAt:CGPointMake(dpadCenter.x + 0.6 * 77 * u, dpadCenter.y) time:1];
     DuoFakeTouch *a = [self touchAt:faceA time:1];
     DuoFakeTouch *game = [self touchAt:video time:1];
 
@@ -517,7 +517,7 @@ static BOOL gDuoHarnessReduceMotionEnabled;
     CGPoint aCenter = [self faceAIn:layout bounds:bounds];
     CGPoint video = CGPointMake(CGRectGetMidX(layout.game), CGRectGetMidY(layout.game));
     DuoFakeTouch *stick = [self touchAt:stickCenter time:1];
-    DuoFakeTouch *right = [self touchAt:CGPointMake(dpadCenter.x + 0.6 * 85 * u, dpadCenter.y) time:1];
+    DuoFakeTouch *right = [self touchAt:CGPointMake(dpadCenter.x + 0.6 * 77 * u, dpadCenter.y) time:1];
     DuoFakeTouch *a = [self touchAt:aCenter time:1];
     DuoFakeTouch *game = [self touchAt:video time:1];
     [self beginTouches:@[stick, right, a, game] onPad:pad];
@@ -991,8 +991,10 @@ static BOOL gDuoHarnessReduceMotionEnabled;
             [root.view layoutIfNeeded];
             XCTAssertTrue(CGSizeEqualToSize(root.view.bounds.size, sizes[i]));
             XCTAssertTrue(CGRectEqualToRect(pad.frame, root.view.bounds));
-            XCTAssertTrue(CGRectContainsRect(root.view.bounds, game.frame));
-            XCTAssertEqualWithAccuracy(game.bounds.size.width / game.bounds.size.height, 16.0 / 9.0, 0.001);
+            XCTAssertTrue(CGRectContainsRect(root.view.bounds, game.frame) || CGRectGetWidth(game.frame) > CGRectGetWidth(root.view.bounds),
+                          @"A cropped picture is wider than the screen");
+            XCTAssertEqualWithAccuracy(game.bounds.size.width / game.bounds.size.height, DM_PICTURE_16_9, 0.001,
+                                       @"The picture keeps the shape the guest presented");
             CAMetalLayer *metal = (CAMetalLayer *)game.layer;
             CGFloat scale = root.view.window.windowScene.screen.nativeScale;
             XCTAssertEqualWithAccuracy(metal.drawableSize.width, game.bounds.size.width * scale, 1.0);
@@ -1054,7 +1056,7 @@ static BOOL gDuoHarnessReduceMotionEnabled;
     XCTAssertEqual(CGRectGetMinX(layout.controls), 0);
     XCTAssertEqual(CGRectGetMaxX(layout.controls), 744);
     XCTAssertEqual(CGRectGetMaxY(layout.controls), 1133);
-    XCTAssertGreaterThanOrEqual(CGRectGetMinY(layout.game), 54);
+    XCTAssertGreaterThanOrEqual(CGRectGetMinY(layout.game), 0, @"The picture stays on the screen");
 }
 
 
@@ -1256,9 +1258,9 @@ static BOOL gDuoHarnessReduceMotionEnabled;
     if (layout.separated && bounds.size.height > bounds.size.width) {
         CGPoint faceCenter = CGPointMake(CGRectGetMinX(safe) + 0.75 * safe.size.width,
                                          CGRectGetMinY(safe) + 0.40 * safe.size.height);
-        return CGPointMake(faceCenter.x + 85 * u, faceCenter.y);
+        return CGPointMake(faceCenter.x + 50 * u, faceCenter.y);
     }
-    return CGPointMake(CGRectGetMaxX(safe) - 81 * u + 85 * u, CGRectGetMaxY(safe) - 82 * u);
+    return CGPointMake(CGRectGetMaxX(safe) - 81 * u + 50 * u, CGRectGetMaxY(safe) - 82 * u);
 }
 
 - (CATextLayer *)textLayerNamed:(NSString *)name inLayer:(CALayer *)layer {
@@ -1312,7 +1314,7 @@ static BOOL gDuoHarnessReduceMotionEnabled;
     UIView *pad = [self padForLayout:layout bounds:bounds];
     CGPoint a = [self faceAIn:layout bounds:bounds];
     CGFloat u = MIN(MIN(layout.controls.size.height / 430.0, layout.controls.size.width / 700.0), 1.3);
-    CGPoint b = CGPointMake(a.x - 85 * u, a.y + 85 * u);
+    CGPoint b = CGPointMake(a.x - 50 * u, a.y + 50 * u);
     CGPoint video = CGPointMake(CGRectGetMidX(layout.game), CGRectGetMidY(layout.game));
     DuoFakeTouch *ta = [self touchAt:a time:1], *tb = [self touchAt:b time:1], *tv = [self touchAt:video time:1];
 

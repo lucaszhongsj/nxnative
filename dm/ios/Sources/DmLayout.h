@@ -22,10 +22,12 @@ static inline UIEdgeInsets dm_game_safe_insets(CGRect bounds, UIEdgeInsets inset
 // The picture's width / height before the game's first present (front.h front_picture_shape gives the real one: a taller shape under DM_SCREEN_ASPECT, 1920x1344)
 #define DM_PICTURE_16_9 (16.0 / 9.0)
 
-// The largest centered rectangle of the picture's shape (aspect = width / height) in b
+// The largest centered rectangle of the picture's shape (aspect = width / height) in b. An aspect of 0 is 16:9 (the convention of DM_SCREEN_ASPECT, the
+// launcher's "auto" and the guest's own shape).
 static inline CGRect dm_aspect_fit(CGRect b, CGFloat aspect) {
     CGFloat w = b.size.width, h = b.size.height;
-    if (w <= 0 || h <= 0 || aspect <= 0) return CGRectZero;
+    if (aspect <= 0) aspect = DM_PICTURE_16_9;
+    if (w <= 0 || h <= 0) return CGRectZero;
     if (w / h > aspect) w = h * aspect; else h = w / aspect;
     return CGRectMake(floor(CGRectGetMidX(b) - w / 2), floor(CGRectGetMidY(b) - h / 2), w, h);
 }
@@ -34,21 +36,23 @@ static inline CGRect dm_aspect_fit(CGRect b, CGFloat aspect) {
 // its shape, so what lies outside b is cropped, never stretched. Not rounded, so it covers b exactly.
 static inline CGRect dm_aspect_fill(CGRect b, CGFloat aspect) {
     CGFloat w = b.size.width, h = b.size.height;
-    if (w <= 0 || h <= 0 || aspect <= 0) return CGRectZero;
+    if (aspect <= 0) aspect = DM_PICTURE_16_9;
+    if (w <= 0 || h <= 0) return CGRectZero;
     if (w / h > aspect) h = w / aspect; else w = h * aspect;
     return CGRectMake(CGRectGetMidX(b) - w / 2, CGRectGetMidY(b) - h / 2, w, h);
 }
 
 static inline BOOL dm_picture_fill(const char *_Nullable value) { return value && !strcmp(value, "fill"); }   // DM_PICTURE_FIT: fit (default) or fill
 
-// Picture shape "auto" (the launcher's Match screen): the window's own shape when it is taller than 16:9 (an iPad's 4:3, an unfolded iPhone Duo's 1.43:1) or
-// wider (a 19.5:9 phone lying down at 2.17:1), else 16:9. A phone standing up takes the shape of the band above the panel: half the window less the
-// safe area's top (the Dynamic Island), so the picture fills that band without cropping. The range is loader.c's (0.9 to 2.4). 0 = 16:9.
+// Picture shape "auto" (the launcher's Match screen): the window's own shape when it is wider than 16:9 (a 19.5:9 phone lying down at 2.17:1), else 16:9.
+// A phone standing up asks for 1.43 as well (1920x1344, 1280x896): a game's screen-shape stubs translate the shape into its own sizes, and the shapes a game
+// accepts are the ones the adapter was built for (ACNH's adapter follows DM_SCREEN_ASPECT from 1.3 to 1.77; a square or a 0.92 portrait one crashes it).
+// The range is loader.c's (0.9 to 2.4). 0 = 16:9.
+#define DM_PICTURE_PORTRAIT 1.43f   // the shape a standing phone asks for: the adapter's own ratio (1920x1344)
+
 static inline float dm_picture_shape_auto(CGSize window, CGFloat topInset) {
     (void)topInset;
-    // A phone standing up asks for a square framebuffer: the guest's screen-shape stubs get a regular 1920x1920 / 1280x1280
-    // from loader.c, instead of the 0.92 portrait shape that crashed it.
-    if (window.height > window.width) return 1.0f;
+    if (window.height > window.width) return DM_PICTURE_PORTRAIT;   // standing up: the adapter's taller shape
     double r = MAX(window.width, window.height) / MAX(MIN(window.width, window.height), 1);
     return r >= 0.9 && r < 2.4 ? (float)r : 0.0f;
 }
@@ -71,19 +75,21 @@ static inline DmLayout dm_layout(CGRect b, UIEdgeInsets insets, BOOL partiallyOp
     division = dm_horizontal_division(b, division);
     BOOL portrait = b.size.height > b.size.width;
     if (!portrait && (!partiallyOpen || CGRectIsNull(division))) return l;
-    // A phone standing up with no fold splits the screen at its midpoint: the picture takes the upper half, the panel the lower half. The picture's shape
-    // is computed for that half at launch (dm_picture_shape_auto), so it fills the upper rectangle without bars. A fold sets both edges within the safe area.
+    // A phone standing up with no fold splits the screen at its midpoint: the picture takes the upper half, the panel the lower half. The guest's
+    // picture keeps its own shape (16:9), which does not fit that half, so the picture is cropped to fill it (dm_aspect_fill): the sides are cut, never
+    // stretched. A fold sets both edges within the safe area.
     BOOL folded = !CGRectIsNull(division);
     CGRect safe = UIEdgeInsetsInsetRect(b, insets);
-    // A standing phone splits the screen at its midpoint: the picture takes the upper half, the panel the lower half. A fold sets both edges
-    // within the safe area instead.
     CGFloat upperBottom = folded ? CGRectGetMinY(division) : CGRectGetMidY(b);
     CGFloat bandTop = folded ? CGRectGetMaxY(division) : upperBottom;
     CGRect upper = folded ? CGRectMake(CGRectGetMinX(safe), CGRectGetMinY(safe), safe.size.width, upperBottom - CGRectGetMinY(safe))
                           : CGRectMake(CGRectGetMinX(b), CGRectGetMinY(b), b.size.width, upperBottom - CGRectGetMinY(b));
     CGRect lower = CGRectMake(CGRectGetMinX(b), bandTop, b.size.width, CGRectGetMaxY(b) - bandTop);
     if (upper.size.height <= 0) return l;
-    l.game = dm_aspect_fit(upper, aspect); l.companion = lower; l.controls = lower; l.separated = YES;
+    // A standing phone crops the guest's picture to fill the upper half, so the picture takes half the screen. The picture is wider than the upper half
+    // (16:9 in a tall half), so its sides are cropped: the guest keeps its shape, nothing is stretched. A fold keeps the picture fitted, so it stays whole.
+    l.game = (portrait && !folded && aspect > 0 && aspect < DM_PICTURE_16_9) ? dm_aspect_fill(upper, aspect) : dm_aspect_fit(upper, aspect);
+    l.companion = lower; l.controls = lower; l.separated = YES;
     return l;
 }
 
