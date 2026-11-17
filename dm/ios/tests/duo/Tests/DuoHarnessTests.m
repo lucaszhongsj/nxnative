@@ -843,18 +843,17 @@ static BOOL gDuoHarnessReduceMotionEnabled;
 }
 
 - (void)testDockingDropsTheTapLayout {
-    dm_set_opmode(0);
     CGRect bounds = CGRectMake(0, 0, 844, 390);
     [self padForLayout:dm_layout(bounds, UIEdgeInsetsZero, NO, CGRectNull, DM_PICTURE_16_9) bounds:bounds];
     dm_pad_layout_set(2);
     XCTAssertEqual(dm_pad_layout(), 2);
-    dm_set_opmode(1); dm_gamepad_opmode_changed();
-    XCTAssertEqual(dm_pad_layout(), 0, @"Docked, the game reads no touch screen: Tap goes");
+    // On a TV the phone shows no picture for a touch to land on (dm_layout_pad_only): Tap goes
+    [self padForLayout:dm_layout_pad_only(bounds) bounds:bounds];
+    XCTAssertEqual(dm_pad_layout(), 0, @"On a TV Tap goes");
     XCTAssertFalse(dm_pad_layout_offered(2));
     dm_pad_layout_set(2);
-    XCTAssertEqual(dm_pad_layout(), 0, @"Tap cannot be picked while docked");
+    XCTAssertEqual(dm_pad_layout(), 0, @"Tap cannot be picked on a TV");
     XCTAssertEqualObjects([NSUserDefaults.standardUserDefaults objectForKey:@"DmPadLayout"], @0);
-    dm_set_opmode(0);
 }
 
 - (void)testInGameMenuSettingsTakeEffectAtOnce {
