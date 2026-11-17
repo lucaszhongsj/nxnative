@@ -161,6 +161,8 @@ targets:
       - path: Sources/ACNHCompanion.swift
       - path: Sources/EdenCompanion.swift
       - path: Sources/DmHostingController.swift
+      - path: Sources/zh-Hans.lproj
+        buildPhase: resources
       - path: Sources/CloudSaves.m
       - path: Sources/SaveSync.m
       - path: Sources/DataBookmark.m
