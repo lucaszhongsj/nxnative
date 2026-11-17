@@ -711,10 +711,11 @@ static void t_motion_hid(void) {
     dm_motion_clear_hid(0); dm_motion_clear_hid(1); dm_motion_clear(0); g_phone_motion.last_ns = 0;
     dm_pad_players(1); g_phone_mode = -1;
 }
-// Touch screen reads across docked <-> handheld: every state comes from a hle_touch.c sample, which numbers the states of both modes from one count (t_touch checks the numbers), with
-// touch points asked for only in handheld mode. Numbered apart (docked from the npad counter, 65536; handheld from 1), a game started docked dropped every touch after
-// leaving the dock: Unity's touch reader (Aokana main+0xd2bde0) takes a state only if its sampling number is above the last one it took, empty states included.
-// A read makes a sample only 4 ms after the newest one (or on a mode change) and keeps the last 16, newest first (the touch resource's 4 ms LIFO); the clock only moves forward here.
+// Touch screen reads across docked <-> handheld: every state comes from a hle_touch.c sample, which numbers the states from one count (t_touch checks the numbers), and the
+// console mode no longer decides whether a state carries its touch points: the front end's Tap layout does, in either mode. Numbered apart (docked from the npad counter,
+// 65536; handheld from 1), a game started docked dropped every touch after leaving the dock: Unity's touch reader (Aokana main+0xd2bde0) takes a state only if its sampling
+// number is above the last one it took, empty states included.
+// A read makes a sample only 4 ms after the newest one and keeps the last 16, newest first (the touch resource's 4 ms LIFO); the clock only moves forward here.
 static void touch_hist_clear(void) { g_touch_kept = 0; }
 static int64_t touch_num(const uint8_t *p) { int64_t v; memcpy(&v, p, 8); return v; }
 static int32_t touch_cnt(const uint8_t *p) { int32_t v; memcpy(&v, p + 8, 4); return v; }
@@ -729,7 +730,7 @@ static void t_touch_sampling(void) {
         if (i & 1) CHECK(h_hid_TouchN_16(s, 1) == 1, "touch: GetTouchScreenStates gives one state");
         else h_hid_Touch1_16(s);
         v = touch_num(s);
-        CHECK(touch_points == !modes[i], "touch: touch points are asked for in handheld mode only");
+        CHECK(touch_points == 1, "touch: touch points are asked for in either console mode");
         CHECK(v > prev, i == 2 ? "touch: handheld after docked continues the sampling numbers" : i == 4 ? "touch: docked after handheld continues the sampling numbers"
                                 : i == 5 ? "touch: handheld again continues the sampling numbers" : "touch: sampling numbers increase");
         prev = v;
@@ -783,14 +784,13 @@ static void t_touch_sampling(void) {
     CHECK(h_hid_TouchN_16(h, 2) == 2, "touch: the history holds the Start sample and the next one");
     int32_t at0, at1; memcpy(&at0, h + 0x10 + 0x08, 4); memcpy(&at1, h + 0x290 + 0x10 + 0x08, 4);
     CHECK(at0 == 0 && at1 == 1 && touch_num(h + 0x290) == start_no && touch_num(h) > start_no, "touch: a later reader finds the Start at index 1 of the history");
-    // A mode change within 4 ms still makes a sample asked for in the new mode; two console reads within 4 ms share one
-    touch_stub_n = 0; touch_stub_attr[0] = 0; motion_now += TOUCH_GRID_NS; g_mode = 0; h_hid_Touch1_16(s);
-    int64_t n0 = touch_samp; g_mode = 1; motion_now += 1; h_hid_Touch1_16(s);
-    CHECK(touch_samp == n0 + 1 && touch_points == 0, "touch: handheld to docked within 4 ms makes a sample without points");
-    motion_now += 1; h_hid_Touch1_16(s2);
-    CHECK(touch_samp == n0 + 1 && touch_num(s2) == touch_num(s), "touch: two docked reads within 4 ms share a sampling number");
-    g_mode = 0; motion_now += 1; h_hid_Touch1_16(s);
-    CHECK(touch_samp == n0 + 2 && touch_points == 1 && touch_num(s) > touch_num(s2), "touch: docked to handheld within 4 ms makes a sample asking for points");
+    // The console mode no longer gates touch points: a docked read asks for them, and a mode change within 4 ms neither makes a sample nor drops them
+    touch_stub_n = 1; touch_stub_attr[0] = 0; touch_hist_clear(); motion_now += TOUCH_GRID_NS; g_mode = 1; h_hid_Touch1_16(s);
+    CHECK(touch_points == 1 && touch_cnt(s) == 1, "touch: a docked read carries the touch points");
+    int64_t n0 = touch_samp; g_mode = 0; motion_now += 1; memset(s2, 0xA5, sizeof s2); h_hid_Touch1_16(s2);
+    CHECK(touch_samp == n0 && touch_points == 1 && touch_num(s2) == touch_num(s), "touch: a mode change within 4 ms shares the sample, points and all");
+    motion_now += TOUCH_GRID_NS; memset(s2, 0xA5, sizeof s2); h_hid_Touch1_16(s2);
+    CHECK(touch_samp == n0 + 1 && touch_points == 1 && touch_cnt(s2) == 1, "touch: the next sample, whichever the mode, still carries them");
     // n <= 0 returns 0, writes nothing and makes no sample
     memset(h, 0xA5, sizeof h); motion_now += TOUCH_GRID_NS; int64_t n1 = touch_samp;
     CHECK(h_hid_TouchN_16(h, 0) == 0 && h_hid_TouchN_16(h, -1) == 0, "touch: n <= 0 returns 0");

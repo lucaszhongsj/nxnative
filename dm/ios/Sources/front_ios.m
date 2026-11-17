@@ -136,6 +136,7 @@ static void launcher_done(void) { [g_root startGame]; }
 - (void)viewDidLoad {
     [super viewDidLoad];
     self.view.backgroundColor = UIColor.blackColor;
+#if 0   // the iPhone Duo's hinge is retired: only ordinary iPhones run here
 #if __has_include(<UIKit/UIHingeInteraction.h>)
     if (@available(iOS 27.1, *)) {
         __weak DmRootVC *weakSelf = self;
@@ -143,6 +144,7 @@ static void launcher_done(void) { [g_root startGame]; }
             [weakSelf hingeChanged:update.hinge];
         }]];
     }
+#endif
 #endif
 #if DM_COMPANION
     [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(appStateChanged:) name:UIApplicationWillResignActiveNotification object:nil];
@@ -261,8 +263,9 @@ static UIWindow *g_tv;   // the TV scene's window while one shows the picture (t
 - (void)viewDidLayoutSubviews {
     [super viewDidLayoutSubviews];
     CGRect b = self.view.bounds; if (!self.game) return;
-    CGRect division = CGRectNull;   // an iPhone Duo's fold, as UIKit reports it (iOS 27.1)
+    CGRect division = CGRectNull;   // the iPhone Duo's fold is retired: ordinary iPhones report none
     NSMutableArray<NSString *> *regionLog = [NSMutableArray array];
+#if 0   // the iPhone Duo's division regions are retired
 #if __has_include(<UIKit/UIHingeInteraction.h>)
     if (@available(iOS 27.1, *)) {
         for (UIViewReservedRegion *region in [self.view reservedRegionsOfKind:UIViewReservedRegionKind.divisionRegionKind options:UIViewReservedRegionQueryOptionsIncludeInactive]) {
@@ -272,7 +275,8 @@ static UIWindow *g_tv;   // the TV scene's window while one shows the picture (t
         }
     }
 #endif
-    BOOL duoPortrait = b.size.height > b.size.width && (self.hingeStatus != 0 || !CGRectIsNull(division));
+#endif
+    BOOL duoPortrait = NO;   // the iPhone Duo is retired
     UIEdgeInsets gameInsets = dm_game_safe_insets(b, self.view.safeAreaInsets, duoPortrait);
     BOOL onTV = self.game.superview != self.view;   // the TV's view lays the picture out; the phone is all pad
     DmLayout layout = onTV ? dm_layout_pad_only(b) : dm_layout_picture(dm_layout(b, gameInsets, self.partiallyOpen, division, g_picture_aspect), b, self.fill, g_picture_aspect);
@@ -280,9 +284,11 @@ static UIWindow *g_tv;   // the TV scene's window while one shows the picture (t
     self.companion.frame = layout.companion;
     self.companion.hidden = !layout.separated;
     layout.topSafeOnly = duoPortrait;
-    BOOL hingeClosed = NO;
+    BOOL hingeClosed = NO;   // the iPhone Duo's hinge is retired
+#if 0
 #if __has_include(<UIKit/UIHingeInteraction.h>)
     if (@available(iOS 27.1, *)) hingeClosed = self.hingeStatus == UIHingeStatusClosed;
+#endif
 #endif
     layout.customControlsFullBounds = dm_layout_custom_controls_full_bounds(b, hingeClosed);
 #if DM_COMPANION
@@ -309,7 +315,7 @@ static UIWindow *g_tv;   // the TV scene's window while one shows the picture (t
         // The frame-rate counter: in the top row's free stretch (right of DmGamepad.m's L3 key, 102 + 17 of its units from the safe edge, level with − / +)
         // in the overlay layout; under the menu gear in a split, where the top row is crowded. u is the gamepad's unit.
         CGRect s = CGRectIntersection(layout.controls, UIEdgeInsetsInsetRect(b, gameInsets));
-        CGFloat u = dm_pad_base_unit(b, gameInsets, layout);   // the gamepad's own unit (DmPadGeometry.h), so the counter lines up with the gear
+        CGFloat u = dm_pad_base_unit(b, gameInsets, layout, dm_pad_layout() != 0);   // the gamepad's own unit (DmPadGeometry.h), so the counter lines up with the gear
         if (layout.separated) {
             CGFloat gear = 15 * u;   // the menu gear's radius (DmGamepad.m DM_PAD_SWAP_R), at the top centre
             self.fps.frame = CGRectMake(floor(CGRectGetMidX(s) - 32), floor(CGRectGetMinY(s) + gear * 2 + 12), 64, 22);
@@ -359,13 +365,13 @@ static void tv_attach(void) {
     [g_tv.rootViewController.view addSubview:v]; [g_tv.rootViewController.view setNeedsLayout]; [g_root.view setNeedsLayout];   // the phone's pad takes the whole screen
     CGRect f = dm_aspect_fit(g_tv.bounds, g_picture_aspect); CGFloat scale = MIN(g_tv.windowScene.screen.nativeScale, 1920.0 / MAX(f.size.width, 1));
     if (g_tv_mode_was < 0) g_tv_mode_was = dm_opmode();
-    dm_set_opmode(1); dm_gamepad_opmode_changed();
+    dm_set_opmode(1);
     LOG("front end: TV connected (%.0fx%.0f points), the picture moves there at %.0fx%.0f, console mode", g_tv.bounds.size.width, g_tv.bounds.size.height, f.size.width * scale, f.size.height * scale);
 }
 static void tv_detach(void) {
     DmGameView *v = g_root.game; g_tv = nil; v.maxPixelWidth = 0;
     if (v && v.superview != g_root.view) { [g_root.view insertSubview:v atIndex:0]; [g_root.view setNeedsLayout]; }
-    if (g_tv_mode_was >= 0) { dm_set_opmode(g_tv_mode_was); g_tv_mode_was = -1; dm_gamepad_opmode_changed(); }
+    if (g_tv_mode_was >= 0) { dm_set_opmode(g_tv_mode_was); g_tv_mode_was = -1; }
     LOG("front end: TV disconnected, the picture is back on the phone");
 }
 void front_picture_shape(int w, int h) {   // front.h: the views take the presented picture's shape (a taller one under DM_SCREEN_ASPECT) instead of 16:9
@@ -391,7 +397,7 @@ bool dm_setting_live(const char *env, const char *value) {
         if (!value) return true;
         int m = atoi(value) ? 1 : 0;
         if (g_tv_mode_was >= 0) { g_tv_mode_was = m; LOG("front end: console mode %s once the TV is unplugged (in-game menu)", m ? "docked" : "handheld"); return true; }
-        dm_set_opmode(m); dm_gamepad_opmode_changed(); LOG("front end: console mode %s (in-game menu)", m ? "docked" : "handheld");
+        dm_set_opmode(m); LOG("front end: console mode %s (in-game menu)", m ? "docked" : "handheld");
         return true;
     }
     if (!strcmp(env, "DM_SHOW_FPS")) { if (value) [g_root showFPS:atoi(value) != 0]; return true; }

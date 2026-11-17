@@ -1780,10 +1780,9 @@ HLE_FORCE("_ZN2nn3hid24ShowControllerStrapGuideERKNS0_13StrapGuideArgE", "strap 
 HLE_FORCE("_ZN2nn3hid28ShowControllerFirmwareUpdateERKNS0_27ControllerFirmwareUpdateArgE", "controller firmware update applet; not shown by the host", Result, h_hid_FwUpd, const void *arg) { DM_APPLET("controller firmware update"); (void)arg; return RES_OK; }
 
 // Touch screen: TouchScreenState<N> = { int64 sampling number; int32 count; int32 reserved; TouchState[N] }, filled from the front end's touch points (hle_touch.c touch_fill_n:
-// the Mac's mouse, the iPhone touches no gamepad control takes, DM_KEYS taps) in handheld mode, as on the Switch, whose screen is out of reach when docked: a game may read touches
-// without checking the mode, so in console mode the state has no touch points. Super Mario Galaxy's pointer is the touch screen in handheld mode. hle_touch.c numbers
-// the states of both modes from its one count.
-// A read makes a sample only when 4 ms have passed since the newest one (or the mode changed) and otherwise copies the newest, as the Switch's touch resource does: it writes the
+// the Mac's mouse, the iPhone touches the touch layouts forward, DM_KEYS taps) in either console mode: the front end decides what reaches the game (Tap, 2D, and the
+// 3D games whose profile forwards the touch screen), so the state carries its points docked too. Super Mario Galaxy's pointer is the touch screen. hle_touch.c numbers the states from its one count.
+// A read makes a sample only when 4 ms have passed since the newest one and otherwise copies the newest, as the Switch's touch resource does: it writes the
 // screen's LIFO every 4 ms (yuzu: GestureUpdatePeriod), so two reads within 4 ms see one sample and a Start / End edge sits in exactly one sampling number. The last 16 samples are kept
 // and GetTouchScreenStates returns the newest min(n, 16) of them, newest first, as Unity's reader expects (Pokemon Friends main+0xb00670 walks them from index n - 1 down and takes each
 // number above the last it took). Two games need this. Animal Crossing: New Horizons reads twice in one original frame (its input manager at main+0x1b65260 and its own keyboard's
@@ -1793,21 +1792,20 @@ HLE_FORCE("_ZN2nn3hid28ShowControllerFirmwareUpdateERKNS0_27ControllerFirmwareUp
 int touch_fill_n(void *out, int max, uint64_t now_ns, int points);
 #define TOUCH_GRID_NS 4000000ull   // the touch sampler's period (250 Hz)
 #define TOUCH_HIST 16              // samples kept: the most GetTouchScreenStates<16> returns
-static pthread_mutex_t g_touch_mu = PTHREAD_MUTEX_INITIALIZER;   // guards the ring and the newest sample's time and mode; taken before hle_touch.c's g_tl
+static pthread_mutex_t g_touch_mu = PTHREAD_MUTEX_INITIALIZER;   // guards the ring and the newest sample's time; taken before hle_touch.c's g_tl
 static uint8_t g_touch_hist[TOUCH_HIST][0x290];   // TouchScreenState<16>: 0x10 + 0x28 * 16
-static int g_touch_kept, g_touch_newest, g_touch_points;   // samples kept (0-16), index of the newest, the points it was made with (1 handheld, 0 console)
+static int g_touch_kept, g_touch_newest;   // samples kept (0-16), index of the newest
 static uint64_t g_touch_at;   // now_ns() of the newest
-// Copy the newest min(want, kept) samples, newest first, into a TouchScreenState<N> array and return how many; a sample is made first when the grid or the mode asks for one
+// Copy the newest min(want, kept) samples, newest first, into a TouchScreenState<N> array and return how many; a sample is made first when the grid asks for one
 static int touch_read(void *s, int N, int want) {
     keys_sync();   // DM_KEYS frame steps due in this frame (their touches), before the read
     size_t stride = 0x10 + 0x28 * (size_t)N;
     pthread_mutex_lock(&g_touch_mu);
     uint64_t now = now_ns();   // under the lock: read before it, another thread's newer sample would make now - g_touch_at wrap
-    int handheld = dm_opmode() == 0;
-    if (!g_touch_kept || now - g_touch_at >= TOUCH_GRID_NS || g_touch_points != handheld) {   // console mode: no touch points, as before
+    if (!g_touch_kept || now - g_touch_at >= TOUCH_GRID_NS) {
         int next = g_touch_kept ? (g_touch_newest + 1) % TOUCH_HIST : 0;
-        touch_fill_n(g_touch_hist[next], 16, now, handheld);
-        g_touch_newest = next; g_touch_at = now; g_touch_points = handheld;
+        touch_fill_n(g_touch_hist[next], 16, now, 1);   // the points are there in either console mode
+        g_touch_newest = next; g_touch_at = now;
         if (g_touch_kept < TOUCH_HIST) g_touch_kept++;
     }
     int cnt = want < g_touch_kept ? want : g_touch_kept;
@@ -1822,7 +1820,7 @@ static int touch_read(void *s, int N, int want) {
 void dm_hid_touch_teardown(void) {
     pthread_mutex_lock(&g_touch_mu);
     memset(g_touch_hist, 0, sizeof g_touch_hist);
-    g_touch_kept = g_touch_newest = g_touch_points = 0;
+    g_touch_kept = g_touch_newest = 0;
     g_touch_at = 0;
     pthread_mutex_unlock(&g_touch_mu);
 }
@@ -1830,17 +1828,17 @@ HLE_FORCE("_ZN2nn3hid21InitializeTouchScreenEv", "connect to the hid touch scree
 // SDK 18 overload with two ints (Super Mario Galaxy); the SDK's own one opens the hid service and aborts in sm::Initialize
 HLE_FORCE("_ZN2nn3hid21InitializeTouchScreenEii", "connect to the hid touch screen (SDK 18 two-argument version); the host takes touch points from the front end", void, h_hid_InitTouch2, int a, int b) { (void)a; (void)b; }
 #define TOUCH(N) \
-    HLE_FORCE("_ZN2nn3hid19GetTouchScreenStateILm" #N "EEEvPNS0_16TouchScreenStateIXT_EEE", "touch screen current state (touch points only in handheld mode)", void, h_hid_Touch1_##N, void *s) { touch_read(s, N, 1); } \
-    HLE_FORCE("_ZN2nn3hid20GetTouchScreenStatesILm" #N "EEEiPNS0_16TouchScreenStateIXT_EEEi", "touch screen states: the newest min(n, 16) of a 16-sample history, newest first (touch points only in handheld mode)", int, h_hid_TouchN_##N, void *s, int n) { return n <= 0 ? 0 : touch_read(s, N, n > TOUCH_HIST ? TOUCH_HIST : n); }
+    HLE_FORCE("_ZN2nn3hid19GetTouchScreenStateILm" #N "EEEvPNS0_16TouchScreenStateIXT_EEE", "touch screen current state", void, h_hid_Touch1_##N, void *s) { touch_read(s, N, 1); } \
+    HLE_FORCE("_ZN2nn3hid20GetTouchScreenStatesILm" #N "EEEiPNS0_16TouchScreenStateIXT_EEEi", "touch screen states: the newest min(n, 16) of a 16-sample history, newest first", int, h_hid_TouchN_##N, void *s, int n) { return n <= 0 ? 0 : touch_read(s, N, n > TOUCH_HIST ? TOUCH_HIST : n); }
 TOUCH(1) TOUCH(2) TOUCH(3) TOUCH(4) TOUCH(5) TOUCH(6) TOUCH(7) TOUCH(8) TOUCH(9) TOUCH(10) TOUCH(11) TOUCH(12) TOUCH(13) TOUCH(14) TOUCH(15) TOUCH(16)
-// Gestures: recognized from the same touch points (hle_touch.c gesture_fill), so only in handheld mode too
+// Gestures: recognized from the same touch points (hle_touch.c gesture_fill)
 int gesture_fill(void *out, int n, uint64_t now_ns);
 HLE_FORCE("_ZN2nn3hid17InitializeGestureEv", "connect to the hid gesture recognizer; the host recognizes gestures from the touch points", void, h_hid_InitGesture, void) {}
 // Two-argument overload (PRAGMATA, SDK 20.5.15): the SDK's own one opens the hid service and aborts in sm::Initialize (Result 0xe15), as the touch screen's above did
 HLE_FORCE("_ZN2nn3hid17InitializeGestureEii", "connect to the hid gesture recognizer (two-argument version); the host recognizes gestures from the touch points", void, h_hid_InitGesture2, int a, int b) { (void)a; (void)b; }
-HLE_FORCE("_ZN2nn3hid16GetGestureStatesEPNS0_12GestureStateEi", "gesture states, newest first (handheld mode: recognized from the touch points; console mode: none)", int, h_hid_Gestures, void *out, int n) {
+HLE_FORCE("_ZN2nn3hid16GetGestureStatesEPNS0_12GestureStateEi", "gesture states, newest first, recognized from the touch points", int, h_hid_Gestures, void *out, int n) {
     keys_sync();
-    return dm_opmode() == 0 ? gesture_fill(out, n, now_ns()) : 0;
+    return gesture_fill(out, n, now_ns());
 }
 
 // Six-axis details: the current state, at rest unless shaking, fusion off

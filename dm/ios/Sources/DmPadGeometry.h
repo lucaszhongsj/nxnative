@@ -53,7 +53,8 @@ typedef struct {
 } DmPadGeo;
 
 // Layout constants (in u), the values DmGamepad.m has always used.
-#define DM_PAD_SPLIT_SCALE 1.25   // the split's portrait pad is a quarter larger than the overlay's: a standing phone's band is a third of the screen
+#define DM_PAD_SPLIT_SCALE 1.25   // the split's portrait keys, D-pad and shoulders are the overlay's a quarter larger: a standing phone's band is a third of the screen
+#define DM_PAD_SPLIT_KEY_SCALE 0.9   // the split's ABXY and D-pad at nine tenths of what the rows allow: the band's space is for the thumb, not for the art
 static const CGFloat
     DM_PAD_ZL_X = 44, DM_PAD_ZL_Y = 40, DM_PAD_ZL_R = 26,     // ZL / ZR: centre from the outer edge and the top, radius
     DM_PAD_L_X = 44, DM_PAD_L_Y = 108, DM_PAD_L_R = 24,       // L / R: same column as ZL / ZR
@@ -64,9 +65,9 @@ static const CGFloat
     DM_PAD_PILL_DX = 52, DM_PAD_PILL_Y = 22, DM_PAD_PILL_W = 50, DM_PAD_PILL_H = 28,   // − / +: centre from the midline and from the top, size
     DM_PAD_SWAP_R = 15,                                       // menu button: top centre, level with − / +
     DM_PAD_STICK_X = 81, DM_PAD_STICK_R = 77, DM_PAD_KNOB_R = 30,   // left stick: mirrors the diamond
-    DM_PAD_LOW_X = 231, DM_PAD_LOW_Y = 64,                    // D-pad centre from the outer edge and the bottom
-    DM_PAD_DPAD_R = 48, DM_PAD_ARM_W = 17, DM_PAD_ARM_IN = 11,   // D-pad (the overlay layout): its arms reach 48 u from the centre
-    DM_PAD_SPLIT_REACH = 83.75, DM_PAD_ARM_W_SPLIT = 27, DM_PAD_ARM_IN_SPLIT = 18,   // D-pad (the split): its tip reaches the diamond's key outer edge (50 + 27 x 1.25), so the two read as one size
+    DM_PAD_LOW_X = 255, DM_PAD_LOW_Y = 69,                    // D-pad centre from the outer edge and the bottom (level with the stick and diamond's lower edge)
+    DM_PAD_DPAD_R = 60, DM_PAD_ARM_W = 21.25, DM_PAD_ARM_IN = 13.75,   // D-pad: its arms reach 60 u from the centre, a quarter more than the 48 u it had
+    DM_PAD_SPLIT_REACH_2D = 83.75, DM_PAD_ARM_W_2D = 27, DM_PAD_ARM_IN_2D = 18,   // the split's 2D pad keeps the size it had before the 3D proportions
     DM_PAD_CLICK_X = 102, DM_PAD_CLICK_R = 17;                // L3 / R3: centre from the outer edge, on the line between ZL / ZR and L / R, radius
 
 // DM_TOUCH_SIZE: small, medium (also unset, empty or unknown) or large.
@@ -134,16 +135,26 @@ static inline DmPadGeo dm_pad_geo_at(CGRect bounds, UIEdgeInsets insets, DmLayou
         g.face = CGPointMake(xr, yTop);
         g.dpad = CGPointMake(xl, yLow);
         g.rstick = CGPointMake(xr, yLow); g.rstickDrawn = YES;
-        // A standing phone's band is a third of the screen, so its keys are drawn a quarter larger. The stick's ring and the D-pad's reach keep their
-        // size: they are as big as the layout allows, and the keys around them grow instead.
+        // A standing phone's band is a third of the screen, so the shoulders are drawn a quarter larger than the overlay's. In 3D the keys and the
+        // D-pad are nine tenths of what the rows would allow, keeping the overlay's proportions between them: the band's space is for the thumb.
+        // 2D keeps the geometry it had before (the 2D layout is no longer offered, but a saved choice still draws it): its keys stay where they were
+        // and its D-pad keeps its old split size.
         g.faceR *= DM_PAD_SPLIT_SCALE; g.knobR *= DM_PAD_SPLIT_SCALE;
-        // The hit circle grows with the artwork, but it still stops short of a neighbour's centre: the keys are 50 u apart, so a circle of 0.75 of
-        // that reaches the midpoint between two of them (both count there) and no further.
+        if (full) { g.faceGap *= DM_PAD_SPLIT_SCALE * DM_PAD_SPLIT_KEY_SCALE; g.faceR *= DM_PAD_SPLIT_KEY_SCALE; }
+        // The hit circle grows with the artwork, but it still stops short of a neighbour's centre: in 3D the keys are 56.25 u apart, so a circle
+        // of 0.75 of that reaches the midpoint between two of them (both count there) and no further.
         g.faceHitR = MIN(MAX(g.faceR * 1.25, g.faceGap * 0.75), 1.2 * g.faceGap);
         for (int i = 0; i < 4; i++) g.dropR[i] *= DM_PAD_SPLIT_SCALE;
         g.clickR *= DM_PAD_SPLIT_SCALE;
-        // The D-pad in a split reaches as far as the ABXY diamond's keys, so the two read as one size.
-        g.dpadR = DM_PAD_SPLIT_REACH * u; g.armW = DM_PAD_ARM_W_SPLIT * u; g.armIn = DM_PAD_ARM_IN_SPLIT * u;
+        if (full) {   // the 3D D-pad keeps the overlay's proportions: its reach and arms grow by the same quarter as the keys, at their smaller size
+            g.dpadR = DM_PAD_DPAD_R * DM_PAD_SPLIT_SCALE * DM_PAD_SPLIT_KEY_SCALE * u;
+            g.armW = DM_PAD_ARM_W * DM_PAD_SPLIT_SCALE * DM_PAD_SPLIT_KEY_SCALE * u;
+            g.armIn = DM_PAD_ARM_IN * DM_PAD_SPLIT_SCALE * DM_PAD_SPLIT_KEY_SCALE * u;
+        } else {
+            g.dpadR = DM_PAD_SPLIT_REACH_2D * u;
+            g.armW = DM_PAD_ARM_W_2D * u;
+            g.armIn = DM_PAD_ARM_IN_2D * u;
+        }
         // The unit is derived from the gap between the rows (dm_pad_base_unit), so the two rows already fit: nothing is clamped here.
         g.stickR = DM_PAD_STICK_R * u; g.rstickR = g.stickR;
     } else {
@@ -228,7 +239,7 @@ static inline BOOL dm_pad_geo_fits(const DmPadGeo *g, BOOL full) {
 }
 
 // The unit of the built-in size: the screen height (inside the controls region when it is split off), up to 1.3.
-static inline CGFloat dm_pad_base_unit(CGRect bounds, UIEdgeInsets insets, DmLayout layout) {
+static inline CGFloat dm_pad_base_unit(CGRect bounds, UIEdgeInsets insets, DmLayout layout, BOOL full) {
     if (!layout.separated) return MIN(bounds.size.height / 430.0, 1.3);
     CGRect s = CGRectIntersection(layout.controls, UIEdgeInsetsInsetRect(bounds, dm_game_safe_insets(bounds, insets, layout.topSafeOnly)));
     // A standing phone's band is tall and narrow: its two columns run down the band, so the band sets the size and its width only keeps the
@@ -236,12 +247,23 @@ static inline CGFloat dm_pad_base_unit(CGRect bounds, UIEdgeInsets insets, DmLay
     if (bounds.size.height > bounds.size.width) {
         CGRect band = s;   // the safe part of the band: the rows are measured within it (the anchors)
         CGFloat rows = dm_pad_portrait_row_gap(band);
-        // The two rows share the band: the stick's ring reaches down and the D-pad reaches up, so the row's height takes the gap between them.
-        CGFloat span = DM_PAD_STICK_R + hypot(DM_PAD_SPLIT_REACH, DM_PAD_ARM_W_SPLIT);
+        // The two rows share the band: the diamond's lower key reaches down from the upper row, and the lower row reaches up with whichever of
+        // the D-pad's drawn circle and the stick's ring is the larger, so the gap between the rows takes both reaches. 2D keeps its own, older
+        // geometry: its keys sit 50 u apart and its D-pad reaches 83.75 u.
+        CGFloat span, columns;
+        if (full) {
+            CGFloat reach = DM_PAD_SPLIT_SCALE * (DM_PAD_FACE_GAP + DM_PAD_FACE_R);
+            CGFloat low = MAX(DM_PAD_STICK_R, DM_PAD_SPLIT_SCALE * hypot(DM_PAD_DPAD_R, DM_PAD_ARM_W));
+            span = reach + low;
+            columns = span;
+        } else {
+            span = DM_PAD_STICK_R + hypot(DM_PAD_SPLIT_REACH_2D, DM_PAD_ARM_W_2D);
+            columns = DM_PAD_STICK_R + DM_PAD_SPLIT_REACH_2D;
+        }
         CGFloat byRows = (rows - 8) / span;
         // The band's height, as the general size of the screen, and its width, which only has to keep the two columns apart.
         CGFloat byHeight = MIN(band.size.height / 430.0, 1.3);
-        CGFloat byWidth = band.size.width * 0.5 / (DM_PAD_STICK_R + DM_PAD_SPLIT_REACH);
+        CGFloat byWidth = band.size.width * 0.5 / columns;
         return MIN(MIN(byRows, byHeight), MIN(byWidth, 1.3));
     }
     return MIN(MIN(s.size.height / 430.0, s.size.width / 700.0), 1.3);
@@ -251,7 +273,7 @@ static inline CGFloat dm_pad_base_unit(CGRect bounds, UIEdgeInsets insets, DmLay
 // that does not fit gets smaller; a small one in a split region whose minimum edges crowd it gets larger), and the left stick's place.
 // The built-in size is never changed.
 static inline DmPadGeo dm_pad_geo_placed(CGRect bounds, UIEdgeInsets insets, DmLayout layout, BOOL full, DmPadOptions o) {
-    CGFloat u0 = dm_pad_base_unit(bounds, insets, layout), scale = o.scale > 0 ? o.scale : 1;
+    CGFloat u0 = dm_pad_base_unit(bounds, insets, layout, full), scale = o.scale > 0 ? o.scale : 1;
     DmPadGeo g = dm_pad_geo_at(bounds, insets, layout, full, u0 * scale);
     while (scale != 1 && !dm_pad_geo_fits(&g, full)) {
         scale = scale > 1 ? fmax(1, scale - 0.05) : fmin(1, scale + 0.05);

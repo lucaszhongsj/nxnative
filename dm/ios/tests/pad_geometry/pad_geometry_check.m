@@ -283,21 +283,78 @@ int main(void) {
         if (!NEAR(g.u, 1)) FAIL("Pro Max: u %.3f, want 1", g.u);
         if (!NEAR(g.face.x, 932 - 29.5 - 81) || !NEAR(g.face.y, 430 - 21 - 82)) FAIL("Pro Max: diamond at %.1f %.1f", g.face.x, g.face.y);
         if (!NEAR(g.stick.x, 29.5 + 81) || !NEAR(g.stick.y, 430 - 21 - 82)) FAIL("Pro Max: stick at %.1f %.1f", g.stick.x, g.stick.y);
-        if (!NEAR(g.dpad.x, 29.5 + 231) || !NEAR(g.dpad.y, 430 - 21 - 64)) FAIL("Pro Max: D-pad at %.1f %.1f", g.dpad.x, g.dpad.y);
+        if (!NEAR(g.dpad.x, 29.5 + 255) || !NEAR(g.dpad.y, 430 - 21 - 69)) FAIL("Pro Max: D-pad at %.1f %.1f", g.dpad.x, g.dpad.y);
         if (!NEAR(g.drop[DM_PAD_ZL].x, 59 + 44) || !NEAR(g.drop[DM_PAD_ZL].y, 40) || !NEAR(g.drop[DM_PAD_R].x, 932 - 59 - 44) || !NEAR(g.drop[DM_PAD_R].y, 108)) FAIL("Pro Max: shoulders moved");
         if (!NEAR(g.click[1].x, 932 - 59 - 102) || !NEAR(g.pill[DM_PAD_PLUS].origin.x, 466 + 52 - 25) || !NEAR(g.swap.x, 466) || !NEAR(g.swap.y, 22)) FAIL("Pro Max: top row moved");
-        if (!NEAR(g.stickR, 77) || !NEAR(g.faceR, 27) || !NEAR(g.dpadR, 48)) FAIL("Pro Max: sizes changed");
+        if (!NEAR(g.stickR, 77) || !NEAR(g.faceR, 27) || !NEAR(g.dpadR, 60)) FAIL("Pro Max: sizes changed");
         // Portrait split (the Duo harness's numbers): the two columns at 25 % and 75 % of the band, the two rows at 50 % and 80 % of it.
         DmLayout l = dm_layout(screens[9].bounds, screens[9].insets, NO, CGRectNull, DM_PICTURE_16_9);
-        DmPadGeo p = dm_pad_geo(screens[9].bounds, screens[9].insets, l, NO, (DmPadOptions){1});
+        DmPadGeo p = dm_pad_geo(screens[9].bounds, screens[9].insets, l, YES, (DmPadOptions){1});
         CGRect band = p.safe;   // the anchors are shares of the band's safe part
         if (!p.portrait || !NEAR(p.face.x, CGRectGetMinX(band) + 0.75 * band.size.width) || !NEAR(p.stick.x, CGRectGetMinX(band) + 0.25 * band.size.width)
             || !NEAR(p.stick.y, CGRectGetMinY(band) + 0.50 * band.size.height) || !NEAR(p.face.y, CGRectGetMinY(band) + 0.50 * band.size.height)
             || !NEAR(p.dpad.x, CGRectGetMinX(band) + 0.25 * band.size.width) || !NEAR(p.dpad.y, CGRectGetMinY(band) + 0.80 * band.size.height)
             || !NEAR(p.rstick.x, CGRectGetMinX(band) + 0.75 * band.size.width) || !NEAR(p.rstick.y, CGRectGetMinY(band) + 0.80 * band.size.height))
             FAIL("portrait: the two columns at 25 %% and 75 %%, the two rows at 50 %% and 80 %%");
-        // The D-pad's reach in a split is the diamond's key outer edge (the key's distance from the centre plus its radius).
-        if (!NEAR(p.dpadR, 50 * p.u + 27 * p.u * 1.25)) FAIL("portrait: the D-pad reaches %.1f, the diamond's edge is %.1f", p.dpadR, 50 * p.u + 27 * p.u * 1.25);
+        // The split's D-pad, keys and the keys' distance from the diamond's centre carry the overlay's proportions: all three grow by the
+        // same quarter, so the two layouts read at one size.
+        if (!NEAR(p.dpadR, DM_PAD_DPAD_R * DM_PAD_SPLIT_SCALE * DM_PAD_SPLIT_KEY_SCALE * p.u)) FAIL("portrait: the D-pad reaches %.1f, %.1f is the overlay's quarter larger at nine tenths", p.dpadR, DM_PAD_DPAD_R * DM_PAD_SPLIT_SCALE * DM_PAD_SPLIT_KEY_SCALE * p.u);
+        if (!NEAR(p.faceGap, DM_PAD_FACE_GAP * DM_PAD_SPLIT_SCALE * DM_PAD_SPLIT_KEY_SCALE * p.u)) FAIL("portrait: the keys sit %.1f from the centre, %.1f is the overlay's quarter larger at nine tenths", p.faceGap, DM_PAD_FACE_GAP * DM_PAD_SPLIT_SCALE * DM_PAD_SPLIT_KEY_SCALE * p.u);
+        if (!NEAR(p.dpadR / p.faceR, DM_PAD_DPAD_R / DM_PAD_FACE_R) || !NEAR(p.faceGap / p.faceR, DM_PAD_FACE_GAP / DM_PAD_FACE_R))
+            FAIL("portrait: the pad's proportions are not the overlay's (D-pad %.3f of a key, keys %.3f apart; the overlay's %.3f and %.3f)",
+                 p.dpadR / p.faceR, p.faceGap / p.faceR, DM_PAD_DPAD_R / DM_PAD_FACE_R, DM_PAD_FACE_GAP / DM_PAD_FACE_R);
+    }
+
+    // Every 3D portrait split keeps the overlay's proportions, on every device: the D-pad's reach and the diamond's spread are fixed fractions
+    // of a key's radius, so the two layouts stay related however the band sizes the pad.
+    for (int i = 0; i < nscreens; i++) {
+        DmLayout l = dm_layout(screens[i].bounds, screens[i].insets, screens[i].partiallyOpen, screens[i].division, DM_PICTURE_16_9);
+        if (!l.separated || screens[i].bounds.size.height <= screens[i].bounds.size.width) continue;
+        DmPadGeo g = dm_pad_geo(screens[i].bounds, screens[i].insets, l, YES, (DmPadOptions){1});
+        if (!NEAR(g.dpadR / g.faceR, DM_PAD_DPAD_R / DM_PAD_FACE_R)) FAIL("%s: the D-pad is %.3f of a key, the overlay's is %.3f", screens[i].name, g.dpadR / g.faceR, DM_PAD_DPAD_R / DM_PAD_FACE_R);
+        if (!NEAR(g.faceGap / g.faceR, DM_PAD_FACE_GAP / DM_PAD_FACE_R)) FAIL("%s: the keys are %.3f apart, the overlay's are %.3f", screens[i].name, g.faceGap / g.faceR, DM_PAD_FACE_GAP / DM_PAD_FACE_R);
+    }
+
+    // 2D keeps the split geometry it had before the 3D proportions: its keys stay 50 u apart, its D-pad reaches 83.75 u, and the unit is
+    // the old row span's. The 2D layout is no longer offered, but a saved choice still draws exactly what it drew.
+    for (int i = 0; i < nscreens; i++) {
+        DmLayout l = dm_layout(screens[i].bounds, screens[i].insets, screens[i].partiallyOpen, screens[i].division, DM_PICTURE_16_9);
+        if (!l.separated || screens[i].bounds.size.height <= screens[i].bounds.size.width) continue;
+        DmPadGeo g = dm_pad_geo(screens[i].bounds, screens[i].insets, l, NO, (DmPadOptions){1});
+        if (!NEAR(g.faceGap, DM_PAD_FACE_GAP * g.u)) FAIL("%s 2D: the keys sit %.1f from the centre, %.1f is the old 50 u", screens[i].name, g.faceGap, DM_PAD_FACE_GAP * g.u);
+        if (!NEAR(g.dpadR, DM_PAD_SPLIT_REACH_2D * g.u)) FAIL("%s 2D: the D-pad reaches %.1f, %.1f is the old 83.75 u", screens[i].name, g.dpadR, DM_PAD_SPLIT_REACH_2D * g.u);
+        CGFloat rows = dm_pad_portrait_row_gap(g.safe);
+        CGFloat span = DM_PAD_STICK_R + hypot(DM_PAD_SPLIT_REACH_2D, DM_PAD_ARM_W_2D);
+        CGFloat expect = MIN(MIN((rows - 8) / span, MIN(g.safe.size.height / 430.0, 1.3)),
+                             MIN(g.safe.size.width * 0.5 / (DM_PAD_STICK_R + DM_PAD_SPLIT_REACH_2D), 1.3));
+        if (!NEAR(g.u, expect)) FAIL("%s 2D: u %.3f, the old row span gives %.3f", screens[i].name, g.u, expect);
+    }
+
+    // A face key's hit circle never reaches a neighbour's centre (that one alone counts). The keys sit on a diamond: two neighbours are
+    // faceGap * sqrt(2) apart. In a split the circle also reaches the midpoint between two of them, so both count there; in the overlay it
+    // does not, as it always has not.
+    for (int i = 0; i < nscreens; i++) {
+        DmLayout l = dm_layout(screens[i].bounds, screens[i].insets, screens[i].partiallyOpen, screens[i].division, DM_PICTURE_16_9);
+        DmPadGeo g = dm_pad_geo(screens[i].bounds, screens[i].insets, l, YES, (DmPadOptions){1});
+        CGFloat apart = g.faceGap * sqrt(2.0);
+        if (g.faceHitR >= apart) FAIL("%s: the hit circle %.1f reaches a neighbour's centre %.1f apart", screens[i].name, g.faceHitR, apart);
+        if (l.separated && g.faceHitR < apart / 2) FAIL("%s: the hit circle %.1f stops short of the midpoint %.1f, two keys cannot count together", screens[i].name, g.faceHitR, apart / 2);
+    }
+
+    // Every locked key (the shoulders, - / + and the stick clicks) has a place of its own on every screen: a point where it is the nearest
+    // of them and so takes the touch. Their hit circles are a third bigger than the drawn keys, so they can reach over each other; each one
+    // must still keep a region of its own.
+    for (int i = 0; i < nscreens; i++) {
+        DmLayout l = dm_layout(screens[i].bounds, screens[i].insets, screens[i].partiallyOpen, screens[i].division, DM_PICTURE_16_9);
+        DmPadGeo g = dm_pad_geo(screens[i].bounds, screens[i].insets, l, YES, (DmPadOptions){1});
+        for (int k = 0; k < 8; k++) {
+            int c = dm_pad_locked[k];
+            int found = 0;
+            for (int x = 0; x < (int)screens[i].bounds.size.width && !found; x += 3)
+                for (int y = 0; y < (int)screens[i].bounds.size.height && !found; y += 3)
+                    if (dm_pad_locked_at(&g, YES, l.separated, CGPointMake(x, y), NULL) == c) found = 1;
+            if (!found) FAIL("%s: the locked key %s has no place of its own", screens[i].name, dm_pad_control_names[c]);
+        }
     }
 
     // Every size and stick place on every screen, 2D and 3D: inside, and no overlap.

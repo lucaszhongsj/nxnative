@@ -11,12 +11,15 @@ NS_ASSUME_NONNULL_BEGIN
 // screen keeps the same one rectangle for both. DmGamepad.m owns the band's hit testing: a touch on a key goes to the pad, one off the keys to the panel.
 typedef struct { CGRect game, companion, controls; BOOL separated, topSafeOnly, customControlsFullBounds, onTV; } DmLayout;
 
+// The iPhone Duo and iPad paths are retired: only ordinary iPhones (iPhone 17, iPhone 16 Pro Max) run here.
 static inline BOOL dm_layout_custom_controls_full_bounds(CGRect bounds, BOOL hingeClosed) {
-    return hingeClosed && bounds.size.width > bounds.size.height;
+    (void)bounds; (void)hingeClosed;
+    return NO;
 }
 
 static inline UIEdgeInsets dm_game_safe_insets(CGRect bounds, UIEdgeInsets insets, BOOL duo) {
-    return duo && bounds.size.height > bounds.size.width ? UIEdgeInsetsMake(insets.top, 0, 0, 0) : insets;
+    (void)bounds; (void)duo;
+    return insets;
 }
 
 // The picture's width / height before the game's first present (front.h front_picture_shape gives the real one: a taller shape under DM_SCREEN_ASPECT, 1920x1344)
@@ -57,16 +60,10 @@ static inline float dm_picture_shape_auto(CGSize window, CGFloat topInset) {
     return r >= 0.9 && r < 2.4 ? (float)r : 0.0f;
 }
 
+// The iPhone Duo's fold is retired: an ordinary iPhone splits with no division region.
 static inline CGRect dm_horizontal_division(CGRect b, CGRect division) {
-    if (CGRectIsNull(division) || division.size.width <= division.size.height) return CGRectNull;
-    // Preserve zero-height inactive folds and clip regions during display handoff.
-    CGFloat x = MAX(CGRectGetMinX(b), CGRectGetMinX(division));
-    CGFloat y = MAX(CGRectGetMinY(b), CGRectGetMinY(division));
-    CGFloat right = MIN(CGRectGetMaxX(b), CGRectGetMaxX(division));
-    CGFloat bottom = MIN(CGRectGetMaxY(b), CGRectGetMaxY(division));
-    if (right - x < b.size.width * 0.9 || bottom < y ||
-        y <= CGRectGetMinY(b) || bottom >= CGRectGetMaxY(b)) return CGRectNull;
-    return CGRectMake(x, y, right - x, bottom - y);
+    (void)b; (void)division;
+    return CGRectNull;
 }
 
 static inline DmLayout dm_layout(CGRect b, UIEdgeInsets insets, BOOL partiallyOpen, CGRect division, CGFloat aspect) {
@@ -78,7 +75,7 @@ static inline DmLayout dm_layout(CGRect b, UIEdgeInsets insets, BOOL partiallyOp
     // A phone standing up with no fold splits the screen at its midpoint: the picture takes the upper half, the panel the lower half. The guest's
     // picture keeps its own shape (16:9), which does not fit that half, so the picture is cropped to fill it (dm_aspect_fill): the sides are cut, never
     // stretched. A fold sets both edges within the safe area.
-    BOOL folded = !CGRectIsNull(division);
+    BOOL folded = NO;   // the iPhone Duo's fold is retired: a split is the phone standing up, with no fold
     CGRect safe = UIEdgeInsetsInsetRect(b, insets);
     CGFloat upperBottom = folded ? CGRectGetMinY(division) : CGRectGetMidY(b);
     CGFloat bandTop = folded ? CGRectGetMaxY(division) : upperBottom;
@@ -114,7 +111,6 @@ static inline CGPoint dm_game_touch_point(CGRect game, CGPoint p) {
 UIView *dm_gamepad_view(CGRect frame);
 void dm_gamepad_arrange(UIView *view, DmLayout layout);
 void dm_gamepad_reset(void);
-void dm_gamepad_opmode_changed(void);   // the console mode changed (the in-game menu, a TV): the Tap layout exists only in handheld mode
 int dm_gamepad_controller_connected(void);   // a physical controller is in use: the touch gamepad is off (DmGamepad.m padsChanged)
 
 NS_ASSUME_NONNULL_END

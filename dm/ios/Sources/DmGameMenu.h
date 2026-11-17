@@ -9,7 +9,7 @@ extern "C" {
 void *dm_game_menu(void);   // GameMenu.swift: a retained UIMenu, rebuilt each time it opens
 int dm_opmode(void);   // hle_oe.c: 0 = handheld (GameMenu.swift's console mode row reads it)
 int dm_pad_layout(void);   // DmGamepad.m: 0 = 2D, 1 = 3D, 2 = Tap (DM_GAME_PAD_LAYOUT's numbers)
-bool dm_pad_layout_offered(int layout);   // Tap only in handheld mode
+bool dm_pad_layout_offered(int layout);   // 0/1/2 are valid; the menu lists 3D and Tap, and Tap not on a TV (no picture on the phone)
 void dm_pad_layout_set(int layout);   // releases every touch first, and is saved for the next start
 void dm_gamepad_touch_feedback(bool on);   // DM_TOUCH_HAPTICS
 bool dm_setting_live(const char *env, const char *value);
