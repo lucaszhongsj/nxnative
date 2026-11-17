@@ -59,12 +59,12 @@ static const CGFloat
     DM_PAD_DROP_TIP = 1.45,                                   // teardrop tip distance from the centre (times the radius)
     DM_PAD_CORNER_IN = 0.5,                                   // how far the bottom-corner controls reach into the side safe-area inset
     DM_PAD_FACE_X = 81, DM_PAD_Y = 82,                        // diamond centre from the outer edge; diamond and stick centre from the bottom
-    DM_PAD_FACE_GAP = 50, DM_PAD_FACE_R = 27,                 // diamond: key distance from the centre, key radius
+    DM_PAD_FACE_GAP = 85, DM_PAD_FACE_R = 18,                 // diamond: key distance from the centre, key radius; a 15 mm reach between keys, in the thumb's range
     DM_PAD_PILL_DX = 52, DM_PAD_PILL_Y = 22, DM_PAD_PILL_W = 50, DM_PAD_PILL_H = 28,   // − / +: centre from the midline and from the top, size
     DM_PAD_SWAP_R = 15,                                       // menu button: top centre, level with − / +
     DM_PAD_STICK_X = 81, DM_PAD_STICK_R = 77, DM_PAD_KNOB_R = 30,   // left stick: mirrors the diamond
     DM_PAD_LOW_X = 231, DM_PAD_LOW_Y = 64,                    // D-pad centre from the outer edge and the bottom
-    DM_PAD_DPAD_R = 48, DM_PAD_ARM_W = 17, DM_PAD_ARM_IN = 11,
+    DM_PAD_DPAD_R = 85, DM_PAD_ARM_W = 27, DM_PAD_ARM_IN = 18,   // D-pad: same reach as the ABXY diamond, both orientations
     DM_PAD_CLICK_X = 102, DM_PAD_CLICK_R = 17;                // L3 / R3: centre from the outer edge (level with ZL / ZR), radius
 
 // DM_TOUCH_SIZE: small, medium (also unset, empty or unknown) or large.
@@ -101,14 +101,14 @@ static inline DmPadGeo dm_pad_geo_at(CGRect bounds, UIEdgeInsets insets, DmLayou
     CGPoint thumbL = CGPointMake(CGRectGetMinX(s) + s.size.width * 0.28, CGRectGetMinY(s) + s.size.height * 0.58);
     CGPoint thumbR = CGPointMake(CGRectGetMinX(s) + s.size.width * 0.72, thumbL.y);
     g.faceGap = DM_PAD_FACE_GAP * u; g.faceR = DM_PAD_FACE_R * u;
-    // The enlarged target never reaches past its neighbours: a key's centre then selects that key alone, while a point between two keys still presses both.
-    g.faceHitR = MIN(MAX(g.faceR * 1.25, sep ? 22 : 0), 1.2 * g.faceGap);
+    // The enlarged target reaches the midpoint between two keys (both count there) but never a neighbour's centre: a key's centre selects that key alone.
+    g.faceHitR = MIN(MAX(g.faceR * 1.25, sep ? g.faceGap * 0.75 : 0), 1.2 * g.faceGap);
     g.stickR = DM_PAD_STICK_R * u; g.knobR = DM_PAD_KNOB_R * u;
     g.dpadR = DM_PAD_DPAD_R * u; g.armW = DM_PAD_ARM_W * u; g.armIn = DM_PAD_ARM_IN * u;
     if (g.portrait) {
         // Two columns, with each thumb's pair at a fixed height of the band: the stick and the diamond sit together just below the middle,
         // the D-pad and the right stick together near the bottom, leaving the top of the band clear for the panel.
-        CGFloat xl = CGRectGetMinX(s) + s.size.width * 0.20, xr = CGRectGetMinX(s) + s.size.width * 0.80;
+        CGFloat xl = CGRectGetMinX(s) + s.size.width * 0.25, xr = CGRectGetMinX(s) + s.size.width * 0.75;
         CGFloat yTop = CGRectGetMinY(s) + s.size.height * 0.40, yLow = CGRectGetMinY(s) + s.size.height * 0.80;
         g.stick = CGPointMake(xl, yTop);
         g.face = CGPointMake(xr, yTop);
@@ -394,12 +394,12 @@ static inline DmPadGeo dm_pad_geo(CGRect bounds, UIEdgeInsets insets, DmLayout l
 enum { DM_PAD_HIT_NONE = 0, DM_PAD_HIT_KEY, DM_PAD_HIT_FACE, DM_PAD_HIT_DPAD, DM_PAD_HIT_STICK };
 typedef struct { int kind, key; } DmPadHit;   // key: the DM_PAD_C_* of a locked key
 static const int dm_pad_locked[8] = {DM_PAD_C_ZL, DM_PAD_C_L, DM_PAD_C_ZR, DM_PAD_C_R, DM_PAD_C_MINUS, DM_PAD_C_PLUS, DM_PAD_C_L3, DM_PAD_C_R3};
-static const CGFloat DM_PAD_STICK_GRAB = 1.4, DM_PAD_DPAD_GRAB = 1.3;   // grab radius: times the ring radius, times the D-pad's outer edge
+static const CGFloat DM_PAD_STICK_GRAB = 1.0, DM_PAD_DPAD_GRAB = 1.0;   // the hit area is what is drawn (what you see is what you press), at least 22 points
 static inline CGFloat dm_pad_dist(CGPoint a, CGPoint b) { return hypot(a.x - b.x, a.y - b.y); }
 // A locked key's distance from p in units of its hit radius (1 or less is a hit).
 static inline CGFloat dm_pad_key_distance(const DmPadGeo *g, BOOL sep, int c, CGPoint p) {
-    if (c >= DM_PAD_C_ZL && c <= DM_PAD_C_R) return dm_pad_dist(p, g->drop[c - DM_PAD_C_ZL]) / MAX(g->dropR[c - DM_PAD_C_ZL] * 1.35, sep ? 22 : 0);
-    if (c == DM_PAD_C_L3 || c == DM_PAD_C_R3) return dm_pad_dist(p, g->click[c - DM_PAD_C_L3]) / MAX(g->clickR * 1.35, sep ? 22 : 0);
+    if (c >= DM_PAD_C_ZL && c <= DM_PAD_C_R) return dm_pad_dist(p, g->drop[c - DM_PAD_C_ZL]) / MAX(g->dropR[c - DM_PAD_C_ZL], sep ? 22 : 0);
+    if (c == DM_PAD_C_L3 || c == DM_PAD_C_R3) return dm_pad_dist(p, g->click[c - DM_PAD_C_L3]) / MAX(g->clickR, sep ? 22 : 0);
     CGRect r = CGRectInset(g->pill[c - DM_PAD_C_MINUS], -8 * g->u, -8 * g->u);
     if (!sep && !CGRectContainsPoint(r, p)) return CGFLOAT_MAX;
     CGFloat w = MAX(r.size.width, sep ? 28 : 0), h = MAX(r.size.height, sep ? 28 : 0);
@@ -417,8 +417,8 @@ static inline int dm_pad_locked_at(const DmPadGeo *g, BOOL full, BOOL sep, CGPoi
     if (distance) *distance = kd;
     return key;
 }
-// The menu button's hit circle: 1.6 times its radius, at least 22 points.
-static inline CGFloat dm_pad_menu_hit_r(const DmPadGeo *g) { return MAX(g->swapR * 1.6, 22); }
+// The menu button's hit circle: what is drawn, at least 22 points.
+static inline CGFloat dm_pad_menu_hit_r(const DmPadGeo *g) { return MAX(g->swapR, 22); }
 static inline CGFloat dm_pad_menu_distance(const DmPadGeo *g, CGPoint p) { return dm_pad_dist(p, g->swap) / dm_pad_menu_hit_r(g); }
 // Whether the menu button takes a touch-down at p (with the controls shown): in its hit circle and nearer than any locked key's target.
 // A moved control never reaches into that circle (dm_pad_control_fits), so the menu never takes a touch on one.
@@ -433,8 +433,9 @@ static inline DmPadHit dm_pad_hit(const DmPadGeo *g, BOOL full, BOOL sep, BOOL t
     int key = dm_pad_locked_at(g, full, sep, p, NULL);
     if (key >= 0) return (DmPadHit){DM_PAD_HIT_KEY, key};
     CGFloat best = 1, f = CGFLOAT_MAX; int kind = DM_PAD_HIT_NONE;
-    if (g->faceSplit) for (int i = 0; i < 4; i++) f = fmin(f, dm_pad_dist(p, g->faceKey[i]) / MAX(g->faceR * 1.6, g->faceHitR));
-    else f = dm_pad_dist(p, g->face) / (g->faceGap + MAX(g->faceR * 1.6, g->faceHitR));
+    CGFloat fr = MAX(g->faceR, 22);   // the hit circle is what is drawn, at least 22 points
+    if (g->faceSplit) for (int i = 0; i < 4; i++) f = fmin(f, dm_pad_dist(p, g->faceKey[i]) / fr);
+    else f = dm_pad_dist(p, g->face) / (g->faceGap + fr);   // a key's circle around its own place on the diamond
     if (f <= best) { best = f; kind = DM_PAD_HIT_FACE; }
     if (full) { CGFloat d = dm_pad_dist(p, g->dpad) / MAX(g->dpadR * DM_PAD_DPAD_GRAB, sep ? 22 : 0); if (d < best) { best = d; kind = DM_PAD_HIT_DPAD; } }
     if (stickFree) { CGFloat s = dm_pad_dist(p, g->stick) / MAX(g->stickR * DM_PAD_STICK_GRAB, sep ? 22 : 0); if (s < best) { best = s; kind = DM_PAD_HIT_STICK; } }

@@ -46,8 +46,10 @@ static inline BOOL dm_picture_fill(const char *_Nullable value) { return value &
 // safe area's top (the Dynamic Island), so the picture fills that band without cropping. The range is loader.c's (0.9 to 2.4). 0 = 16:9.
 static inline float dm_picture_shape_auto(CGSize window, CGFloat topInset) {
     (void)topInset;
-    double r = window.height > window.width ? window.width / MAX(window.height * 0.5, 1)
-                                            : MAX(window.width, window.height) / MAX(MIN(window.width, window.height), 1);
+    // A phone standing up asks for a square framebuffer: the guest's screen-shape stubs get a regular 1920x1920 / 1280x1280
+    // from loader.c, instead of the 0.92 portrait shape that crashed it.
+    if (window.height > window.width) return 1.0f;
+    double r = MAX(window.width, window.height) / MAX(MIN(window.width, window.height), 1);
     return r >= 0.9 && r < 2.4 ? (float)r : 0.0f;
 }
 

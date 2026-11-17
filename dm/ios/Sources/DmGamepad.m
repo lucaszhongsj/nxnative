@@ -336,7 +336,7 @@ static BOOL fullOnly(int b) { return b == B_LS || b == B_RS || b >= B_LEFT; }   
 - (CGFloat)faceHitR { return self.geo->faceHitR; }
 - (CGPoint)facePos:(int)b { return dm_pad_face_key(self.geo, b - B_A); }   // B_A..B_Y are A, B, X, Y: the geometry's order
 - (CGPoint)stickHome { return self.geo->stick; }
-- (CGPoint)stickCentre:(int)i { return i ? (self.geo->rstickDrawn ? self.geo->rstick : _rCentre) : self.stickHome; }
+- (CGPoint)stickCentre:(int)i { return i ? (_stick[1] || !self.geo->rstickDrawn ? _rCentre : self.geo->rstick) : self.stickHome; }
 - (CGFloat)stickR:(int)i { return i ? (self.geo->rstickDrawn ? self.geo->rstickR : K_RSTICK_R * self.u) : self.geo->stickR; }
 // The right stick: its own circle where the split draws one, the right third of the controls otherwise (centred where the touch lands).
 - (BOOL)inRightArea:(CGPoint)p {
@@ -473,7 +473,7 @@ int front_web_touch(void);
         if (hit.kind == DM_PAD_HIT_KEY) { [_owner setObject:@(C_BTN | (uint64_t)lockedKey(hit.key) << 8) forKey:t]; continue; }
         if (_tap) { game |= [self gameBegin:t]; continue; }
         int kind = hit.kind == DM_PAD_HIT_FACE ? C_FACE : hit.kind == DM_PAD_HIT_DPAD ? C_DPAD : hit.kind == DM_PAD_HIT_STICK ? C_STICK : C_NONE, idx = 0;
-        if (kind == C_NONE && _full && !_stick[1] && [self inRightArea:p]) { kind = C_STICK; idx = 1; if (!self.geo->rstickDrawn) _rCentre = p; [self hideHint]; }   // the right stick: its drawn centre, or where the touch lands in the right third
+        if (kind == C_NONE && _full && !_stick[1] && [self inRightArea:p]) { kind = C_STICK; idx = 1; _rCentre = p; [self hideHint]; }   // the right stick: a drawn circle starts it, then its centre trails the finger
         if (kind == C_FACE) { [_owner setObject:@(C_FACE) forKey:t]; [_faceOf setObject:@([self faceAt:p]) forKey:t]; }
         else if (kind == C_DPAD) [_owner setObject:@(C_DPAD) forKey:t];
         else if (kind == C_STICK) { [_owner setObject:@(C_STICK | (uint64_t)idx << 8) forKey:t]; _stick[idx] = t; _stickNow[idx] = p; }
@@ -488,7 +488,7 @@ int front_web_touch(void);
         uint64_t v = [_owner objectForKey:t].unsignedLongLongValue; int c = (int)(v & 0xff); CGPoint p = [t locationInView:self];
         if (c == C_FACE) [_faceOf setObject:@([self faceAt:p]) forKey:t];
         else if (c == C_STICK) { _stickNow[v >> 8] = p;
-            if ((v >> 8) == 1 && !self.geo->rstickDrawn) { CGFloat d = dist(p, _rCentre), R = [self stickR:1];   // the right stick's centre follows a finger past its radius, so turning back responds at once (a drawn stick keeps its centre)
+            if ((v >> 8) == 1) { CGFloat d = dist(p, _rCentre), R = [self stickR:1];   // the right stick's centre trails a finger past its radius, so turning back responds at once
                 if (d > R) _rCentre = CGPointMake(p.x - (p.x - _rCentre.x) * R / d, p.y - (p.y - _rCentre.y) * R / d); } }
         else if (c == C_GAME) game = YES;
     }
