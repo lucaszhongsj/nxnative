@@ -400,6 +400,9 @@ static BOOL gDuoHarnessReduceMotionEnabled;
     XCTAssertEqualWithAccuracy(CGRectGetMaxY(phone.nav_art), 426 - 34, 0.6, @"The dock's foot sits on the gesture edge");
     XCTAssertEqualWithAccuracy(CGRectGetMinY(phone.nav_art), CGRectGetMinY(phone.footer) - 14 * phone.nav_scale, 0.6,
                                @"The capsule window rises 14 canvas points above the dock row");
+    // The window's own canvas span (952..1080) lands on its rectangle: the icons are drawn where the art drew them
+    XCTAssertEqualWithAccuracy(phone.nav_offset.y + 952 * phone.nav_scale, CGRectGetMinY(phone.nav_art), 0.6);
+    XCTAssertEqualWithAccuracy(phone.nav_offset.y + 1080 * phone.nav_scale, CGRectGetMaxY(phone.nav_art), 0.6);
     // A standing band with no home indicator: the bar is the canvas row alone.
     dm_companion_surface_layout flat = dm_companion_surface_make_safe(CGSizeMake(375, 426), 0, (dm_companion_dock_insets){0});
     XCTAssertEqualWithAccuracy(flat.footer.size.height, 114 * (375.0 / 1240.0), 0.6);
@@ -844,11 +847,12 @@ static BOOL gDuoHarnessReduceMotionEnabled;
 
 - (void)testDockingDropsTheTapLayout {
     CGRect bounds = CGRectMake(0, 0, 844, 390);
-    [self padForLayout:dm_layout(bounds, UIEdgeInsetsZero, NO, CGRectNull, DM_PICTURE_16_9) bounds:bounds];
+    UIView *pad = [self padForLayout:dm_layout(bounds, UIEdgeInsetsZero, NO, CGRectNull, DM_PICTURE_16_9) bounds:bounds];
     dm_pad_layout_set(2);
     XCTAssertEqual(dm_pad_layout(), 2);
-    // On a TV the phone shows no picture for a touch to land on (dm_layout_pad_only): Tap goes
-    [self padForLayout:dm_layout_pad_only(bounds) bounds:bounds];
+    // On a TV the phone shows no picture for a touch to land on (dm_layout_pad_only): the same pad drops Tap
+    dm_gamepad_arrange(pad, dm_layout_pad_only(bounds));
+    [pad setNeedsLayout]; [pad layoutIfNeeded];
     XCTAssertEqual(dm_pad_layout(), 0, @"On a TV Tap goes");
     XCTAssertFalse(dm_pad_layout_offered(2));
     dm_pad_layout_set(2);

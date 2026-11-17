@@ -41,11 +41,12 @@ static inline dm_companion_surface_layout dm_companion_surface_make_safe(CGSize 
         p.footer=CGRectMake(0,nav_top,size.width,nav_height);
         p.nav_scale=scale;
         // The art window carries the selected tab's capsule (canvas 952..1080, 128): its foot sits
-        // on the gesture edge, 14 canvas points above the dock row's own top.
+        // on the gesture edge, 14 canvas points above the dock row's own top. The window's own
+        // middle (1016) is what the canvas is placed by, so 952 maps to its top and 1080 to its foot.
         CGFloat nav_w=1240*scale,nav_h=128*scale,nav_x=(size.width-nav_w)/2;
         p.nav_art=CGRectMake(nav_x,nav_top-(128-114)*scale,nav_w,nav_h);
         p.nav_controls=p.footer;
-        p.nav_offset=CGPointMake(nav_x,CGRectGetMidY(p.nav_art)-1019.5*scale);
+        p.nav_offset=CGPointMake(nav_x,CGRectGetMidY(p.nav_art)-1016*scale);
         // The footer is drawn over the body and takes its touches, so the content stops at the
         // bar's top edge: no widget is hidden under the bar or unreachable there.
         p.content=CGRectMake(0,0,size.width,nav_top);

@@ -22,7 +22,7 @@ static inline UIEdgeInsets dm_game_safe_insets(CGRect bounds, UIEdgeInsets inset
     return insets;
 }
 
-// The picture's width / height before the game's first present (front.h front_picture_shape gives the real one: a taller shape under DM_SCREEN_ASPECT, 1920x1344)
+// The picture's width / height before the game's first present (front.h front_picture_shape gives the real one: a taller shape under DM_SCREEN_ASPECT, 1920x2088 at 0.92)
 #define DM_PICTURE_16_9 (16.0 / 9.0)
 
 // The largest centered rectangle of the picture's shape (aspect = width / height) in b. An aspect of 0 is 16:9 (the convention of DM_SCREEN_ASPECT, the
@@ -54,9 +54,9 @@ static inline BOOL dm_picture_fill(const char *_Nullable value) { return value &
 // 2.4). 0 = 16:9.
 static inline float dm_picture_shape_auto(CGSize window, CGFloat topInset) {
     (void)topInset;
-    if (window.height > window.width) return (float)(2 * window.width / MAX(window.height, 1));   // standing up: the upper half's shape
-    double r = MAX(window.width, window.height) / MAX(MIN(window.width, window.height), 1);
-    return r >= 0.9 && r < 2.4 ? (float)r : 0.0f;
+    double r = window.height > window.width ? 2 * window.width / MAX(window.height, 1)   // standing up: the upper half's shape
+                                            : MAX(window.width, window.height) / MAX(MIN(window.width, window.height), 1);
+    return r >= 0.9 && r < 2.4 ? (float)r : 0.0f;   // loader.c's range; outside it, 16:9
 }
 
 // The iPhone Duo's fold is retired: an ordinary iPhone splits with no division region.
