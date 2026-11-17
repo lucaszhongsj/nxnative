@@ -458,17 +458,6 @@ struct EdenSurfaceLayout {
         }
         return (background,content)
     }
-    static func wallpaperRect(_ source:String,size:CGSize) -> CGRect {
-        switch source {
-        case "module:acnh/bg/0/map", "module:acnh/bg/0/critters", "module:acnh/bg/0/diy":
-            // These original textures contain a rounded panel baked into the
-            // 1240 x 1080 canvas. Fill from its interior without copying pixels.
-            let x=size.width/1112,y=size.height/844
-            return CGRect(x:-64*x,y:-64*y,width:1240*x,height:1080*y)
-        default:
-            return CGRect(origin:.zero,size:size)
-        }
-    }
     func point(_ p:CGPoint)->CGPoint {
         let nav=navControls.contains(p),o=nav ? navOffset:bodyOffset
         let scale=nav ? navScale:bodyScale
@@ -874,7 +863,7 @@ private func edenLabelKey(_ text:String,_ scale:Double,_ color:Any?,_ weight:Str
                 // The same wallpaper fills the body, the side rails and the footer.
                 if let wallpaper,let image=images.get(wallpaper) {
                     var backdrop=context;backdrop.clip(to:Path(CGRect(origin:.zero,size:geometry.size)))
-                    backdrop.draw(Image(decorative:image,scale:1),in:EdenSurfaceLayout.wallpaperRect(wallpaper,size:geometry.size))
+                    backdrop.draw(Image(decorative:image,scale:1),in:CGRect(origin:.zero,size:geometry.size))
                 }
                 // Occupancy/menu scrims cover the complete physical body, under
                 // the separately hosted controls. Foreground cards keep their
