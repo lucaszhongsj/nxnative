@@ -379,7 +379,17 @@ bool Art::Build(const ArtKey& key, Image& out) {
         const double cap=key.Num("px",20);if(cap<8||cap>96)return false;
         Image probe;if(!fonts.Text("ui","H",64,{255,255,255,255},probe)||probe.Empty())return false;
         const auto lang=Language();const char *face=lang==Lang::CNzh ? "ui_cn":lang==Lang::TWzh ? "ui_tw":lang==Lang::KRko ? "ui_kr":"ui";
-        return fonts.Text(face,text,cap*64.0/probe.h,key.Col("c",{116,97,68,255}),out);
+        Image ti;
+        if(!fonts.Text(face,text,cap*64.0/probe.h,key.Col("c",{116,97,68,255}),ti))return false;
+        // The face carries a single weight: a bold label is its glyphs grown a pixel in each
+        // direction, which the tab bar uses to mark the selected page.
+        if(key.Str("w")=="bold"&&!ti.Empty()){
+            Image thick=ti;
+            draw::Composite(thick,ti,1,0);draw::Composite(thick,ti,-1,0);
+            draw::Composite(thick,ti,0,1);draw::Composite(thick,ti,0,-1);
+            ti=thick;
+        }
+        out=ti;return !out.Empty();
     }
     if (family == "icon" &&
         (key.params.contains("s") || key.params.contains("w") || key.params.contains("h"))) {

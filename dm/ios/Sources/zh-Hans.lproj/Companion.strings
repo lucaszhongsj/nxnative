@@ -1,5 +1,5 @@
 "Map" = "地图";
-"Pockets" = "背包";
+"Pockets" = "口袋";
 "Critterpedia" = "图鉴";
 "DIY" = "DIY";
 "Today" = "今日";
@@ -9,26 +9,26 @@
 "Live" = "实时";
 "Unsupported game version" = "当前版本暂不支持副屏";
 "The game can continue without companion data." = "游戏可以继续运行。";
-"Enter your island to see live companion data." = "进入岛屿后，这里会显示实时地图、背包和岛屿信息。";
+"Enter your island to see live companion data." = "进入岛屿后，这里会显示实时地图、口袋和岛屿信息。";
 "Reset map" = "地图复位";
-"Miles" = "里程";
+"Miles" = "里数";
 "Category" = "分类";
 "Bugs" = "昆虫";
-"Fish" = "鱼类";
+"Fish" = "鱼";
 "Sea creatures" = "海洋生物";
 "Caught" = "已捕获";
 "Filter" = "筛选";
 "All" = "全部";
-"This month" = "本月可捕获";
+"This month" = "当前月份短名";
 "Not caught" = "未捕获";
 "Donated" = "已捐赠";
-"Can make" = "可以制作";
-"Favourites" = "已收藏";
+"Can make" = "可制作";
+"Favourites" = "收藏";
 "Not made" = "尚未制作";
 "No recipes in this category." = "这个分类下还没有配方。";
 "Turnip price" = "大头菜价格";
 "Visitors" = "今日访客";
-"Nook Miles+" = "狸游＋任务";
+"Nook Miles+" = "Nook 里数+";
 "Birthdays this month" = "本月生日";
 "Entry" = "条目";
 "Recipe" = "配方";
@@ -38,12 +38,14 @@
 "Cancel" = "取消";
 "Cancelled" = "已取消";
 "Choose a destination slot. Occupied slots are swapped." = "请选择目标格子；已有物品时会互换。";
+"Tap a destination slot" = "请选择目标格子";
+"Resident %ld" = "居民 %ld";
 "Hold and drag to move, or select an item for actions." = "长按拖动可移动；点选物品可使用或操作。";
 "Use item" = "使用／操作";
 "Move" = "移动";
 "Item actions" = "道具操作";
-"Close pockets" = "收起游戏背包";
-"Inventory changed. Select the item again." = "背包已变化，请重新选择物品。";
+"Close pockets" = "收起游戏口袋";
+"Inventory changed. Select the item again." = "口袋已变化，请重新选择物品。";
 "Menu changed. Open the item again." = "菜单已变化，请重新打开道具操作。";
 "The game did not accept the command. Try again." = "游戏未接受本次操作，请重试。";
 "Wait until the player is ready, then try again." = "请等待当前动作或对话结束后重试。";
@@ -59,7 +61,7 @@
 
 "Empty slot" = "空位";
 
-"Close game pockets" = "收起游戏背包";
+"Close game pockets" = "收起游戏口袋";
 
 "Auto fade" = "自动淡出";
 "Always show" = "始终显示";

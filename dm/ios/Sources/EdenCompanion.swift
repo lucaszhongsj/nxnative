@@ -142,9 +142,9 @@ final class EdenManifest {
                        raw["color"] as? String == "#4004554F" {
                         widget["src"]=source+(source.contains("?") ? "&" : "?")+"sc=04554f40"
                     }
-                    // The calibrated selection plate is light enough for dark text.
+                    // The selected tab keeps the authored colour and marks itself by weight alone.
                     if raw["type"] as? String == "label",raw["color"] as? String == "#FFFFF1C3" {
-                        widget["color"]="#FF423420"
+                        widget["text_weight"]="bold"
                     }
                 }
                 return EdenWidgetTemplate(index,widget)
@@ -219,7 +219,7 @@ struct EdenFrame {
     static func rectangle(_ any:Any?)->CGRect {guard let a=any as? [NSNumber],a.count==4 else{return .zero};return CGRect(x:a[0].doubleValue,y:a[1].doubleValue,width:a[2].doubleValue,height:a[3].doubleValue)}
     @MainActor init(model:CompanionModel,manifest:EdenManifest,local:[String:Double],extraWidth:Double=0) {
         var bindingsLocal=local;bindingsLocal["ui.page"]=Double(model.page.rawValue)
-        let b=EdenBindings(model.values,bindingsLocal.merging(["module_ready":1,"acnh.font":1]){a,_ in a},manifest);bindings=b
+        let b=EdenBindings(model.values,bindingsLocal.merging(["module_ready":Double(model.number("module_ready")),"acnh.font":1]){a,_ in a},manifest);bindings=b
         var pg=b.number("ui.pg");if pg==0 && model.ready{pg=Double(model.page.rawValue)}
         page = b.number("host.unsupported") != 0 ? "version" : b.number("module_error") != 0 ? "error" : b.number("scene.title") != 0 ? "title" : !model.ready ? "waiting" : [1:"map",2:"bag",3:"critters",4:"diy",5:"today",6:"phone"][Int(pg)] ?? "map"
         let p=manifest.pages[page] ?? [:]
@@ -375,19 +375,46 @@ struct EdenFrame {
         if let names=d["src_names"] as? [String],let bind=d["bind"] as? String,!names.isEmpty{return names[min(names.count-1,max(0,Int(bindings.number(bind))))]}
         return d["src"] as? String ?? ""
     }
+    // The panel is Chinese only. The module's own texts fall back to its English words when its text catalog is not read; these
+    // overrides keep the interface Chinese regardless (the date's English month and weekday words are translated below).
+    static let cnText:[String:String]=[
+        "txt.title.press":"请按A键","txt.ampm.0":"上午","txt.ampm.1":"下午",
+        "txt.bag.miles":"里数","txt.bag.savings":"储蓄余额",
+        "txt.crit.cat.0":"昆虫","txt.crit.cat.1":"鱼","txt.crit.cat.2":"海洋生物","txt.crit.chip.0":"全部",
+        "txt.diy.chip.0":"全部","txt.diy.chip.1":"可制作","txt.diy.chip.2":"收藏","txt.diy.chip.3":"尚未制作",
+        "txt.hemi.0":"北半球","txt.hemi.1":"南半球","txt.map.residents":"居民","txt.map.reset":"返回",
+        "txt.tab.map":"地图","txt.tab.bag":"口袋","txt.tab.critters":"图鉴","txt.tab.diy":"DIY","txt.tab.phone":"Nook手机",
+        "txt.theme.title":"壁纸","txt.today.nmp":"里数+",
+        "txt.week.0":"周日","txt.week.1":"周一","txt.week.2":"周二","txt.week.3":"周三","txt.week.4":"周四","txt.week.5":"周五","txt.week.6":"周六",
+    ]
+    static func chineseCalendar(_ s:String)->String {
+        let words=[("January","1月"),("February","2月"),("March","3月"),("April","4月"),("May","5月"),("June","6月"),
+                   ("July","7月"),("August","8月"),("September","9月"),("October","10月"),("November","11月"),("December","12月"),
+                   ("Jan.","1月"),("Feb.","2月"),("Mar.","3月"),("Apr.","4月"),("Jun.","6月"),("Jul.","7月"),("Aug.","8月"),
+                   ("Sep.","9月"),("Oct.","10月"),("Nov.","11月"),("Dec.","12月"),
+                   ("Sun.","周日"),("Mon.","周一"),("Tue.","周二"),("Wed.","周三"),("Thu.","周四"),("Fri.","周五"),("Sat.","周六"),
+                   ("Sunday","周日"),("Monday","周一"),("Tuesday","周二"),("Wednesday","周三"),("Thursday","周四"),("Friday","周五"),("Saturday","周六"),
+                   ("AM","上午"),("PM","下午")]
+        var out=s
+        for (en,cn) in words { out=out.replacingOccurrences(of:en,with:cn) }
+        return out
+    }
     func text(_ node:EdenNode)->String {
         let d=node.data
-        if node.kind=="value" {var s=String(Int(bindings.number(d["bind"] as? String ?? "")));if let max=d["max_bind"] as? String{s+=(d["max_sep"] as? String ?? "/")+String(Int(bindings.number(max)))};return ((d["text"] as? String ?? "")+s).replacingOccurrences(of:"\\{/?c(?::[^}]+)?\\}",with:"",options:.regularExpression)}
-        if let k=d["bind_text"] as? String{return bindings.text(k)}
-        if let map=d["text_map"] as? [String:String],let k=d["text_bind"] as? String {return flavor(map[String(Int(bindings.number(k)))] ?? "")}
-        return flavor(d["text_src"] as? String ?? d["text"] as? String ?? "")
+        var out:String
+        if node.kind=="value" {var s=String(Int(bindings.number(d["bind"] as? String ?? "")));if let max=d["max_bind"] as? String{s+=(d["max_sep"] as? String ?? "/")+String(Int(bindings.number(max)))};out=(d["text"] as? String ?? "")+s;out=out.replacingOccurrences(of:"\\{/?c(?::[^}]+)?\\}",with:"",options:.regularExpression)}
+        else if let k=d["bind_text"] as? String {out=EdenFrame.cnText[k] ?? bindings.text(k)}
+        else if let map=d["text_map"] as? [String:String],let k=d["text_bind"] as? String {out=flavor(map[String(Int(bindings.number(k)))] ?? "")}
+        else {out=flavor(d["text_src"] as? String ?? d["text"] as? String ?? "")}
+        return EdenFrame.chineseCalendar(out)
     }
     func flavor(_ s:String)->String {
         guard s.hasPrefix("msbt:") else{return s}
         let key=String(s.split(separator:"#").last ?? "")
         let language=bindings.text("acnh.lang")
         let folders=bindings.manifest.root["apple_flavor"] as? [String:[String:String]] ?? [:]
-        return folders[language]?[key] ?? folders["USen"]?[key] ?? companionText("Continue on the game screen above.")
+        // Chinese first when the game's language did not come through: the panel is for Chinese play, not a general localisation.
+        return folders[language]?[key] ?? folders["CNzh"]?[key] ?? folders["USen"]?[key] ?? companionText("Continue on the game screen above.")
     }
     func hit(_ point:CGPoint)->EdenNode? {nodes.reversed().first{$0.contains(point) && (!$0.action.isEmpty || $0.draggable || $0.kind=="map" || $0.data["input_block"] as? Bool==true)}}
 }
@@ -397,15 +424,19 @@ struct EdenSurfaceLayout {
     let body:CGRect,footer:CGRect,navArt:CGRect,navControls:CGRect,content:CGRect,left:CGRect,right:CGRect
     let bodyScale:Double,navScale:Double
     let bodyOffset:CGPoint,navOffset:CGPoint
-    let extraWidth:Double
+    let extraWidth:Double,bottomInset:Double
     init(_ size:CGSize, controls:Bool=false, expand:Bool=false, dockInsets:EdgeInsets=EdgeInsets()) {
         let insets=dm_companion_dock_insets(left:dockInsets.leading,right:dockInsets.trailing,bottom:dockInsets.bottom)
         let shared=dm_companion_surface_make_safe(size,controls ? 1:0,insets)
         body=shared.body;footer=shared.footer;navArt=shared.nav_art;navControls=shared.nav_controls
         content=shared.content;left=shared.left;right=shared.right
-        bodyScale=shared.body_scale
-        let extra = shared.body_scale > 0 ? max(0, shared.body.width / shared.body_scale - 1240) : 0
-        extraWidth = expand && !controls && extra >= 48 ? extra : 0
+        bodyScale=shared.body_scale;bottomInset=dockInsets.bottom
+        // The content rect, not the body: the rails of the touch layout already take their share, and counting them as spare width
+        // would push the authored widgets under them.
+        let extra = shared.body_scale > 0 ? max(0, shared.content.width / shared.body_scale - 1240) : 0
+        // The extra width is usable with touch controls too: a wide screen (an iPad, a wide split) reflows instead of leaving the
+        // margins empty; a phone's content is not wider than the canvas, so it keeps its layout.
+        extraWidth = expand && extra >= 48 ? extra : 0
         bodyOffset = CGPoint(x:shared.body_offset.x-extraWidth*bodyScale/2,y:shared.body_offset.y)
         navScale=shared.nav_scale;navOffset=shared.nav_offset
     }
@@ -437,7 +468,7 @@ struct EdenSurfaceLayout {
         }
     }
     func point(_ p:CGPoint)->CGPoint {
-        let nav=p.y>=footer.minY,o=nav ? navOffset:bodyOffset
+        let nav=navControls.contains(p),o=nav ? navOffset:bodyOffset
         let scale=nav ? navScale:bodyScale
         return CGPoint(x:(p.x-o.x)/scale,y:(p.y-o.y)/scale)
     }
@@ -450,7 +481,7 @@ struct EdenSurfaceLayout {
     var dockShape:Path {
         // Only the exposed top corners are rounded. The window clips the
         // flush bottom edge to the actual display or scene corner shape.
-        let radius=min(18,navControls.height*0.28)
+        let radius=min(18,max(0,navControls.height-bottomInset)*0.28)
         return UnevenRoundedRectangle(topLeadingRadius:radius,topTrailingRadius:radius,style:.continuous).path(in:footer)
     }
     var bodyCoverRect:CGRect {
@@ -565,12 +596,13 @@ private func edenColor(_ value:Any?,_ fallback:String="#00000000")->Color {
     let n=UInt64(s,radix:16) ?? 0
     return Color(.sRGB,red:Double((n>>16)&255)/255,green:Double((n>>8)&255)/255,blue:Double(n&255)/255,opacity:s.count==8 ? Double((n>>24)&255)/255:1)
 }
-private func edenLabelKey(_ text:String,_ scale:Double,_ color:Any?)->String {
+private func edenLabelKey(_ text:String,_ scale:Double,_ color:Any?,_ weight:String?=nil)->String {
     let safe=CharacterSet.alphanumerics.union(CharacterSet(charactersIn:"-_.~"))
     let encoded=text.addingPercentEncoding(withAllowedCharacters:safe) ?? ""
     let c=(color as? String ?? "#FF746144").replacingOccurrences(of:"#",with:"")
     let rgba=c.count==8 ? String(c.dropFirst(2))+String(c.prefix(2)):c+"ff"
-    return "module:acnh/ui/label?t=\(encoded)&px=\(Int(scale*5))&c=\(rgba)"
+    let bold=weight=="bold" ? "&w=bold" : ""
+    return "module:acnh/ui/label?t=\(encoded)&px=\(Int(scale*5))&c=\(rgba)\(bold)"
 }
 
 @MainActor struct EdenCompanionView:View {
@@ -647,8 +679,14 @@ private func edenLabelKey(_ text:String,_ scale:Double,_ color:Any?)->String {
     private func extraNodes(_ f:EdenFrame)->[EdenNode] {
         guard f.page=="bag" else{return []};var nodes:[EdenNode]=[]
         func chip(_ id:Int,_ rect:CGRect,_ title:String,_ action:String) {
-            nodes.append(EdenNode(id:id,data:["type":"image","src":"module:acnh/ui/capsule?w=\(Int(rect.width))&h=\(Int(rect.height))&c=fff1c3","on_tap":action,"apple_label":companionText(title)],rect:rect,clip:nil))
-            nodes.append(EdenNode(id:id+1,data:["type":"label","text":companionText(title),"text_scale":4,"color":"#FF746144","align":"center"],rect:CGRect(x:rect.midX,y:rect.midY-10,width:0,height:0),clip:nil))
+            // The capsule hugs its words: the rect's width is the room the column allows, not the button's
+            // size, so every action button is as long as its label needs and no longer.
+            let text=companionText(title)
+            let units=text.reduce(0.0){$0 + (($1.unicodeScalars.first?.value ?? 0) > 0x2E80 ? 1.0 : 0.55)}
+            let width=min(rect.width,max(140,units*20+56))
+            let r=CGRect(x:rect.midX-width/2,y:rect.origin.y,width:width,height:rect.height)
+            nodes.append(EdenNode(id:id,data:["type":"image","src":"module:acnh/ui/capsule?w=\(Int(r.width))&h=\(Int(r.height))&c=fff1c3","on_tap":action,"apple_label":text],rect:r,clip:nil))
+            nodes.append(EdenNode(id:id+1,data:["type":"label","text":text,"text_scale":4,"color":"#FF746144","align":"center"],rect:CGRect(x:r.midX,y:r.midY-10,width:0,height:0),clip:nil))
         }
         let selected=(model.values["bag.sel"] as? NSNumber)?.intValue ?? -1,busy=model.number("bag.busy") != 0
         if model.number("bag.native.open") != 0 {
@@ -658,20 +696,23 @@ private func edenLabelKey(_ text:String,_ scale:Double,_ color:Any?)->String {
             let item=model.text("bag.\(model.number("bag.native.slot")).name",companionText("Pockets"))
             nodes.append(EdenNode(id:900002,data:["type":"label","text":item,"text_scale":6,"color":"#FF746144","align":"center"],rect:CGRect(x:620,y:165,width:0,height:0),clip:nil))
             for i in 0..<count {chip(900010+i*2,CGRect(x:305,y:220+Double(i)*78,width:630,height:64),model.text("bag.native.\(i).name"),"apple.command.\(i)")}
-            chip(900100,CGRect(x:405,y:220+Double(count)*78,width:430,height:64),"Cancel","apple.close")
+            chip(900100,CGRect(x:500,y:220+Double(count)*78,width:240,height:64),"Cancel","apple.close")
         } else {
-            if model.number("scene.bag") != 0 && !busy {chip(901050,CGRect(x:808,y:708,width:392,height:64),"Close game pockets","apple.close")}
-            if busy {chip(901060,CGRect(x:808,y:875,width:392,height:64),"Cancel","apple.cancel")}
-            if selected>=0 && selected<40 && !model.pocketToken(selected).isEmpty && model.number("bag.can_use") != 0 && !busy {chip(901000,CGRect(x:808,y:796,width:392,height:64),"Use / actions","apple.use")}
+            if model.number("scene.bag") != 0 && !busy {chip(901050,CGRect(x:808,y:708,width:280,height:64),"Close game pockets","apple.close")}
+            // Cancel sits in the left column, apart from the right column's actions.
+            if busy {chip(901060,CGRect(x:48,y:875,width:160,height:64),"Cancel","apple.cancel")}
+            // The right column starts clear of the pocket's bin disc at x 773..877.
+            if selected>=0 && selected<40 && !model.pocketToken(selected).isEmpty && model.number("bag.can_use") != 0 && !busy {chip(901000,CGRect(x:940,y:796,width:260,height:64),"Use / actions","apple.use")}
             if model.number("bag.can_write") != 0 && !busy {
-                if selected>=0 && selected<40 && !model.pocketToken(selected).isEmpty {chip(901010,CGRect(x:808,y:875,width:188,height:64),movingSlot==nil ? "Move":"Cancel","apple.move")}
-                chip(901020,CGRect(x:1010,y:875,width:190,height:64),"Sort pockets","apple.sort")
+                if selected>=0 && selected<40 && !model.pocketToken(selected).isEmpty {chip(901010,CGRect(x:900,y:875,width:140,height:64),movingSlot==nil ? "Move":"Cancel","apple.move")}
+                chip(901020,CGRect(x:1040,y:875,width:160,height:64),"Sort pockets","apple.sort")
             }
             if movingSlot != nil {nodes.append(EdenNode(id:901030,data:["type":"label","text":companionText("Tap a destination slot"),"text_scale":4,"color":"#FF746144","align":"center"],rect:CGRect(x:620,y:947,width:0,height:0),clip:nil))}
         }
         return nodes.map { node in
             var rect = node.rect
             if node.coversBody { rect.size.width += f.extraWidth }
+            else if node.id == 901060 || node.id == 901061 { }   // left column: the canvas grows to the right, this pair stays
             else if node.id >= 901000 && node.id != 901030 { rect.origin.x += f.extraWidth }
             else { rect.origin.x += f.extraWidth/2 }
             return EdenNode(id:node.id,data:node.data,rect:rect,clip:node.clip)
@@ -686,7 +727,7 @@ private func edenLabelKey(_ text:String,_ scale:Double,_ color:Any?)->String {
             if n.kind=="label" || n.kind=="value" {
                 let scale=(n.data["text_scale"] as? NSNumber)?.doubleValue ?? 4
                 for line in labelLines(f.text(n),n) where !line.isEmpty {
-                    labels.append(edenLabelKey(line,scale,n.data["color"]))
+                    labels.append(edenLabelKey(line,scale,n.data["color"],n.data["text_weight"] as? String))
                 }
             }
         }
@@ -715,14 +756,19 @@ private func edenLabelKey(_ text:String,_ scale:Double,_ color:Any?)->String {
             case "weather_badge":drawWeatherBadge(f.source(n),in:r,context:&c)
             case "label","value":
                 let scale=(d["text_scale"] as? NSNumber)?.doubleValue ?? 4,cap=scale*5,align=d["align"] as? String ?? "left"
+                // valign center: the rect's y is the text's vertical centre, so the margin above and below
+                // follows from the drawn glyphs instead of an estimated cap height.
+                let centred=(d["valign"] as? String)=="center"
                 for (i,line) in labelLines(f.text(n),n).enumerated() where !line.isEmpty {
-                    let y=r.minY+Double(i)*(cap+((d["line_gap"] as? NSNumber)?.doubleValue ?? 4))
-                    if let im=images.get(edenLabelKey(line,scale,d["color"])) {
+                    let y0=r.minY+Double(i)*(cap+((d["line_gap"] as? NSNumber)?.doubleValue ?? 4))
+                    if let im=images.get(edenLabelKey(line,scale,d["color"],d["text_weight"] as? String)) {
                         let w=Double(im.width),h=Double(im.height),x=r.minX-(align=="center" ? w/2:align=="right" ? w:0)
+                        let y=centred ? y0-h/2 : y0
                         if let outline=d["outline"] {c.addFilter(.shadow(color:edenColor(outline),radius:(d["outline_px"] as? NSNumber)?.doubleValue ?? 1))}
                         c.draw(Image(decorative:im,scale:1),in:CGRect(x:x,y:y,width:w,height:h))
                     } else {
                         let text=Text(line).font(.system(size:cap*1.34,weight:.bold,design:.rounded)).foregroundColor(edenColor(d["color"],"#FF746144"))
+                        let y=centred ? y0-cap*1.34/2 : y0
                         c.draw(text,at:CGPoint(x:r.minX,y:y),anchor:align=="center" ? .top:align=="right" ? .topTrailing:.topLeading)
                     }
                 }
@@ -810,7 +856,7 @@ private func edenLabelKey(_ text:String,_ scale:Double,_ color:Any?)->String {
         GeometryReader{geometry in
             #if os(iOS)
             let controller = gestureController ?? model.externalController
-            let layout=EdenSurfaceLayout(geometry.size,controls:!controller,expand:controller,dockInsets:model.dockInsets)
+            let layout=EdenSurfaceLayout(geometry.size,controls:!controller,expand:true,dockInsets:model.dockInsets)
             #else
             let layout=EdenSurfaceLayout(geometry.size)
             #endif
@@ -840,8 +886,9 @@ private func edenLabelKey(_ text:String,_ scale:Double,_ color:Any?)->String {
             .background(edenColor(manifest.root["background"],"#FF000000"))
             .contentShape(layout.touchShape)
             .gesture(DragGesture(minimumDistance:0).updating($dragTouch){_,active,_ in active=true}.onChanged{g in
-                let inBody=layout.body.contains(g.startLocation)
-                guard inBody || layout.navControls.contains(g.startLocation) else { return }
+                let inNav=layout.navControls.contains(g.startLocation)
+                let inBody = !inNav && layout.body.contains(g.startLocation)
+                guard inBody || inNav else { return }
                 beginInteraction()
                 guard inBody && layout.body.contains(g.location) else { return }
                 let p=layout.point(g.location),start=layout.point(g.startLocation)
@@ -871,7 +918,8 @@ private func edenLabelKey(_ text:String,_ scale:Double,_ color:Any?)->String {
                     if !pinchTouch { endInteraction() }
                 }
                 let p=layout.point(g.location),distance=layout.bodyDistance(g.translation)
-                let inBody=layout.body.contains(g.location),inFooter=layout.navControls.contains(g.location)
+                let inFooter=layout.navControls.contains(g.location)
+                let inBody = !inFooter && layout.body.contains(g.location)
                 if distance>12,let source=dragging,source.draggable {
                     if inBody,let target=bodyNodes.reversed().first(where:{$0.contains(p) && $0.data["drop_action"] != nil}) {
                         if let name=target.data["drop_action"] as? String,name.hasPrefix("bag.drop."),let slot=Int(name.dropFirst(9)),source.payload<40{_ = model.movePocket(from:source.payload,to:slot,expected:dragToken)}
@@ -883,6 +931,8 @@ private func edenLabelKey(_ text:String,_ scale:Double,_ color:Any?)->String {
                 }
             })
             .simultaneousGesture(MagnificationGesture().updating($pinchTouch){_,active,_ in active=true}.onChanged{v in beginInteraction();if f.page=="map" {mapZoom=min(3,max(1,pinchStart*v));mapPan=clampedPan(mapPan,f)}}.onEnded{_ in pinchStart=mapZoom})
+            // The same bottom bar triple tap as DmGamepad.m's, on the Tap side: the panel takes these touches, so it switches back to 3D.
+            .simultaneousGesture(SpatialTapGesture(count:3).onEnded{value in if layout.navControls.contains(value.location){model.toggleLayout()}})
             .accessibilityRepresentation {
                 ForEach(accessibleNodes(nodes)){n in
                     Button(n.data["apple_label"] as? String ?? accessibilityLabel(n,f)){model.uiActivity?(1,true);action(n,f);model.uiActivity?(1,false)}.accessibilityIdentifier("duo."+(n.data["id"] as? String ?? n.action)+".\(n.payload)")
@@ -922,7 +972,7 @@ private func edenLabelKey(_ text:String,_ scale:Double,_ color:Any?)->String {
         if n.action.hasPrefix("tab."),let p=["tab.map":CompanionPage.map,"tab.bag":.bag,"tab.critters":.critters,"tab.diy":.diy,"tab.today":.today,"tab.phone":.phone][n.action]{return p.title}
         if let id=n.data["id"] as? String,id.hasPrefix("bag_slot_"),let slot=Int(id.dropFirst(9)){let title=model.text("bag.\(slot).name");return "\(slot+1): \(title.isEmpty ? companionText("Empty slot"):title)"}
         if n.action=="bag_sel"{return "\(n.payload+1): \(model.text("bag.\(n.payload).name",companionText("Pockets")))"}
-        if n.action=="res_sel"{return model.text("res.\(n.payload).name","Resident \(n.payload+1)")}
+        if n.action=="res_sel"{return model.text("res.\(n.payload).name",String(format:companionText("Resident %ld"),n.payload+1))}
         return n.action
     }
 }

@@ -7,10 +7,17 @@ import UIKit
 #endif
 
 func companionText(_ key: String) -> String {
-    var bundle = Bundle.main
-    let language = ProcessInfo.processInfo.environment["DM_LANG"] ?? (bundle.object(forInfoDictionaryKey: "DMLanguage") as? String ?? "")
-    if language.hasPrefix("zh"), let path = bundle.path(forResource: "zh-Hans", ofType: "lproj"), let translated = Bundle(path: path) { bundle = translated }
-    return bundle.localizedString(forKey: key, value: key, table: "Companion")
+    let main = Bundle.main
+    // The panel is Chinese only: the games it accompanies are played in Chinese, so its own words do not follow DM_LANG or the system
+    // language. In the shared shell the panel lives in a game framework, and Bundle.main is the shell app, which has no Companion.strings:
+    // ask the framework's own bundle first, then the app's.
+    for base in [Bundle(for: CompanionModel.self), main] {
+        var bundle = base
+        if let path = base.path(forResource: "zh-Hans", ofType: "lproj"), let translated = Bundle(path: path) { bundle = translated }
+        let text = bundle.localizedString(forKey: key, value: "", table: "Companion")
+        if !text.isEmpty { return text }
+    }
+    return key
 }
 enum CompanionPage: Int, CaseIterable {
     case map = 1, bag, critters, diy, today, phone
@@ -32,6 +39,7 @@ struct CompanionMarker: Identifiable {
     @Published var values: [String: Any] = [:]
     @Published var page = CompanionPage.map
     @Published var imageEpoch = 0
+    private var pendingPage: CompanionPage?   // a pick the adapter has not confirmed yet: its page's keys are not in the snapshot until it does
     @Published var islandName = ""
     @Published var controlsHidden = false
     @Published var externalController = false
@@ -77,6 +85,12 @@ struct CompanionMarker: Identifiable {
         guard presented else { return }
         let next = read()
         if !(next as NSDictionary).isEqual(to: values) { values = next }
+        // A page pick takes effect when the adapter reports it: until then the snapshot still holds the old page's keys, and
+        // drawing the new page would show empty fields.
+        if let pending = pendingPage, (next["ui.page"] as? NSNumber)?.intValue == pending.rawValue {
+            pendingPage = nil
+            if page != pending { page = pending; updateNativeActivity(); schedulePolling() }
+        }
         let name=text("island.name")
         if !name.isEmpty && name != islandName { islandName = name }
         updateNativeActivity()
@@ -94,7 +108,9 @@ struct CompanionMarker: Identifiable {
         // Route transitions through the owner of polling and native visibility.
         if self.presented != presented { visible(presented) }
     }
-    func select(_ next: CompanionPage) { if page == .bag && next != .bag { action("bag_cancel", 0) }; page = next; updateNativeActivity(); action("ui_open", next.rawValue);schedulePolling();poll() }
+    func select(_ next: CompanionPage) { if page == .bag && next != .bag { action("bag_cancel", 0) }; pendingPage = next; action("ui_open", next.rawValue);schedulePolling();poll() }
+    // The panel's bottom bar double tap: Tap is the layout in which the panel itself takes the touches, 3D the one with the controls.
+    func toggleLayout() { dm_pad_layout_set(dm_pad_layout() == 2 ? 1 : 2) }
     func updateNativeActivity(force: Bool = false) {
         let busy = page == .bag && (number("bag.native.open") != 0 || number("bag.busy") != 0)
             || page == .phone && (values["pdrv.idle"] as? NSNumber)?.intValue == 0
@@ -181,7 +197,8 @@ public func dmCompanionUIDockInsets(_ left: Double, _ right: Double, _ bottom: D
 public func dmCompanionViewController() -> UnsafeMutableRawPointer {
     let model = CompanionModel()
     activeCompanionModel = model
-    let controller = DmHostingController(rootView: ACNHCompanionView(model: model))
+    // The band reaches the screen's bottom edge: the bar's background covers it, its text stays above the home indicator.
+    let controller = DmHostingController(rootView: ACNHCompanionView(model: model).ignoresSafeArea(.container, edges: .bottom))
     controller.view.backgroundColor = .clear
     controller.view.clipsToBounds = true
     return Unmanaged.passRetained(controller).toOpaque()

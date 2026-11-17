@@ -6,9 +6,6 @@
 #import <Metal/Metal.h>
 #import <ImageIO/ImageIO.h>
 #import <CommonCrypto/CommonDigest.h>
-#include <sys/stat.h>
-#include <fcntl.h>
-#include <unistd.h>
 #include <array>
 #include <mutex>
 #include <cstring>
@@ -39,7 +36,7 @@ static const EdenDsmodModuleApi *provider() {
     NSMutableOrderedSet *_failedImageKeys;
     NSDictionary *_inputGates;
     NSArray *_writeBuilds;
-    NSString *_romfs, *_trace;
+    NSString *_romfs, *_trace, *_lastStatus;
     uint64_t _sample, _command, _pressMask, _pressUntil, _pressGeneration, _moduleMask, _visibilityGeneration;
     NSUInteger _traceTick;
     BOOL _visible, _moduleReady, _interactionSamplePending;
@@ -80,27 +77,8 @@ static const char *getText(void *p,const char *k) {
     if(k && !strcmp(k,"__page"))return object(p).page.UTF8String;
     return nullptr;
 }
-static BOOL validAssetPath(NSString *p) {
-    if(!p.length || p.length>4096 || [p containsString:@":"] || [p rangeOfCharacterFromSet:NSCharacterSet.controlCharacterSet].location!=NSNotFound)return NO;
-    for(NSString *c in p.pathComponents)if([c isEqual:@".."] || [c isEqual:@"."])return NO;
-    return YES;
-}
 static size_t readRomfs(void *,const char *raw,uint64_t offset,void *out,size_t n) {
-    if(!raw)return 0;
-    NSString *p=[[NSString alloc]initWithUTF8String:raw];
-    while([p hasPrefix:@"/"])p=[p substringFromIndex:1];
-    if(!validAssetPath(p))return 0;
-    const char *base=getenv("DM_ROMFS");if(!base)return 0;
-    NSString *path=[@(base) stringByAppendingPathComponent:p];
-    int fd=open(path.fileSystemRepresentation,O_RDONLY|O_CLOEXEC|O_NOFOLLOW);
-    if(fd<0)return 0;
-    struct stat s;size_t result=0;
-    if(!fstat(fd,&s) && S_ISREG(s.st_mode) && s.st_size>0 && (uint64_t)s.st_size<=(128u<<20)){
-        if(!out && !n)result=(size_t)s.st_size;
-        else if(offset<=(uint64_t)s.st_size && n<=(uint64_t)s.st_size-offset){
-            size_t done=0;while(done<n){ssize_t got=pread(fd,(uint8_t *)out+done,n-done,(off_t)(offset+done));if(got<=0)break;done+=(size_t)got;}result=done;
-        }
-    }close(fd);return result;
+    return dm_companion_read_romfs(raw,offset,out,n);
 }
 static EdenDsmodBool decodeASTC(void *p,uint32_t w,uint32_t h,uint32_t bw,uint32_t bh,const uint8_t *in,size_t n,uint8_t *out,size_t cap) {
     return [object(p) decodeASTC:w height:h blockWidth:bw blockHeight:bh input:in length:n output:out capacity:cap];
@@ -170,7 +148,8 @@ static BOOL writePNG(NSData *rgba,NSUInteger w,NSUInteger h,NSString *path) {
 }
 - (void)start {
     @synchronized(self){
-        if(_timer || !self.supported)return;
+        if(_timer)return;
+        if(!self.supported){ _latest=@{@"module_error":@1}; return; }   // no ABI/struct match: say so on the panel instead of staying blank
         self.visible=YES;
         _timer=dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER,0,0,_worker);
         dispatch_source_set_timer(_timer,DISPATCH_TIME_NOW,50*NSEC_PER_MSEC,5*NSEC_PER_MSEC);
@@ -180,7 +159,7 @@ static BOOL writePNG(NSData *rgba,NSUInteger w,NSUInteger h,NSString *path) {
     }
 }
 - (BOOL)createModule {
-    dm_companion_guest g;if(!dm_companion_guest_info(&g))return NO;
+    dm_companion_guest g;if(!dm_companion_guest_info(&g)){@synchronized(self){_latest=@{@"module_error":@1};}return NO;}
     if(!_api->supports_build(g.build_id)){
         @synchronized(self){_latest=@{@"host.unsupported":@1};}return NO;
     }
@@ -191,7 +170,7 @@ static BOOL writePNG(NSData *rgba,NSUInteger w,NSUInteger h,NSString *path) {
     _host.get_tick=tick;_host.get_heap_begin=heapBegin;_host.get_heap_end=heapEnd;_host.is_mapped=mapped;_host.read_memory=readMemory;
     _host.log=moduleLog;_host.begin_output=beginOutput;_host.end_output=beginOutput;_host.publish_i64=publishInt;_host.publish_f64=publishFloat;
     _host.publish_text=publishText;_host.publish_address=publishAddress;_host.read_romfs=readRomfs;_host.get_i64=getInt;_host.get_f64=getFloat;_host.get_text=getText;
-    _output=[NSMutableDictionary new];_instance=_api->create(&_host,"{}");if(!_instance)return NO;
+    _output=[NSMutableDictionary new];_instance=_api->create(&_host,"{}");if(!_instance){@synchronized(self){_latest=@{@"module_error":@1};}return NO;}
     if(_extensions && _extensions->configure){
         EdenDsmodHostExtensions ext={};ext.version=EDEN_DSMOD_EXT_VERSION;ext.struct_size=sizeof ext;ext.abi_hash=EDEN_DSMOD_EXT_HASH;
         ext.userdata=(__bridge void *)self;ext.decode_astc=decodeASTC;_extensions->configure(_instance,&ext);
@@ -227,7 +206,12 @@ static BOOL writePNG(NSData *rgba,NSUInteger w,NSUInteger h,NSString *path) {
         if(_visible)dm_companion_input(mask);else dm_companion_input_reset();
         notifyUI=_interactionSamplePending ||
             [_latest[@"ui.page"]longLongValue]!=[_output[@"ui.page"]longLongValue];
+        _output[@"module_ready"]=@(_moduleReady);
         _latest=[_output copy];
+        // One line in the game's log when the module's view of the game changes: what a player's log needs to explain a panel with no data.
+        NSString *st=[NSString stringWithFormat:@"ready=%@ page=%@ lang=%@ code=%@ save=%@ personal=%@ err=%@",
+                      _latest[@"acnh.ready"],_latest[@"ui.page"],_latest[@"acnh.lang"],_latest[@"live.code"],_latest[@"live.save"],_latest[@"live.personal"],_latest[@"acnh.err"]];
+        if(![st isEqualToString:_lastStatus]){_lastStatus=[st copy];fprintf(stderr,"companion: status %s\n",st.UTF8String);}
     }
     _interactionSamplePending=NO;
     if(notifyUI)dispatch_async(dispatch_get_main_queue(), ^{
@@ -301,13 +285,17 @@ static BOOL writePNG(NSData *rgba,NSUInteger w,NSUInteger h,NSString *path) {
         if(failed && now-failed.doubleValue<1){completion(nil,0,0);return;}
         EdenDsmodHostApi h;void *instance;
         @synchronized(self){if(!self->_moduleReady){completion(nil,0,0);return;}h=self->_host;instance=self->_instance;}
-        if(!instance || !self->_extensions || !self->_extensions->load_image){completion(nil,0,0);return;}
+        if(!instance || !self->_extensions || !self->_extensions->load_image){
+            static BOOL saidNoLoader; if(!saidNoLoader){saidNoLoader=YES;fprintf(stderr,"companion: no image loader (extensions %s, load_image %s)\n",self->_extensions?"yes":"no",self->_extensions && self->_extensions->load_image?"yes":"no");}
+            completion(nil,0,0);return;
+        }
         ImageResult r;
         h.publish_i64=nullptr;h.publish_f64=nullptr;h.publish_text=nullptr;h.publish_address=nullptr;
         h.get_i64=assetInt;h.get_f64=nullptr;h.get_text=nullptr;
         BOOL ok=self->_extensions->load_image(instance,&h,key.UTF8String,&r,receiveImage);
         if(ok && r.data){NSDictionary *entry=@{@"data":r.data,@"w":@(r.w),@"h":@(r.h)};[self->_images setObject:entry forKey:key cost:r.data.length];[self->_failedImages removeObjectForKey:key];[self->_failedImageKeys removeObject:key];completion(r.data,r.w,r.h);}
         else{
+            if(!self->_failedImages[key])fprintf(stderr,"companion: image unavailable: %s\n",key.UTF8String);
             while(self->_failedImageKeys.count>=512){NSString *old=self->_failedImageKeys.firstObject;[self->_failedImages removeObjectForKey:old];[self->_failedImageKeys removeObjectAtIndex:0];}
             self->_failedImages[key]=@(NSProcessInfo.processInfo.systemUptime);[self->_failedImageKeys addObject:key];completion(nil,0,0);
         }

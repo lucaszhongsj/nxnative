@@ -646,9 +646,13 @@ void Publisher::BuildClock(const live::LiveSnapshot& s) {
     // word for "today"; a lone weekday reads oddly, e.g. JP 金); the Critterpedia "available this
     // month" chip is the month's short name as its own detail page writes it (MenuBookDetail
     // 0201..0212)
-    o_clock.T("txt.tab.today", date_short);
+    // The tab is a narrow slot: a bare month and day read shorter than the language's own date
+    // and still tell today at a glance.
+    char tab_date[8];
+    std::snprintf(tab_date, sizeof tab_date, "%02d.%02d", s.mo, s.d);
+    o_clock.T("txt.tab.today", tab_date);
     o_clock.T("txt.crit.chip.1", mon_short);
-    o_clock.I("txt.tab.today.w", widths.Measure(date_short));
+    o_clock.I("txt.tab.today.w", widths.Measure(tab_date));
     o_clock.I("txt.crit.chip.1.w", widths.Measure(mon_short));
 }
 
