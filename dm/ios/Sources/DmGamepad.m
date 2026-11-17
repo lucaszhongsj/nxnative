@@ -163,7 +163,8 @@ static void pads_start(void);   // Physical controllers, below
 @implementation DmGamepad {
     NSMapTable<UITouch *, NSNumber *> *_owner;     // touch → control (with the key for C_BTN or the stick for C_STICK, << 8)
     UITouch *_stick[2]; CGPoint _stickNow[2];      // the touch holding each stick and where it is now (0 left, 1 right)
-    CGPoint _rCentre;                              // the right stick's centre: where its touch landed, dragged along past K_RSTICK_R
+    CGPoint _rCentre;                              // the right stick's centre: it follows the finger, so the whole stick moves with it
+    CGPoint _rAnchor;                              // the right stick's anchor: where the touch landed, the direction's origin
     uint64_t _faceBits, _dpadBits, _btnBits;
     NSMapTable<UITouch *, NSNumber *> *_faceOf;    // which keys each touch on the diamond currently holds
     CAShapeLayer *_key[B_N]; CATextLayer *_label[B_N];   // one layer per key
@@ -379,9 +380,12 @@ static int lockedKey(int c) {   // DmPadGeometry.h's control → the key it pres
     if (a < -22.5 && a > -157.5) m |= 1ull << B_DOWN;
     return m;
 }
-- (CGPoint)knobOffset:(int)i {   // knob offset from the stick centre (clamped to the stick radius)
+// The knob's offset from the stick's centre, clamped to the stick's radius. The right stick follows the finger, so its offset is the finger's
+// distance from where the touch landed: the stick moves with the finger and still reads the direction the finger turns in.
+- (CGPoint)knobOffset:(int)i {
     if (!_stick[i]) return CGPointZero;
-    CGPoint h = [self stickCentre:i]; CGFloat dx = _stickNow[i].x - h.x, dy = _stickNow[i].y - h.y, d = hypot(dx, dy), R = [self stickR:i];
+    CGPoint o = i == 1 ? _rAnchor : self.stickHome;
+    CGFloat dx = _stickNow[i].x - o.x, dy = _stickNow[i].y - o.y, d = hypot(dx, dy), R = [self stickR:i];
     if (d > R) { dx *= R / d; dy *= R / d; }
     return CGPointMake(dx, dy);
 }
@@ -473,7 +477,7 @@ int front_web_touch(void);
         if (hit.kind == DM_PAD_HIT_KEY) { [_owner setObject:@(C_BTN | (uint64_t)lockedKey(hit.key) << 8) forKey:t]; continue; }
         if (_tap) { game |= [self gameBegin:t]; continue; }
         int kind = hit.kind == DM_PAD_HIT_FACE ? C_FACE : hit.kind == DM_PAD_HIT_DPAD ? C_DPAD : hit.kind == DM_PAD_HIT_STICK ? C_STICK : C_NONE, idx = 0;
-        if (kind == C_NONE && _full && !_stick[1] && [self inRightArea:p]) { kind = C_STICK; idx = 1; _rCentre = p; [self hideHint]; }   // the right stick: a drawn circle starts it, then its centre trails the finger
+        if (kind == C_NONE && _full && !_stick[1] && [self inRightArea:p]) { kind = C_STICK; idx = 1; _rCentre = p; _rAnchor = p; [self hideHint]; }   // the right stick: a drawn circle starts it, then the whole stick follows the finger
         if (kind == C_FACE) { [_owner setObject:@(C_FACE) forKey:t]; [_faceOf setObject:@([self faceAt:p]) forKey:t]; }
         else if (kind == C_DPAD) [_owner setObject:@(C_DPAD) forKey:t];
         else if (kind == C_STICK) { [_owner setObject:@(C_STICK | (uint64_t)idx << 8) forKey:t]; _stick[idx] = t; _stickNow[idx] = p; }
@@ -488,8 +492,7 @@ int front_web_touch(void);
         uint64_t v = [_owner objectForKey:t].unsignedLongLongValue; int c = (int)(v & 0xff); CGPoint p = [t locationInView:self];
         if (c == C_FACE) [_faceOf setObject:@([self faceAt:p]) forKey:t];
         else if (c == C_STICK) { _stickNow[v >> 8] = p;
-            if ((v >> 8) == 1) { CGFloat d = dist(p, _rCentre), R = [self stickR:1];   // the right stick's centre trails a finger past its radius, so turning back responds at once
-                if (d > R) _rCentre = CGPointMake(p.x - (p.x - _rCentre.x) * R / d, p.y - (p.y - _rCentre.y) * R / d); } }
+            if ((v >> 8) == 1) _rCentre = p; }   // the right stick follows the finger: the whole stick moves with it
         else if (c == C_GAME) game = YES;
     }
     if (game) [self pushGame];
@@ -573,7 +576,8 @@ static void placeLabel(CATextLayer *t, CGPoint c, CGFloat fs) {
     CAShapeLayer *in = (CAShapeLayer *)_knob.sublayers.firstObject; CGPathRef ip = circlePath(CGPointMake(k, k), k * 0.62);
     in.frame = _knob.bounds; in.path = ip; CGPathRelease(ip);
     if (self.geo->rstickDrawn) {   // the split's right stick, drawn like the left one (DmPadGeometry.h)
-        setPath(_rring, circlePath(self.geo->rstick, self.geo->rstickR));
+        CGPoint rc = [self stickCentre:1];   // the ring follows the finger: the whole stick moves with it
+        setPath(_rring, circlePath(rc, self.geo->rstickR));
         _rknob.bounds = _knob.bounds;
         setPath(_rknob, circlePath(CGPointMake(k, k), k));
         CAShapeLayer *rin = (CAShapeLayer *)_rknob.sublayers.firstObject; CGPathRef rp = circlePath(CGPointMake(k, k), k * 0.62);
@@ -633,6 +637,7 @@ static BOOL g_hintShown;   // once per launch
     CGPoint h = self.stickHome, o = [self knobOffset:0];
     _knob.position = CGPointMake(h.x + o.x, h.y + o.y); _knob.fillColor = (_stick[0] ? k_on : k_idle).CGColor;
     if (self.geo->rstickDrawn) { CGPoint rh = [self stickCentre:1], ro = [self knobOffset:1];
+        setPath(_rring, circlePath(rh, self.geo->rstickR));   // the ring follows the finger: the whole stick moves with it
         _rknob.position = CGPointMake(rh.x + ro.x, rh.y + ro.y); _rknob.fillColor = (_stick[1] ? k_on : k_idle).CGColor; }
     [CATransaction commit];
 }

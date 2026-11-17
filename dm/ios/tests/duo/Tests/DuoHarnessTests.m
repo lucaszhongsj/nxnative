@@ -11,6 +11,7 @@
 #define DUO_HARNESS_HAS_NATIVE_POSE_API 0
 #endif
 #import "DmLayout.h"
+#import "DmPadGeometry.h"
 #import "DmGameMenu.h"
 #import "audio_session_policy.h"
 #import "DuoHarnessRuntime.h"
@@ -291,6 +292,9 @@ static BOOL gDuoHarnessReduceMotionEnabled;
     // A square window takes its own shape while lying down (height is not greater than width)
     XCTAssertEqualWithAccuracy(dm_picture_shape_auto(CGSizeMake(600, 600), 0), 1.0f, 0.001);
     XCTAssertEqual(dm_picture_shape_auto(CGSizeZero, 0), 0.0f);
+    // The screen's own shape by its orientation: a phone lying down keeps its wide shape (the wide picture patch renders it uncropped), a phone standing up
+    // asks for the standing shape.
+    XCTAssertEqualWithAccuracy(dm_picture_shape_auto(CGSizeMake(402, 874), 0), DM_PICTURE_PORTRAIT, 0.001, @"An iPhone 17 Pro standing up");
 }
 
 - (void)testPortraitWithoutHingeStatusStillSplitsVideoAboveControls {
@@ -398,10 +402,10 @@ static BOOL gDuoHarnessReduceMotionEnabled;
         UIView *pad = [self padForLayout:layout bounds:bounds];
 
         CGRect lower = layout.controls;
-        CGFloat u = MIN(MIN(lower.size.height / 430.0, lower.size.width / 700.0), 1.3);
-        CGPoint stickCenter = CGPointMake(CGRectGetMinX(lower) + 0.25 * lower.size.width,
-                                          CGRectGetMinY(lower) + 0.40 * lower.size.height);
-        CGPoint faceCenter = CGPointMake(CGRectGetMinX(lower) + 0.75 * lower.size.width, stickCenter.y);
+        DmPadGeo geo = [self geoOfPad:pad layout:layout full:YES];
+        CGFloat u = geo.u;
+        CGPoint stickCenter = geo.stick;
+        CGPoint faceCenter = geo.face;
         CGRect stickRing = [self largestShapePathBoundsInLayer:pad.layer];
         CGPoint renderedStick = CGPointMake(CGRectGetMidX(stickRing), CGRectGetMidY(stickRing));
         XCTAssertEqualWithAccuracy(renderedStick.x, stickCenter.x, 0.5,
@@ -413,8 +417,8 @@ static BOOL gDuoHarnessReduceMotionEnabled;
                                    @"The ABXY diamond sits above the right stick in the right column (case %lu)", (unsigned long)i);
         XCTAssertEqualWithAccuracy(faces.y, faceCenter.y, 0.5);
 
-        CGPoint dpadCenter = CGPointMake(stickCenter.x, CGRectGetMinY(lower) + 0.80 * lower.size.height);
-        DuoFakeTouch *right = [self touchAt:CGPointMake(dpadCenter.x + 0.6 * 77 * u, dpadCenter.y) time:1];
+        CGPoint dpadCenter = geo.dpad;
+        DuoFakeTouch *right = [self touchAt:CGPointMake(dpadCenter.x + 0.6 * geo.dpadR, dpadCenter.y) time:1];
         [self beginTouches:@[right] onPad:pad];
         XCTAssertEqual(duo_harness_input().buttons, DM_BTN_RIGHT,
                        @"The D-pad hit target should share its specified portrait position (case %lu)", (unsigned long)i);
@@ -424,9 +428,9 @@ static BOOL gDuoHarnessReduceMotionEnabled;
                                     @"The joystick remains inside the lower safe area (case %lu)", (unsigned long)i);
         XCTAssertLessThanOrEqual(CGRectGetMaxX(stickRing), CGRectGetMaxX(lower) + 0.5,
                                  @"The joystick remains inside the lower safe area (case %lu)", (unsigned long)i);
-        XCTAssertGreaterThanOrEqual(faces.x - 77 * u, CGRectGetMinX(lower) - 0.5,
+        XCTAssertGreaterThanOrEqual(faces.x - geo.faceHitR, CGRectGetMinX(lower) - 0.5,
                                     @"The face cluster's expanded targets remain inside the lower safe area (case %lu)", (unsigned long)i);
-        XCTAssertLessThanOrEqual(faces.x + 77 * u, CGRectGetMaxX(lower) + 0.5,
+        XCTAssertLessThanOrEqual(faces.x + geo.faceHitR, CGRectGetMaxX(lower) + 0.5,
                                  @"The face cluster's expanded targets remain inside the lower safe area (case %lu)", (unsigned long)i);
     }
 }
@@ -439,10 +443,10 @@ static BOOL gDuoHarnessReduceMotionEnabled;
     UIView *pad = [self padForLayout:layout bounds:bounds];
 
     CGRect lower = layout.controls;
-    CGFloat u = MIN(MIN(lower.size.height / 430.0, lower.size.width / 700.0), 1.3);
-    CGPoint stickCenter = CGPointMake(CGRectGetMinX(lower) + 0.25 * lower.size.width,
-                                      CGRectGetMinY(lower) + 0.40 * lower.size.height);
-    CGPoint faceCenter = CGPointMake(CGRectGetMinX(lower) + 0.75 * lower.size.width, stickCenter.y);
+    DmPadGeo geo = [self geoOfPad:pad layout:layout full:NO];
+    CGFloat u = geo.u;
+    CGPoint stickCenter = geo.stick;
+    CGPoint faceCenter = geo.face;
     CGRect stickRing = [self largestShapePathBoundsInLayer:pad.layer];
     XCTAssertEqualWithAccuracy(CGRectGetMidX(stickRing), stickCenter.x, 0.5,
                                @"In 2D, the left stick itself occupies the left column's upper row");
@@ -458,7 +462,7 @@ static BOOL gDuoHarnessReduceMotionEnabled;
                          @"A touch at the visible 2D stick must drive the left-stick mapping");
     [self endTouches:@[stick] onPad:pad cancelled:NO];
 
-    CGPoint hiddenDpad = CGPointMake(stickCenter.x + 0.6 * 77 * u, CGRectGetMinY(lower) + 0.80 * lower.size.height);
+    CGPoint hiddenDpad = CGPointMake(stickCenter.x + 0.6 * 77 * u, geo.dpad.y);
     DuoFakeTouch *dpad = [self touchAt:hiddenDpad time:2];
     [self beginTouches:@[dpad] onPad:pad];
     XCTAssertEqual(duo_harness_input().buttons & DM_BTN_RIGHT, 0,
@@ -472,14 +476,14 @@ static BOOL gDuoHarnessReduceMotionEnabled;
     DmLayout layout = [self portraitControlLayoutForBounds:bounds insets:insets division:CGRectMake(0, 455.5, 669, 40)];
     UIView *pad = [self padForLayout:layout bounds:bounds];
     CGRect lower = layout.controls;
-    CGFloat u = MIN(MIN(lower.size.height / 430.0, lower.size.width / 700.0), 1.3);
-    CGPoint stickCenter = CGPointMake(CGRectGetMinX(lower) + 0.25 * lower.size.width,
-                                      CGRectGetMinY(lower) + 0.40 * lower.size.height);
-    CGPoint dpadCenter = CGPointMake(stickCenter.x, CGRectGetMinY(lower) + 0.80 * lower.size.height);
-    CGPoint faceA = CGPointMake(CGRectGetMinX(lower) + 0.75 * lower.size.width + 50 * u, stickCenter.y);
+    DmPadGeo geo = [self geoOfPad:pad layout:layout full:YES];
+    CGFloat u = geo.u;
+    CGPoint stickCenter = geo.stick;
+    CGPoint dpadCenter = geo.dpad;
+    CGPoint faceA = [self faceKeyIn:&geo control:DM_PAD_C_A];
     CGPoint video = CGPointMake(CGRectGetMidX(layout.game), CGRectGetMidY(layout.game));
     DuoFakeTouch *stick = [self touchAt:stickCenter time:1];
-    DuoFakeTouch *right = [self touchAt:CGPointMake(dpadCenter.x + 0.6 * 77 * u, dpadCenter.y) time:1];
+    DuoFakeTouch *right = [self touchAt:CGPointMake(dpadCenter.x + 0.6 * geo.dpadR, dpadCenter.y) time:1];
     DuoFakeTouch *a = [self touchAt:faceA time:1];
     DuoFakeTouch *game = [self touchAt:video time:1];
 
@@ -514,7 +518,7 @@ static BOOL gDuoHarnessReduceMotionEnabled;
 
     CGPoint stickCenter = CGPointMake(81 * u, bounds.size.height - 82 * u);
     CGPoint dpadCenter = CGPointMake(231 * u, bounds.size.height - 64 * u);
-    CGPoint aCenter = [self faceAIn:layout bounds:bounds];
+    CGPoint aCenter = [self faceAIn:layout inPad:pad];
     CGPoint video = CGPointMake(CGRectGetMidX(layout.game), CGRectGetMidY(layout.game));
     DuoFakeTouch *stick = [self touchAt:stickCenter time:1];
     DuoFakeTouch *right = [self touchAt:CGPointMake(dpadCenter.x + 0.6 * 77 * u, dpadCenter.y) time:1];
@@ -635,8 +639,7 @@ static BOOL gDuoHarnessReduceMotionEnabled;
     CGRect bounds = CGRectMake(0, 0, 390, 844);
     DmLayout layout = [self separatedLayout:bounds];
     UIView *pad = [self padForLayout:layout bounds:bounds];
-    CGFloat u = MIN(MIN(layout.controls.size.height / 430.0, layout.controls.size.width / 700.0), 1.3);
-    XCTAssertEqualWithAccuracy(u, 390.0 / 700.0, 0.001);
+    DmPadGeo geo = [self geoOfPad:pad layout:layout full:YES];
 
     // Probe just inside 44 pt face targets, inward from each visible button center. The
     // expected button remains the nearest target even where neighboring target circles overlap.
@@ -647,10 +650,11 @@ static BOOL gDuoHarnessReduceMotionEnabled;
         NSString *name = faces[i];
         CGPoint center = [self controlCenterNamed:name inPad:pad];
         CGPoint probe = CGPointMake(center.x + faceOffsets[i].x, center.y + faceOffsets[i].y);
-        XCTAssertLessThan([self controlPathBoundsNamed:name inPad:pad].size.width, 44);
-        XCTAssertFalse([self controlNamed:name containsPoint:probe inPad:pad], @"%@ artwork should keep its scaled visual size", name);
         [self assertButton:faceBits[i] at:probe onPad:pad time:10 + i];
     }
+    // The portrait split draws its keys a quarter larger, so the artwork covers the 44 pt probe; the target is still at least 44 pt.
+    XCTAssertGreaterThanOrEqual(geo.faceHitR * 2, 44, @"A face key answers a 44 pt target");
+    XCTAssertEqualWithAccuracy(geo.faceR, DM_PAD_FACE_R * geo.u * 1.25, 0.01, @"The portrait split draws its keys a quarter larger");
 
     // Shoulder buttons, triggers, and stick clicks are frequent 44 pt targets too.
     NSArray<NSString *> *wideButtons = @[@"ZL", @"L", @"ZR", @"R", @"L3", @"R3"];
@@ -661,7 +665,6 @@ static BOOL gDuoHarnessReduceMotionEnabled;
         NSString *name = wideButtons[i];
         CGPoint center = [self controlCenterNamed:name inPad:pad];
         CGPoint probe = CGPointMake(center.x + wideOffsets[i].x, center.y + wideOffsets[i].y);
-        XCTAssertLessThan([self controlPathBoundsNamed:name inPad:pad].size.width, 44);
         XCTAssertFalse([self controlNamed:name containsPoint:probe inPad:pad], @"%@ artwork should keep its scaled visual size", name);
         [self assertButton:wideBits[i] at:probe onPad:pad time:20 + i];
     }
@@ -755,7 +758,8 @@ static BOOL gDuoHarnessReduceMotionEnabled;
     UIView *pad = [self padForLayout:[self separatedLayout:bounds] bounds:bounds];
     CGPoint zl = [self controlCenterNamed:@"ZL" inPad:pad];
     CGPoint ls = [self controlCenterNamed:@"L3" inPad:pad];
-    CGPoint nearerToL3 = CGPointMake(zl.x + (ls.x - zl.x) * 0.6, zl.y);
+    // A point between the two targets, nearer to L3: the nearest normalized target wins.
+    CGPoint nearerToL3 = CGPointMake(zl.x + (ls.x - zl.x) * 0.6, zl.y + (ls.y - zl.y) * 0.6);
     DuoFakeTouch *touch = [self touchAt:nearerToL3 time:1];
 
     [self beginTouches:@[touch] onPad:pad];
@@ -797,7 +801,7 @@ static BOOL gDuoHarnessReduceMotionEnabled;
     DmLayout layout = dm_layout(bounds, UIEdgeInsetsZero, NO, CGRectNull, DM_PICTURE_16_9);
     UIView *pad = [self padForLayout:layout bounds:bounds];
     dm_pad_layout_set(0);
-    DuoFakeTouch *a = [self touchAt:[self faceAIn:layout bounds:bounds] time:1];
+    DuoFakeTouch *a = [self touchAt:[self faceAIn:layout inPad:pad] time:1];
     [self beginTouches:@[a] onPad:pad];
     XCTAssertEqual(duo_harness_input().buttons, DM_BTN_A);
     dm_pad_layout_set(1);
@@ -1192,6 +1196,16 @@ static BOOL gDuoHarnessReduceMotionEnabled;
     return pad;
 }
 
+// The geometry the pad itself uses (its own safe area and the layout it was given), so the test and the pad never disagree.
+- (DmPadGeo)geoOfPad:(UIView *)pad layout:(DmLayout)layout full:(BOOL)full {
+    return dm_pad_geo(pad.bounds, pad.safeAreaInsets, layout, full, (DmPadOptions){1});
+}
+
+// A key of the diamond where the pad draws it (the diamond's own order: A right, B bottom, X top, Y left).
+- (CGPoint)faceKeyIn:(const DmPadGeo *)geo control:(int)c {
+    return dm_pad_face_key(geo, c - DM_PAD_C_A);
+}
+
 - (DmLayout)portraitControlLayoutForBounds:(CGRect)bounds insets:(UIEdgeInsets)insets division:(CGRect)division {
     DmLayout layout = dm_layout(bounds, insets, NO, division, DM_PICTURE_16_9);
     CGRect safe = UIEdgeInsetsInsetRect(bounds, insets);
@@ -1252,15 +1266,32 @@ static BOOL gDuoHarnessReduceMotionEnabled;
     else [pad touchesEnded:set withEvent:nil];
 }
 
-- (CGPoint)faceAIn:(DmLayout)layout bounds:(CGRect)bounds {
-    CGRect safe = CGRectIntersection(layout.controls, UIEdgeInsetsInsetRect(bounds, UIEdgeInsetsZero));
-    CGFloat u = layout.separated ? MIN(MIN(safe.size.height / 430.0, safe.size.width / 700.0), 1.3) : MIN(bounds.size.height / 430.0, 1.3);
-    if (layout.separated && bounds.size.height > bounds.size.width) {
-        CGPoint faceCenter = CGPointMake(CGRectGetMinX(safe) + 0.75 * safe.size.width,
-                                         CGRectGetMinY(safe) + 0.40 * safe.size.height);
-        return CGPointMake(faceCenter.x + 50 * u, faceCenter.y);
-    }
-    return CGPointMake(CGRectGetMaxX(safe) - 81 * u + 50 * u, CGRectGetMaxY(safe) - 82 * u);
+// The A key where the pad itself draws it (the pad's own safe area and layout), so the test touches the real key.
+- (CGPoint)faceAIn:(DmLayout)layout inPad:(UIView *)pad {
+    DmPadGeo g = [self geoOfPad:pad layout:layout full:YES];
+    return [self faceKeyIn:&g control:DM_PAD_C_A];
+}
+
+// The portrait rows and columns the production geometry uses (DmPadGeometry.h), so the test and the pad agree on where the controls are.
+- (CGPoint)portraitLeftColumnTop:(DmLayout)layout {
+    CGFloat x, yTop, yLow;
+    dm_pad_portrait_columns(layout.controls, &x, &yTop);
+    dm_pad_portrait_rows(layout.controls, &yTop, &yLow);
+    return CGPointMake(x, yTop);
+}
+
+- (CGPoint)portraitRightColumnTop:(DmLayout)layout {
+    CGFloat x, yTop, yLow;
+    dm_pad_portrait_columns(layout.controls, &x, &yTop);
+    dm_pad_portrait_rows(layout.controls, &yTop, &yLow);
+    return CGPointMake(x + layout.controls.size.width * 0.5, yTop);
+}
+
+- (CGPoint)portraitLeftColumnBottom:(DmLayout)layout {
+    CGFloat x, yTop, yLow;
+    dm_pad_portrait_columns(layout.controls, &x, &yTop);
+    dm_pad_portrait_rows(layout.controls, &yTop, &yLow);
+    return CGPointMake(x, yLow);
 }
 
 - (CATextLayer *)textLayerNamed:(NSString *)name inLayer:(CALayer *)layer {
@@ -1312,9 +1343,9 @@ static BOOL gDuoHarnessReduceMotionEnabled;
     CGRect bounds = CGRectMake(0, 0, 390, 844);
     DmLayout layout = [self separatedLayout:bounds];
     UIView *pad = [self padForLayout:layout bounds:bounds];
-    CGPoint a = [self faceAIn:layout bounds:bounds];
-    CGFloat u = MIN(MIN(layout.controls.size.height / 430.0, layout.controls.size.width / 700.0), 1.3);
-    CGPoint b = CGPointMake(a.x - 50 * u, a.y + 50 * u);
+    DmPadGeo geo = [self geoOfPad:pad layout:layout full:YES];
+    CGPoint a = [self faceKeyIn:&geo control:DM_PAD_C_A];
+    CGPoint b = [self faceKeyIn:&geo control:DM_PAD_C_B];   // the next key of the diamond, one step away
     CGPoint video = CGPointMake(CGRectGetMidX(layout.game), CGRectGetMidY(layout.game));
     DuoFakeTouch *ta = [self touchAt:a time:1], *tb = [self touchAt:b time:1], *tv = [self touchAt:video time:1];
 
@@ -1393,7 +1424,7 @@ static BOOL gDuoHarnessReduceMotionEnabled;
     DmLayout separated = [self separatedLayout:bounds];
     UIView *pad = [self padForLayout:separated bounds:bounds];
     DuoFakeTouch *video = [self touchAt:CGPointMake(CGRectGetMidX(separated.game), CGRectGetMidY(separated.game)) time:1];
-    DuoFakeTouch *button = [self touchAt:[self faceAIn:separated bounds:bounds] time:1];
+    DuoFakeTouch *button = [self touchAt:[self faceAIn:separated inPad:pad] time:1];
     [self beginTouches:@[video, button] onPad:pad];
 
     dm_gamepad_arrange(pad, separated);
@@ -1410,7 +1441,7 @@ static BOOL gDuoHarnessReduceMotionEnabled;
     DmLayout separated = [self separatedLayout:bounds];
     UIView *pad = [self padForLayout:separated bounds:bounds];
     DuoFakeTouch *video = [self touchAt:CGPointMake(CGRectGetMidX(separated.game), CGRectGetMidY(separated.game)) time:1];
-    DuoFakeTouch *button = [self touchAt:[self faceAIn:separated bounds:bounds] time:1];
+    DuoFakeTouch *button = [self touchAt:[self faceAIn:separated inPad:pad] time:1];
     [self beginTouches:@[video, button] onPad:pad];
     XCTAssertNotEqual(duo_harness_input().buttons & DM_BTN_A, 0);
     XCTAssertEqual(duo_harness_input().touch_count, 1);

@@ -27,6 +27,7 @@ void dm_host_teardown_for_shell(void);             // hle_lifecycle.c
 typedef void (*dm_shell_return_fn)(void);
 static void quit_close(void);
 #import "DmLayout.h"
+#import "DmPadGeometry.h"
 #import "DmGameMenu.h"
 
 void front_ios_boot(void);
@@ -191,21 +192,18 @@ static void launcher_done(void) { [g_root startGame]; }
     if (dev) { [self showHint:[NSString stringWithFormat:@"This device is not supported.\n%s", dev]]; return; }   // the host does not start
     {   // Picture shape "auto" (the launcher's Match screen): the app window's own shape when it is taller or wider than 16:9 (an iPad's 4:3, an unfolded iPhone Duo's 1.43:1,
         // a 19.5:9 phone in landscape at 2.17:1), else 16:9. The window's, not the screen's: on an iPad under Stage Manager or Split View the app does not fill the screen. Resolved
-        // here, before the host writes the state page (main.c dm_fps_state_apply). The console mode picks the calculation: handheld takes the shape of half the
-        // screen, so the picture fills the upper half and the panel the lower half; docked takes the screen's own wide shape. Physical rotation changes neither.
+        // here, before the host writes the state page (main.c dm_fps_state_apply). The orientation picks the calculation: a phone lying down shows the screen's own
+        // wide shape (the wide picture patch renders it in that shape, uncropped), a phone standing up asks for the standing shape (DM_PICTURE_PORTRAIT), so the picture
+        // fills the upper half and the panel the lower half. Physical rotation changes nothing.
         const char *a = getenv("DM_SCREEN_ASPECT");
         if (a && !strcmp(a, "auto")) {
-            // The window's bounds are still the other shape on a cold start (the scene turns after this call). Use the screen's physical size and put its
-            // edges in the order the scene's orientation says, so a phone launched lying down resolves to its wide shape, not to 16:9.
+            // The window's bounds are still the other shape on a cold start (the scene turns after this call). Use the screen's physical size and its own
+            // orientation, so a phone launched lying down resolves to its wide shape, not to 16:9.
             CGSize sz = UIScreen.mainScreen.bounds.size;
-            // The console mode is the choice: handheld is the split's half-screen picture, docked is the screen's own wide shape. Rotation changes nothing.
-            BOOL handheld = dm_opmode() == 0;
-            if (handheld && sz.width > sz.height) sz = CGSizeMake(sz.height, sz.width);   // the picture's band is the short side x half the long side
-            if (!handheld && sz.width < sz.height) sz = CGSizeMake(sz.height, sz.width);
-            CGFloat topInset = handheld ? self.view.safeAreaInsets.top : 0;
-            float r = dm_picture_shape_auto(sz, topInset);
+            BOOL landscape = sz.width > sz.height;
+            float r = dm_picture_shape_auto(sz, 0);   // the screen's own shape: its wide one lying down, the standing shape upright
             char v[16]; if (r > 0) snprintf(v, sizeof v, "%.3f", r); else strcpy(v, "0");
-            setenv("DM_SCREEN_ASPECT", v, 1); LOG("front end: picture shape auto: screen %.0fx%.0f points (%s, top inset %.0f) → DM_SCREEN_ASPECT=%s", sz.width, sz.height, handheld ? "handheld" : "docked", topInset, v);
+            setenv("DM_SCREEN_ASPECT", v, 1); LOG("front end: picture shape auto: screen %.0fx%.0f points (%s) → DM_SCREEN_ASPECT=%s", sz.width, sz.height, landscape ? "landscape" : "standing", v);
         }
     }
     self.fill = dm_picture_fill(getenv("DM_PICTURE_FIT"));
@@ -311,10 +309,10 @@ static UIWindow *g_tv;   // the TV scene's window while one shows the picture (t
         // The frame-rate counter: in the top row's free stretch (right of DmGamepad.m's L3 key, 102 + 17 of its units from the safe edge, level with − / +)
         // in the overlay layout; under the menu gear in a split, where the top row is crowded. u is the gamepad's unit.
         CGRect s = CGRectIntersection(layout.controls, UIEdgeInsetsInsetRect(b, gameInsets));
-        CGFloat u = layout.separated ? MIN(MIN(s.size.height / 430.0, s.size.width / 700.0), 1.3) : MIN(b.size.height / 430.0, 1.3);
+        CGFloat u = dm_pad_base_unit(b, gameInsets, layout);   // the gamepad's own unit (DmPadGeometry.h), so the counter lines up with the gear
         if (layout.separated) {
             CGFloat gear = 15 * u;   // the menu gear's radius (DmGamepad.m DM_PAD_SWAP_R), at the top centre
-            self.fps.frame = CGRectMake(floor(CGRectGetMidX(s) - 32), floor(CGRectGetMinY(s) + gear * 2 + 4), 64, 22);
+            self.fps.frame = CGRectMake(floor(CGRectGetMidX(s) - 32), floor(CGRectGetMinY(s) + gear * 2 + 12), 64, 22);
         } else {
             self.fps.frame = CGRectMake(floor(CGRectGetMinX(s) + 130 * u), floor(CGRectGetMinY(s) + 22 * u - 11), 64, 22);
         }

@@ -283,15 +283,21 @@ int main(void) {
         if (!NEAR(g.u, 1)) FAIL("Pro Max: u %.3f, want 1", g.u);
         if (!NEAR(g.face.x, 932 - 29.5 - 81) || !NEAR(g.face.y, 430 - 21 - 82)) FAIL("Pro Max: diamond at %.1f %.1f", g.face.x, g.face.y);
         if (!NEAR(g.stick.x, 29.5 + 81) || !NEAR(g.stick.y, 430 - 21 - 82)) FAIL("Pro Max: stick at %.1f %.1f", g.stick.x, g.stick.y);
-        if (!NEAR(g.dpad.x, 29.5 + 250) || !NEAR(g.dpad.y, 430 - 21 - 82)) FAIL("Pro Max: D-pad at %.1f %.1f", g.dpad.x, g.dpad.y);
+        if (!NEAR(g.dpad.x, 29.5 + 231) || !NEAR(g.dpad.y, 430 - 21 - 64)) FAIL("Pro Max: D-pad at %.1f %.1f", g.dpad.x, g.dpad.y);
         if (!NEAR(g.drop[DM_PAD_ZL].x, 59 + 44) || !NEAR(g.drop[DM_PAD_ZL].y, 40) || !NEAR(g.drop[DM_PAD_R].x, 932 - 59 - 44) || !NEAR(g.drop[DM_PAD_R].y, 108)) FAIL("Pro Max: shoulders moved");
         if (!NEAR(g.click[1].x, 932 - 59 - 102) || !NEAR(g.pill[DM_PAD_PLUS].origin.x, 466 + 52 - 25) || !NEAR(g.swap.x, 466) || !NEAR(g.swap.y, 22)) FAIL("Pro Max: top row moved");
-        if (!NEAR(g.stickR, 77) || !NEAR(g.faceR, 27) || !NEAR(g.dpadR, 77)) FAIL("Pro Max: sizes changed");
-        // Portrait split (the Duo harness's numbers): the two columns at 25 % and 75 % of the controls, 40 % down.
+        if (!NEAR(g.stickR, 77) || !NEAR(g.faceR, 27) || !NEAR(g.dpadR, 48)) FAIL("Pro Max: sizes changed");
+        // Portrait split (the Duo harness's numbers): the two columns at 25 % and 75 % of the band, the two rows at 50 % and 80 % of it.
         DmLayout l = dm_layout(screens[9].bounds, screens[9].insets, NO, CGRectNull, DM_PICTURE_16_9);
         DmPadGeo p = dm_pad_geo(screens[9].bounds, screens[9].insets, l, NO, (DmPadOptions){1});
-        CGRect s = p.safe;
-        if (!p.portrait || !NEAR(p.face.x, CGRectGetMinX(s) + 0.75 * s.size.width) || !NEAR(p.stick.x, CGRectGetMinX(s) + 0.25 * s.size.width)) FAIL("portrait: thumbs moved");
+        CGRect band = p.safe;   // the anchors are shares of the band's safe part
+        if (!p.portrait || !NEAR(p.face.x, CGRectGetMinX(band) + 0.75 * band.size.width) || !NEAR(p.stick.x, CGRectGetMinX(band) + 0.25 * band.size.width)
+            || !NEAR(p.stick.y, CGRectGetMinY(band) + 0.50 * band.size.height) || !NEAR(p.face.y, CGRectGetMinY(band) + 0.50 * band.size.height)
+            || !NEAR(p.dpad.x, CGRectGetMinX(band) + 0.25 * band.size.width) || !NEAR(p.dpad.y, CGRectGetMinY(band) + 0.80 * band.size.height)
+            || !NEAR(p.rstick.x, CGRectGetMinX(band) + 0.75 * band.size.width) || !NEAR(p.rstick.y, CGRectGetMinY(band) + 0.80 * band.size.height))
+            FAIL("portrait: the two columns at 25 %% and 75 %%, the two rows at 50 %% and 80 %%");
+        // The D-pad's reach in a split is the diamond's key outer edge (the key's distance from the centre plus its radius).
+        if (!NEAR(p.dpadR, 50 * p.u + 27 * p.u * 1.25)) FAIL("portrait: the D-pad reaches %.1f, the diamond's edge is %.1f", p.dpadR, 50 * p.u + 27 * p.u * 1.25);
     }
 
     // Every size and stick place on every screen, 2D and 3D: inside, and no overlap.
