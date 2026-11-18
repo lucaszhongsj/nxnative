@@ -56,6 +56,10 @@ void duo_calc(char *pane, const float *st, const void *fn_null_draw) {
         if (!container(p, fn_null_draw, st, u)) return;   // a widget above: the widget's top is further up
         p = par;
     }
+    // A widget as wide as the layout is a panel, not one of the edge widgets this rule places: the keyboard's backing
+    // (1240 of 1920 wide, across the dialog's bottom) is part of the dialog, and moving it alone takes the bottom row
+    // away from the keys above it, which sit in the layout's middle and stay. It stays with the rest of the dialog
+    if (gw >= st[4] * u * 0.6f) return;
     float *gy = g + 7;
     // In 720 units (x 1.5 in the 1080 space): 230 for a widget towards a corner (|x| 400 or more: the top right's road and album buttons at 420 and 389, the bottom left's
     // clock at -416, the bottom right's minimap at -354, the title's version and settings lines), 270 for one nearer the middle (the bottom's button guides at -486 and
