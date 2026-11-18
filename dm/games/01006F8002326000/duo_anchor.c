@@ -25,16 +25,37 @@ static inline int container(const char *p, const void *fn_null_draw, const float
     return !draws(p, fn_null_draw) && (w < 64 * u || h < 64 * u);
 }
 
+// A key of the game's text-entry keyboard (the panes named "L_BtnNml_01" and on), in the name a pane holds inline
+static inline int key(const char *p) { return *(const unsigned long long *)(p + 0xb0) == 0x6C6D4E6E74425F4CULL; }
+
 void duo_calc(char *pane, const float *st, const void *fn_null_draw) {
     if (st[0] == 0) return;
     const char *pp = parent(pane);
-    if (!pp) return;   // a layout's root
-    // The layout's space: most of the game's layouts are 1920x1080 (793 of 959), the rest 1280x720 (the root pane's size); the parameters are in 720 units
-    const char *root = pp;
-    for (int i = 0; i < 48 && parent(root); i++) root = parent(root);
-    float u = f(root, 0x54) >= 1000 ? 1.5f : 1.0f, d = st[0] * u;
     float *g = (float *)(pane + 0x70);
     float gw = fab(f(pane, 0x50) * g[0]), gh = fab(f(pane, 0x54) * g[5]);
+    // The layout's space: most of the game's layouts are 1920x1080 (793 of 959), the rest 1280x720 (the root pane's size); the parameters are in 720 units
+    const char *root = pp;
+    for (int i = 0; i < 48 && root && parent(root); i++) root = parent(root);
+    float u = f(root ? root : pane, 0x54) >= 1000 ? 1.5f : 1.0f, d = st[0] * u;
+    // The keyboard's keys mark the keyboard as up (state + 0x30, the present counter at that moment), and while it is up
+    // every layout's own panes (the direct children of a root) move down by the picture's extra half-height, everything in
+    // them following: the name card, the keys and the bottom bar (globe / ABC / Space / Confirm) stay one piece at the
+    // picture's bottom, with the scene above them. The edge rule below must then leave the keyboard's bar where the layout
+    // has it. The row of button hints is a layout of its own, and keeps the place that layout gives it, over the keys
+    const unsigned present = *(const unsigned *)((const char *)st + 0x28);
+    if (key(pane)) *(volatile unsigned *)((char *)st + 0x30) = present;
+    const unsigned stamp = *(const unsigned *)((const char *)st + 0x30);
+    const int keyboard = stamp && present - stamp <= 2;
+    if (!pp) return;   // a layout root: the panes in it are placed one by one below
+    if (!parent(pp) && keyboard) {
+        g[7] -= d;
+        return;
+    }
+    // A pane the root's own shift carried: the layout now ends below the display's bottom edge
+    for (const char *a = pane; a; a = parent(a)) {
+        const float *ag = (const float *)(a + 0x70);
+        if (ag[7] - fab(f(a, 0x54) * ag[5]) * 0.5f < -(st[5] * u * 0.5f) - 100 * u) return;
+    }
     int leaf = *(char *const *)(pane + 0x28) == pane + 0x20;   // the child list empty: a stretch would carry over to children (a menu page's whole content)
     if (gw >= st[4] * u && gh >= st[5] * u && gh <= st[6] * u && fab(g[3]) < 40 * u && fab(g[7]) < 40 * u) {
         if (leaf && draws(pane, fn_null_draw)) { g[4] *= st[1]; g[5] *= st[1]; g[6] *= st[1]; g[7] *= st[1]; }
@@ -66,5 +87,8 @@ void duo_calc(char *pane, const float *st, const void *fn_null_draw) {
     // -540, the title's press-A line at -414, the timer at 450) so the title logo's upper line (+352) stays with the rest of the logo; not the room guide at the left
     // (256). Its own distances, not DM_SCREEN_HUD's (Breath of the Wild's 280 left the album button behind)
     float edge = (fab(g[3]) >= 400 * u ? 230 : 270) * u;
-    if (fab(*gy) >= edge) *gy += *gy > 0 ? d : -d;
+    // While the keyboard is up the whole UI docks down by the picture's extra half-height, so a widget near the bottom
+    // must stay where the layout has it: moving it as well would take it below the picture
+    int docked = *gy < 0 && keyboard;
+    if (fab(*gy) >= edge && !docked) *gy += *gy > 0 ? d : -d;
 }

@@ -985,11 +985,17 @@ _dm_view_footer_y:
     fcmp s1, s0
     b.ge Lfooter_y_done
     bl Lrecent_keyboard
-    cbnz w8, Lfooter_y_done
     fdiv s0, s0, s1
     fmov s1, #1.0
     fsub s0, s0, s1
     ldr s1, Lfooter_half_height
+    tbz w8, #0, Lfooter_y_band
+    // The keyboard docks to the picture's bottom, and this row is part of the keyboard: it goes down with it by the
+    // extra half-height, where the keys and the bar above it already are
+    fmadd s3, s0, s1, s3
+    b Lfooter_y_done
+Lfooter_y_band:
+    // Otherwise the row stays at the bottom of the 16:9 band up by the extra half-height
     fmsub s3, s0, s1, s3
 Lfooter_y_done:
     msr nzcv, x13
