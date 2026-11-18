@@ -118,7 +118,10 @@ class ChainedStubSavesX30(unittest.TestCase):
         if word & 0xfc000000 != 0x14000000: return None
         delta = word & 0x3ffffff
         if delta & 0x2000000: delta -= 0x4000000
-        return (off + 4 * delta - self.BASE) // 4
+        at = (off + 4 * delta - self.BASE) // 4
+        # A branch may also go back into the game's own text (the capture manager's skipped destroy), which is no stub
+        # this test can bound
+        return at if 0 <= at < len(self.words) else None
 
     @staticmethod
     def _end(words, at):

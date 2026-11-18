@@ -6,8 +6,10 @@ import struct
 from pathlib import Path
 from nso_asm import ADRP, B, BL, BCOND, CBZ, LDP_POST, STP_PRE, STRX, TBZ
 
-# Screen shape (DM_SCREEN_ASPECT, loader.c): a screen taller than 16:9 keeps the picture's width (1920) and takes the height of the screen's ratio (state +0x48, 1344 at 1.43), the
-# layout space 1280 x 2/3 of it (+0x4c, 896; +0x50 the same as a float). The game's platform config (vtable main+0x47fa0e0, no RTTI) hands its sizes out three ways:
+# Screen shape (DM_SCREEN_ASPECT, loader.c): a screen taller than 16:9 takes the height of its ratio (state +0x48, 1344 at 1.43) and keeps the picture's width (1920), or narrows it
+# when the height would pass the game's layout tables (1880 x 2040 at 0.92; state +0x64 is the output's width); the layout space is 1280 wide by 2/3 of the height (+0x4c, 896;
+# +0x50 the same as a float). Every size below is the game's own 1920-wide value scaled by the output's width and height (each mode of the table: 960 → 940, 1280 → 1253).
+# The game's platform config (vtable main+0x47fa0e0, no RTTI) hands its sizes out three ways:
 #   main+0x5c9b44 (vtable main+0x47f9c08) fills the graphics create arg: +0x60 the display size (the table main+0x4076728 of 960x540 .. 3840x2160 by the mode at [main+0x512e2e0]
 #     when [main+0x5131900] is set, else 1920x1080), +0x20 1280x720
 #   main+0x5cdce0 (slot 7) a static display size main+0x4b87524 (the same choice), main+0x5cdd88 (slot 8) a static 1280.0 x 720.0 (main+0x4b87538)
@@ -360,9 +362,12 @@ _size_sites = [
         ('tbz', 17, 0, 'orig'),
         0xb9404a11,   # ldr w17, [x16, #0x48]   the output's height (0 = 16:9)
         ('cbz', 17, 'orig'),
-        0x1b117d28,   # mul w8, w9, w17         height = width x the output's height / 1920 (each mode of the table: 960 → 672, 1280 → 896, 1920 → 1344)
+        0xb9406610,   # ldr w16, [x16, #0x64]   the output's width
+        0x1b117d28,   # mul w8, w9, w17         height = width x the output's height / 1920 (each mode of the table at 1880x2040: 960 → 1020, 1280 → 1360, 1920 → 2040)
+        0x1b107d29,   # mul w9, w9, w16         width = width x the output's width / 1920 (960 → 940, 1280 → 1253, 1920 → 1880)
         0x5280f011,   # mov w17, #1920
         0x1ad10908,   # udiv w8, w8, w17
+        0x1ad10929,   # udiv w9, w9, w17
         'orig',
         0x290c2029,   # orig: stp w9, w8, [x1, #0x60]
     ], 'graphics create arg +0x60: the display size in the screen\'s shape (bit 0)'),
@@ -380,9 +385,12 @@ _size_sites = [
         ('tbz', 17, 2, 'orig'),
         0xb9404a11,   # ldr w17, [x16, #0x48]
         ('cbz', 17, 'orig'),
-        0x1b117d28,   # mul w8, w9, w17
+        0xb9406610,   # ldr w16, [x16, #0x64]
+        0x1b117d28,   # mul w8, w9, w17         height = width x the output's height / 1920
+        0x1b107d29,   # mul w9, w9, w16         width = width x the output's width / 1920
         0x5280f011,   # mov w17, #1920
         0x1ad10908,   # udiv w8, w8, w17
+        0x1ad10929,   # udiv w9, w9, w17
         'orig',
         0x29002149,   # orig: stp w9, w8, [x10]
     ], 'platform config slot 7: the static display size in the screen\'s shape (bit 2)'),
@@ -402,6 +410,8 @@ _size_sites = [
         0xb9404a11,   # ldr w17, [x16, #0x48]
         ('cbz', 17, 'orig'),
         0xb3607e28,   # bfi x8, x17, #32, #32   1920 x the output's height
+        0xb9406610,   # ldr w16, [x16, #0x64]   the output's width (the game's own width here is 1920, so the scaled one is the output's)
+        0xb3407e08,   # bfi x8, x16, #0, #32    the output's width x the output's height
         'orig',
         0xf8014028,   # orig: stur x8, [x1, #0x14]
     ], 'platform config slot 3: the arg\'s 1920x1080 in the screen\'s shape (bit 4)'),
@@ -462,13 +472,25 @@ def screen_shape(ctx):
         start = here()
         _emit_stub(here, emit, [('adrp', 16, STATE)] + list(ws) + [('b', at + 4)])
         put(at, [B(at, start)], why)
+    # The taller picture costs memory the game's fixed heap does not have: the display's capture buffers and layers grow with its height (1880 x 2040 against
+    # 1920 x 1080), and an allocation in the render path (main+0x37c6a10) fails. The size table at main+0x404d658 (cSys) gives 168.9 MB; +32 MB (200.9) holds the
+    # picture's buffers
+    site(0x404d658, '00f08d0a')
+    put(0x404d658, [0x0c8df000], 'the fixed heap: 200.9 MB, room for the taller picture\'s capture buffers')
+    # The capture manager (main+0x3848e10) keeps the object its lookup (main+0x3867170) returns at [x22+0xa0]; when one of the three layer-table comparisons
+    # matches, it destroys the object and clears the field (0x3849768..0x3849774), and the frame reads the field twice afterwards (0x38497c0, 0x38497dc). At 0.92
+    # the comparison matches once, on the frame the display's capture is rebuilt, and the second read takes the null (0x38497e0, fault address 0x85). The branch to
+    # 0x38497a8 is the path a frame without a match takes, which keeps the object the reads expect: the destroy is not taken
+    site(0x3849768, 'e00314aa')
+    put(0x3849768, [B(0x3849768, 0x38497a8)], 'capture manager: keep the object the destroy path clears before reading it (taller layouts)')
     # Every frame main+0x1527ebc picks the resolution table's mode (3, 1920x1080, in the console mode; 1, 1280x720, handheld) into [main+0x512e2e0] / +0x2e4, divides the
     # entry by the framebuffer's size ([main+0x59ea928] +0x3a8 / +0x3ac) into the 3D views' render scale (+0x4c8 / +0x4cc), and sets the display buffer's crop
     # ([main+0x59e77d8] +0x50, +0x4c..+0x58) to the entry: the presented picture was cropped back to the top 1920x1080 of the 1920x1344 window. The two loads of the
-    # entry (main+0x1527f00, main+0x1527f2c) take the height of the screen's shape, the width x the output's height / 1920 in integers (1920 → 1344 exactly; a float
-    # product truncated to 1343). Bit 7 of the sites. s4.. and x16 / x17 are free there
-    for at, orig, cvt, back in ((0x1527f00, 0x2d400500, 0x1e380010, 0x1e220201),    # ldp s0, s1, [x8]; fcvtzs w16, s0; scvtf s1, w16
-                                (0x1527f2c, 0x2d400d02, 0x1e380050, 0x1e220203)):   # ldp s2, s3, [x8]; fcvtzs w16, s2; scvtf s3, w16
+    # entry (main+0x1527f00, main+0x1527f2c) take the screen's shape: the entry's width and height each scaled from the game's 1920-wide value by the output's
+    # width and height in integers (1920 x 2040 / 1920 exactly; a float product truncated to one less). Bit 7 of the sites. s4.., w8 and x16 / x17 are free there
+    # (w9 is not: site 2's function keeps x9 in it, w10 holds 1 for main+0x1527f50, and x11 is the table's base for the add after each site)
+    for at, orig, cvt, w, h in ((0x1527f00, 0x2d400500, 0x1e380010, 0x1e220100, 0x1e220221),   # ldp s0, s1, [x8]; fcvtzs w16, s0; scvtf s0, w8; scvtf s1, w17
+                                (0x1527f2c, 0x2d400d02, 0x1e380050, 0x1e220102, 0x1e220223)):  # ldp s2, s3, [x8]; fcvtzs w16, s2; scvtf s2, w8; scvtf s3, w17
         site(at, struct.pack('<I', orig).hex())
         start = here()
         _emit_stub(here, emit, [
@@ -478,19 +500,25 @@ def screen_shape(ctx):
             ('tbz', 17, 7, 'back'),
             0xb9404a11,             # ldr w17, [x16, #0x48]   the output's height (0 = 16:9)
             ('cbz', 17, 'back'),
-            cvt,                    # fcvtzs w16, <width>
-            0x1b117e10,             # mul w16, w16, w17
-            0x5280f011,             # mov w17, #1920
-            0x1ad10a10,             # udiv w16, w16, w17
-            back,                   # scvtf <height>, w16
+            0xb9406608,             # ldr w8, [x16, #0x64]    the output's width (both loads come before cvt: w16 is its destination)
+            cvt,                    # fcvtzs w16, <width>     the entry's width, the game's own (1920 / 1280 / 960)
+            0x1b117e11,             # mul w17, w16, w17       height = width x the output's height
+            0x1b087e08,             # mul w8, w16, w8         width = width x the output's width
+            0x5280f010,             # mov w16, #1920
+            0x1ad00a31,             # udiv w17, w17, w16
+            0x1ad00908,             # udiv w8, w8, w16
+            w,                      # scvtf <width>, w8
+            h,                      # scvtf <height>, w17
             'back',
             ('b', at + 4)])
-        put(at, [B(at, start)], 'resolution table entry of the frame (crop, render scale): the height of the screen\'s shape (bit 7)')
+        put(at, [B(at, start)], 'resolution table entry of the frame (crop, render scale): the screen\'s shape (bit 7)')
     # The layouts' DrawInfo ([+0x60] of the renderer at main+0x31cee50) takes the framebuffer's size twice, 1920.0 x 1080.0 at +0x108 (main+0x31cee58..60) and 1920 x 1080
-    # at +0x138 (main+0x31cee98..9c), which nn::ui2d's scissors and captures map the screen with: both take the output's height. Each stub runs the site's original movk
-    # first. v16 is dead there (a call follows with x0 only), x16 / x17 free. Bit 8 of the sites
-    for at, orig, ws in ((0x31cee60, 0xf2e890f8, (0x1e230230, 0x1e260211, 0xb3607e38)),   # movk x24, #0x4487, lsl #48; ucvtf s16, w17; fmov w17, s16; bfi x24, x17, #32, #32
-                            (0x31cee9c, 0xf2c08708, (0xb3607e28,))):                        # movk x8, #0x438, lsl #32; bfi x8, x17, #32, #32
+    # at +0x138 (main+0x31cee98..9c), which nn::ui2d's scissors and captures map the screen with: both take the output's width and height. Each stub runs the site's original
+    # movk first. v16 is dead there (a call follows with x0 only), x16 / x17 free. Bit 8 of the sites
+    for at, orig, ws in ((0x31cee60, 0xf2e890f8, (0x1e230230, 0x1e260211, 0xb3607e38,   # movk x24, #0x4487, lsl #48; ucvtf s16, w17; fmov w17, s16; bfi x24, x17, #32, #32
+                                                0xb9406610, 0x1e230210, 0x1e260211, 0xb3407e38)),   # ldr w16, [x16, #0x64]; ucvtf s16, w16; fmov w17, s16; bfi x24, x17, #0, #32
+                            (0x31cee9c, 0xf2c08708, (0xb3607e28,                                   # movk x8, #0x438, lsl #32; bfi x8, x17, #32, #32
+                                                     0xb9406610, 0xb3407e08))):                    # ldr w16, [x16, #0x64]; bfi x8, x16, #0, #32
         site(at, struct.pack('<I', orig).hex())
         start = here()
         _emit_stub(here, emit, [
