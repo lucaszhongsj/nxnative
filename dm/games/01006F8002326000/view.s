@@ -81,13 +81,55 @@ Lcache_return:
 // lens and 1..10000 depth transform, keeping square/local and off-axis captures
 // untouched. Narrow screens preserve X; wide screens preserve Y. Both values
 // are derived from the canonical lens, including restoration to target zero.
+// While the text keyboard is up the whole interface docks to the picture's
+// bottom; the language list the globe key opens takes the keyboard's place and
+// keeps the same dock, so choosing a language leaves the interface where it was.
 .globl _dm_view_ui_override
 _dm_view_ui_override:
     add x0, x8, #8
     stp x8, x30, [sp, #-16]!
+    stp q0, q1, [sp, #-32]!
+    stp x9, x10, [sp, #-16]!
     bl Lscreen_projection
+    adrp x15, _dm_view_state@PAGE
+    add x15, x15, _dm_view_state@PAGEOFF
+    bl Lrecent_keyboard
+    mov w9, w8                   ; the keyboard docks the projection
+    bl Lmenu_open
+    orr w9, w9, w8               ; the language list keeps the dock while it holds the keyboard's place
+    cbz w9, Lui_dock_hold
+    ldr w16, [x15, #0xa8]        ; a fresh signal: the dock's own stamp follows the present counter
+    str w16, [x15, #0x1f0]
+Lui_dock_hold:
+    ; The switch from the keyboard to the list leaves a stretch in which neither has been calculated (the keys
+    ; are gone and the list's rows are not drawn yet); the dock holds for a moment after the last signal.
+    ldr w16, [x15, #0xa8]
+    ldr w17, [x15, #0x1f0]
+    mov w10, wzr
+    cbz w17, Lui_dock_done
+    sub w16, w16, w17
+    cmp w16, #36
+    b.hi Lui_dock_done
+    mov w10, #1
+Lui_dock_done:
+    str w10, [x15, #0x1c4]       ; what the touch mapping reads
+    ldr w17, [x15, #0x1c8]       ; whether the projection carries the dock now
+    cmp w17, w10
+    b.eq Lui_override_done
+    str w10, [x15, #0x1c8]
+    ldr s0, [x0, #0x1c]
+    ldr s1, Lui_shift
+    cbnz w10, Lui_override_apply
+    fneg s1, s1
+Lui_override_apply:
+    fadd s0, s0, s1
+    str s0, [x0, #0x1c]
+Lui_override_done:
+    ldp x9, x10, [sp], #16
+    ldp q0, q1, [sp], #32
     ldp x8, x30, [sp], #16
     ret
+Lui_shift: .float -690.0
 // x0 = screen projection, w8 = accepted. No retained matrix is a scale source.
 Lscreen_projection:
     mov w8, wzr
@@ -155,6 +197,29 @@ Lui_x: .float 1.5454561710357666
 Lui_depth_z: .float -1.0002000331878662
 Lui_depth_w: .float -2.000200033187866
 
+// A pane's clip rectangle is converted to pixels from the layout, not from the drawing's projection, so the
+// dock the projection gives the drawing does not reach it: the language list's viewport stays where the
+// undocked list was and cuts the rows the dock moved down. While the interface is docked the rectangle
+// moves with it. x3 = the caller's rectangle (x0, y0, x1, y1), centred layout units (720 tall, y up), a
+// stack copy; the dock is the projection's 690 matrix units, 474.375 pixels, 323 of these.
+.globl _dm_view_clip
+_dm_view_clip:
+    adrp x15, _dm_view_state@PAGE
+    add x15, x15, _dm_view_state@PAGEOFF
+    ldr w16, [x15, #0x1c4]
+    cbz w16, Lclip_done
+    ldr s2, [x3, #4]
+    ldr s3, [x3, #0xc]
+    ldr s4, Lclip_shift
+    fadd s2, s2, s4
+    fadd s3, s3, s4
+    str s2, [x3, #4]
+    str s3, [x3, #0xc]
+Lclip_done:
+    sub sp, sp, #0x1c0
+    b _dm_return_0031d44b4
+Lclip_shift: .float -323.0
+
 // Scissor conversion follows the current perspective matrix. Capture-local
 // orthographic projections retain their native coordinates. Preserve NZCV.
 .globl _dm_view_scissor
@@ -162,6 +227,7 @@ _dm_view_scissor:
     fdiv s3, s0, s2
     fdiv s2, s1, s4
     stp x15, x16, [sp, #-16]!
+    stp x14, x17, [sp, #-16]!
     adrp x15, _dm_view_state@PAGE
     add x15, x15, _dm_view_state@PAGEOFF
     ldr w15, [x15, #0x58]
@@ -190,6 +256,7 @@ _dm_view_scissor:
     ldr q7, [sp, #32]
     ldp q5, q6, [sp], #48
 Lscissor_done:
+    ldp x14, x17, [sp], #16
     ldp x15, x16, [sp], #16
     b _dm_return_03a308f0
 
@@ -479,8 +546,9 @@ Ltouch_stamp:
 Ltouch_stamp_done:
     ret
 
-// Only the keyboard docks the whole UI projection. Drawing tools retain
-// their original centred composition; KeyGuide has its own lower-edge anchor.
+// The keyboard docks the whole UI projection, and so does the language list
+// that replaces it. Drawing tools retain their original centred composition;
+// KeyGuide has its own lower-edge anchor.
 // x15 = state, w8 = recently rendered inline keyboard. +0xa8 is the host's
 // present counter (dm_guest_frame, written each present), +0xb0 the keyboard
 // frame's stamp: the keyboard docked when the two are at most two apart.
@@ -496,6 +564,21 @@ Lrecent_keyboard:
 Lrecent_done:
     ret
 
+// The language list the globe key opens: its panes ("N_BgMask", "N_R") are calculated on every present, and the
+// keyboard's own stamp has gone stale by then. w8 = 1 while it is up. x15 = the state page.
+Lmenu_open:
+    mov w8, wzr
+    add x17, x15, #0x274
+    ldr w17, [x17]
+    cbz w17, Lmenu_open_done
+    ldr w16, [x15, #0xa8]
+    sub w16, w16, w17
+    cmp w16, #4
+    b.hi Lmenu_open_done
+    mov w8, #1
+Lmenu_open_done:
+    ret
+
 // DrawInfo owns a fresh copy of the source projection at this boundary. Dock
 // native touch panels to the bottom without moving the 3D camera or accumulating
 // translation in a retained source matrix. Local captures keep their projection.
@@ -509,8 +592,18 @@ _dm_view_ui_projection:
 .globl _dm_view_panel_projection
 _dm_view_panel_projection:
     stp x15, x30, [sp, #-16]!
+    adrp x15, _dm_view_state@PAGE
+    add x15, x15, _dm_view_state@PAGEOFF
+    ldr w16, [x15, #0x1e8]
+    add w16, w16, #1
+    str w16, [x15, #0x1e8]
     bl Lscreen_projection
     cbz w8, Lpanel_done
+    adrp x15, _dm_view_state@PAGE
+    add x15, x15, _dm_view_state@PAGEOFF
+    ldr w16, [x15, #0x1ec]
+    add w16, w16, #1
+    str w16, [x15, #0x1ec]
     ldr s1, Lbase
     ldr w16, [x15, #0x58]
     cbz w16, Lpanel_ratio
@@ -577,6 +670,7 @@ Lscissor_origin_done:
     ldp x16, x17, [sp, #16]
     ldp x14, x15, [sp], #32
     b _dm_return_03a30988
+
 
 // Background and iris coverage constants are private to this draw; the pane,
 // layout and resource are untouched. Only full-screen centred backgrounds
@@ -949,6 +1043,17 @@ _dm_view_footer_recalc:
     add x15, x15, _dm_view_state@PAGEOFF
     ldr w17, [x15, #0x58]
     cbz w17, Lfooter_recalc_done
+    add x17, x15, #0x274         ; the language list: every pane of every layout is calculated, so the moved roots carry them
+    ldr w17, [x17]
+    cbz w17, Lfooter_recalc_match
+    ldr w16, [x15, #0xa8]
+    sub w16, w16, w17
+    cmp w16, #4
+    b.hi Lfooter_recalc_match
+    mov w16, #1
+    strb w16, [x2, #0x1d]
+    b Lfooter_recalc_done
+Lfooter_recalc_match:
     bl _dm_view_footer_match
     cbz w8, Lfooter_recalc_done
     orr w3, w3, #1
@@ -966,14 +1071,28 @@ _dm_view_footer_y:
     stp x14, x15, [sp, #16]
     stp x16, x17, [sp, #32]
     str x13, [sp, #48]
+    stp q2, q3, [sp, #-32]!
     stp q0, q1, [sp, #-32]!
+    sub sp, sp, #16
+    str s3, [sp]
     mrs x13, nzcv
     adrp x15, _dm_view_state@PAGE
     add x15, x15, _dm_view_state@PAGEOFF
     ldr w17, [x15, #0x58]
     cbz w17, Lfooter_y_done
+    ldr w16, [x15, #0x100]
+    add w16, w16, #1
+    str w16, [x15, #0x100]
     bl _dm_view_footer_match
     cbz w8, Lfooter_y_done
+    adrp x15, _dm_view_state@PAGE
+    add x15, x15, _dm_view_state@PAGEOFF
+    ldr w16, [x15, #0x104]
+    add w16, w16, #1
+    str w16, [x15, #0x104]
+    ldr s3, Lfooter_probe
+    str s3, [sp]
+    b Lfooter_y_done
     adrp x15, _dm_view_state@PAGE
     add x15, x15, _dm_view_state@PAGEOFF
     ldr w16, [x15, #0x58]
@@ -993,13 +1112,25 @@ _dm_view_footer_y:
     // The keyboard docks to the picture's bottom, and this row is part of the keyboard: it goes down with it by the
     // extra half-height, where the keys and the bar above it already are
     fmadd s3, s0, s1, s3
+    // 键盘停到画面底部时，整块随画面偏移下移同样的距离
+    adrp x15, _dm_view_state@PAGE
+    add x15, x15, _dm_view_state@PAGEOFF
+    ldr s2, [x15, #0x80]
+    fmov s4, #1.5
+    fmul s2, s2, s4
+    fadd s3, s3, s2
+    str s3, [sp]
     b Lfooter_y_done
 Lfooter_y_band:
     // Otherwise the row stays at the bottom of the 16:9 band up by the extra half-height
     fmsub s3, s0, s1, s3
+    str s3, [sp]
 Lfooter_y_done:
     msr nzcv, x13
+    ldr s3, [sp]
+    add sp, sp, #16
     ldp q0, q1, [sp], #32
+    ldp q2, q3, [sp], #32
     ldr x13, [sp, #48]
     ldp x16, x17, [sp, #32]
     ldp x14, x15, [sp, #16]
@@ -1013,6 +1144,9 @@ Lfooter_size: .float 30.0, 30.0
 Lfooter_root_size: .float 1920.0, 1080.0
 Lfooter_align_size: .float 1810.0, 100.0
 Lfooter_half_height: .float 540.0
+Lfooter_probe: .float 10000.0
+
+.p2align 3
 
 
 // The keyboard owns an embedded dialog, outside ordinary game Page callbacks.
