@@ -33,8 +33,16 @@ static float ui_x(float x) {
 static float ui_y(float y) {
     if (!dm_fps_state) return y;
     float r; memcpy(&r, dm_fps_state + 0x58, 4);
-    if (!(r > 0.0f) || !(r < 16.0f / 9.0f)) return y;
-    float v = 0.5f + (y - 0.5f) * ((16.0f / 9.0f) / r);
+    float v = y;
+    if (r > 0.0f && r < 16.0f / 9.0f) {
+        v = 0.5f + (y - 0.5f) * ((16.0f / 9.0f) / r);
+        // A game that docks its interface to the picture's bottom while its text keyboard is up (the ACNH
+        // patch moves the interface's projection and records it in its frame step page) draws a control
+        // below where the mapped band has it: the touch that lands on it maps to a place higher in the
+        // interface, by the dock over the band's height (474 of the 1057-pixel band at 0.92)
+        uint32_t docked; memcpy(&docked, dm_fps_state + 0x1c4, 4);
+        if (docked == 1) v -= 0.4484f;
+    }
     return v < 0 ? 0 : v > 1 ? 1 : v;
 }
 static void touch_apply(const dm_touch *t, int n) {
