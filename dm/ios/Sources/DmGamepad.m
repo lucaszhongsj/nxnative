@@ -136,6 +136,7 @@ int dm_opmode(void);   // hle_oe.c: 0 = handheld
 @interface DmGamepad : UIView
 - (void)arrange:(DmLayout)layout;
 - (BOOL)menuTakes:(CGPoint)p;
+- (BOOL)controllerConnected;
 @end
 // The menu button: a UIButton whose menu is the in-game menu (UIKit draws it and takes the touches while it is open). Its hit circle is larger than the drawn one, and a key nearer
 // to the touch wins (− / + sit beside it), so it asks the pad
@@ -237,6 +238,13 @@ static BOOL fullOnly(int b) { return b == B_LS || b == B_RS || b >= B_LEFT; }   
     for (int b = 0; b < B_N; b++) _key[b].hidden = _tap || (fullOnly(b) && !_full);
     _ring.hidden = _knob.hidden = _tap;
     [CATransaction commit];
+    [self updateCompanionBackground];
+}
+// The band keeps its wallpaper alone while a 3D layout floats the pad over it (front_ios.m). Weak, so a build without the
+// renderer links the pad all the same.
+extern void dm_companion_ui_background(int on) __attribute__((weak));
+- (void)updateCompanionBackground {
+    if (dm_companion_ui_background) dm_companion_ui_background(_full && !_tap && !_padOff && _layout.separated);
 }
 - (int)padLayout { return _tap ? 2 : _full ? 1 : 0; }
 - (void)setPadLayout:(int)l {   // the in-game menu's pick: release every touch first (no key stays held), save, lay out again
@@ -261,6 +269,7 @@ static BOOL fullOnly(int b) { return b == B_LS || b == B_RS || b >= B_LEFT; }   
     [self reset];   // A finger held across a pose change must not leave a key or game touch stuck.
     _layout = layout;
     [self setNeedsLayout];
+    [self updateCompanionBackground];
 }
 - (CGRect)safe { return CGRectIntersection(_layout.controls, UIEdgeInsetsInsetRect(self.bounds, dm_game_safe_insets(self.bounds, self.safeAreaInsets, _layout.topSafeOnly))); }
 - (CGRect)corner { if (_layout.separated) return self.safe; UIEdgeInsets i = self.safeAreaInsets; i.left *= K_CORNER_IN; i.right *= K_CORNER_IN; return UIEdgeInsetsInsetRect(self.bounds, i); }   // the rectangle the bottom-corner controls use
@@ -711,8 +720,9 @@ static BOOL pads_slotted(GCController *gone) {
         if (!usable || g_merge) LOG("controller %s: %s%s", gone ? "disconnected" : "connected", pad_name(c), usable ? "" : " (no supported gamepad profile: not used)");
     }
     BOOL any = g_merge ? pads_merged(gone) : pads_slotted(gone);
-    dispatch_async(dispatch_get_main_queue(), ^{ self->_padOff = any; self->_controls.hidden = any; [self reset]; });   // the touch gamepad hides while any controller is in use
+    dispatch_async(dispatch_get_main_queue(), ^{ self->_padOff = any; self->_controls.hidden = any; [self reset]; [self.superview setNeedsLayout]; });   // the touch gamepad hides while any controller is in use; the root view lays out again so the companion hears about it
 }
+- (BOOL)controllerConnected { return _padOff; }
 @end
 
 // The controller applet's prompt (front.h front_ctrl_support, ctrl_prompt.h; GitHub issue #1640), as the Mac's (front_mac.m): the game asked for more players than it sees, and
@@ -814,6 +824,7 @@ int front_ctrl_support(int min, int max) {
 }
 
 UIView *dm_gamepad_view(CGRect frame) { DmGamepad *v = [[DmGamepad alloc] initWithFrame:frame]; g_view = v; return v; }
+int dm_gamepad_controller_connected(void) { return g_view && [g_view controllerConnected] ? 1 : 0; }
 void dm_gamepad_arrange(UIView *view, DmLayout layout) { [(DmGamepad *)view arrange:layout]; }
 void dm_gamepad_opmode_changed(void) { [g_view opmodeChanged]; }
 void dm_gamepad_touch_feedback(bool on) { [g_view setTouchFeedback:on]; }

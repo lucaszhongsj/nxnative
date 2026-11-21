@@ -176,6 +176,33 @@ else [ "$GFXAPI" != nvn ] || t "no pipeline archive ($([ -n "${DM_PSO_GPUS+set}"
 # The packed language (DMLanguage) is the Game language row's default, which settings.py makes the game's first language when it lacks DM_LANG: the screen and DM_LAUNCHER=0 then agree
 LD=$(python3 -c 'import json, sys; print(next((s["default"] for s in json.load(open(sys.argv[1]))["settings"] if s["env"] == "DM_LANG"), ""))' $LJ) || die "launcher settings ($LJ)"
 if [ -n "$LD" ] && [ "$LD" != "$DM_LANG" ]; then t "game language: the game has no $DM_LANG; packing $LD, its first"; export DM_LANG=$LD; fi
+# A profile's companion.json opts the game into the Eden Duo companion: the data-driven interface manifest and its authored MSBT strings are bundled as
+# dm/companion-ui.json, the module's build-ID and input-gate configuration as dm/companion.json, and the component licenses beside it (a build that includes
+# the companion is distributed under GPL-3.0-or-later, with its notices). Only this game's app compiles the companion's Swift renderer: any other game's
+# leaves both files out, so its app carries neither the renderer nor the module (whose sources companion.mk adds to the host for this profile alone).
+if [ -f "$GD/companion.json" ]; then
+  # The module reads the game's memory through addresses its pins state, and the host opens its domains only for the builds companion.json names: a game build other than the one
+  # the pins were found on makes both disagree with the image this app embeds, and an empty panel is the only symptom. Refuse to pack such an image (program 0's: a PROGRAMS_TSV
+  # build's companion profile is the first program's).
+  UI=$(python3 -c 'import json, sys; print(json.load(open(sys.argv[1]))["ui"])' "$GD/companion.json") || die "$GD/companion.json: no ui"
+  PINS=("$DM/third_party/eden_duo/$UI"/*_pins.inc)
+  [ -e "${PINS[0]}" ] || die "no *_pins.inc in $DM/third_party/eden_duo/$UI"
+  python3 "$DM/tools/companion_pins.py" "$PATCHED/main.patched.bin" "${PINS[@]}" || die "companion pins: $PATCHED/main.patched.bin is not the image the pins were found on"
+  BID=$([ -f "$PATCHED/main.cuts.tsv" ] && sed -n '1s/^# *BUILD_ID[[:space:]]*//p' "$PATCHED/main.cuts.tsv")
+  python3 -c 'import json, sys; sys.exit(0 if sys.argv[2] in json.load(open(sys.argv[1])).get("write_builds", []) else 1)' "$GD/companion.json" "$BID" \
+    || die "companion: build ${BID:-unknown} is not among $GD/companion.json write_builds, so the host would keep the companion's domains closed"
+  cp "$GD/companion.json" Gen/dm/companion.json || die "copy companion profile"
+  python3 "$IOS/tools/gen_companion.py" "$DM/third_party/eden_duo/$UI" Gen/dm/companion-ui.json || die "generate companion interface"
+  cp "$DM/third_party/eden_duo/LICENSE-GPL-3.0.txt" Gen/dm/companion-license.txt || die "copy companion license"
+  mkdir -p Gen/dm/companion-licenses || die "make companion notices directory"
+  cp "$DM"/third_party/eden_duo/LICENSE-*.txt "$DM/third_party/eden_duo/NOTICES.txt" "$DM/third_party/eden_duo/NOTICES-nxnative.md" "$DM/third_party/eden_duo/UPSTREAM.json" Gen/dm/companion-licenses/ || die "copy companion notices"
+  cp "$DM/third_party/zstd/LICENSE" Gen/dm/companion-licenses/LICENSE-ZSTD.txt || die "copy Zstandard license"
+  echo "GCC_PREPROCESSOR_DEFINITIONS = \$(inherited) DM_COMPANION=1" >> Gen/dm.xcconfig   # front_ios.m calls the companion's view controller only under it
+  t "companion: interface, profile and licenses bundled"
+else
+  # The renderer and its model have nothing to draw in a game without companion.json, so they stay out of that game's target.
+  echo "EXCLUDED_SOURCE_FILE_NAMES = \$(inherited) ACNHCompanion.swift EdenCompanion.swift" >> Gen/dm.xcconfig
+fi
 # Diagnostic build: DM_ENV_FILE=file → dm/env.txt in the bundle (main.m sets one environment variable per line at boot)
 if [ -n "${DM_ENV_FILE:-}" ]; then cp "$DM_ENV_FILE" Gen/dm/env.txt || die "copy DM_ENV_FILE"; t "env: $(grep -v '^#' "$DM_ENV_FILE" | tr '\n' ' ')"; fi
 # The shader libraries go into the archive as DmIOS.app/msl/<folder>, or an NVN game's as the file DmIOS.app/msl/<folder>.img (main.m sets DM_MSL_DIR to msl)

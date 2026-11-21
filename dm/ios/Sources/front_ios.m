@@ -82,9 +82,29 @@ static void tv_attach(void);
 }
 @end
 
+// SwiftUI's companion (ACNHCompanion.swift): a hosting controller for the game's data-driven interface. Only a build whose profile has companion.json
+// defines DM_COMPANION (build_ipa.sh) and compiles the renderer, so nothing refers to this symbol in the other games' apps.
+#if DM_COMPANION
+extern void *dm_companion_view_controller(void);
+void dm_companion_ui_state(int hidden, int physical, int presented);   // ACNHCompanion.swift: band shown, controller in use, pad hidden
+void dm_companion_ui_dock_insets(double left, double right, double bottom);   // the band's parts under the safe area
+extern void dm_companion_background_state(int on);
+#endif
+
+// DmGamepad.m: a 3D layout floats the pad over the band, so the band keeps only its wallpaper until Tap comes back. Always
+// defined, so a build without the renderer still links the pad.
+void dm_companion_ui_background(int on) {
+#if DM_COMPANION
+    dm_companion_background_state(on);
+#else
+    (void)on;
+#endif
+}
+
 @interface DmRootVC : UIViewController
 @property (nonatomic, strong) DmGameView *game;
 @property (nonatomic, strong) UIView *companion;   // under the pad, in the band a split gives it (DmLayout.h dm_layout): what the game's own screens cannot show there
+@property (nonatomic, strong) UIViewController *companionVC;   // owns the SwiftUI companion; the view alone would let the controller go
 @property (nonatomic, strong) UIView *pad;
 @property (nonatomic, strong) UILabel *fps;
 @property (nonatomic) BOOL launched;
@@ -122,6 +142,10 @@ static void launcher_done(void) { [g_root startGame]; }
             [weakSelf hingeChanged:update.hinge];
         }]];
     }
+#endif
+#if DM_COMPANION
+    [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(appStateChanged:) name:UIApplicationWillResignActiveNotification object:nil];
+    [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(appStateChanged:) name:UIApplicationDidBecomeActiveNotification object:nil];
 #endif
     front_ios_power_watch();
     front_ios_notify_setup();
@@ -187,13 +211,25 @@ static void launcher_done(void) { [g_root startGame]; }
     if (getenv("DM_METAL_HUD") && atoi(getenv("DM_METAL_HUD"))) { g_layer.developerHUDProperties = @{@"mode": @"default"}; LOG("front end: Metal performance HUD on (DM_METAL_HUD)"); }   // Apple's HUD over the game: frame rate, frame and GPU time, memory
     else if (front_ios_hud_enabled_from_saved_choice()) g_layer.developerHUDProperties = @{@"mode": @"disabled"};   // the launcher switched off a HUD enabled by the saved choice
     dm_haptics_apple_init();
-    // The band under the picture in a split (DmLayout.h dm_layout companion): the pad floats over it, so only what no key covers is seen. Hidden while there is no
-    // split: the picture takes the whole view and the pad's own background is all there is. Touches go through it to the pad, which owns the band's hit testing
-    self.companion = [[UIView alloc] initWithFrame:CGRectZero];
+    // The band under the picture in a split (DmLayout.h dm_layout companion): the SwiftUI companion's view, with the pad floating over it. Hidden while
+    // there is no split: the picture takes the whole view and the pad's own background is all there is. The companion takes its own touches; the pad keeps
+    // the ones that land on a key (DmGamepad.m hitTest). A game without a companion keeps the empty placeholder.
+#if DM_COMPANION
+    UIViewController *companionVC = (__bridge_transfer UIViewController *)dm_companion_view_controller();
+#else
+    UIViewController *companionVC = nil;
+#endif
+    self.companionVC = companionVC;
+    self.companion = companionVC ? companionVC.view : [[UIView alloc] initWithFrame:CGRectZero];
     self.companion.backgroundColor = [UIColor colorWithWhite:0.07 alpha:1];
-    self.companion.userInteractionEnabled = NO;
     self.companion.hidden = YES;
-    [self.view addSubview:self.companion];
+    if (companionVC) {   // a child, not only a subview: SwiftUI's appearance callbacks and safe-area propagation follow containment
+        [self addChildViewController:companionVC];
+        [self.view addSubview:companionVC.view];
+        [companionVC didMoveToParentViewController:self];
+    } else {
+        [self.view addSubview:self.companion];
+    }
     self.pad = dm_gamepad_view(self.view.bounds);
     self.pad.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
     [self.view addSubview:self.pad];
@@ -222,6 +258,16 @@ static UIWindow *g_tv;   // the TV scene's window while one shows the picture (t
         if (dm_opmode() != m) { dm_set_opmode(m); dm_gamepad_opmode_changed(); LOG("front end: console mode %s again, lying down", m ? "docked" : "handheld"); }
     }
 }
+#if DM_COMPANION
+- (void)appStateChanged:(NSNotification *)note {   // the panel stops sampling while the app is in the background; the band is laid out again on return
+    if (!self.companionVC) return;
+    BOOL physical = dm_gamepad_controller_connected();
+    // The notification says which transition happened: applicationState may still read Active when WillResignActive arrives.
+    BOOL active = [note.name isEqualToString:UIApplicationDidBecomeActiveNotification];
+    dm_companion_ui_state(physical, physical, active && !self.companion.hidden);
+    [self.view setNeedsLayout];
+}
+#endif
 - (void)viewDidLayoutSubviews {
     [super viewDidLayoutSubviews];
     CGRect b = self.view.bounds; if (!self.game) return;
@@ -245,6 +291,21 @@ static UIWindow *g_tv;   // the TV scene's window while one shows the picture (t
     self.companion.frame = layout.companion;
     self.companion.hidden = !layout.separated;
     layout.topSafeOnly = duoPortrait;
+#if DM_COMPANION
+    if (self.companionVC) {   // the renderer follows the band's presentation (and stops sampling while it is hidden), and lays its content out of the safe area
+        BOOL physical = dm_gamepad_controller_connected();
+        BOOL presented = layout.separated && UIApplication.sharedApplication.applicationState == UIApplicationStateActive;
+        dm_companion_ui_state(physical, physical, presented);
+        if (layout.separated) {
+            CGRect safe = UIEdgeInsetsInsetRect(b, self.view.safeAreaInsets);
+            dm_companion_ui_dock_insets(MAX(0, CGRectGetMinX(safe) - CGRectGetMinX(layout.companion)),
+                                        MAX(0, CGRectGetMaxX(layout.companion) - CGRectGetMaxX(safe)),
+                                        MAX(0, CGRectGetMaxY(layout.companion) - CGRectGetMaxY(safe)));
+        } else {
+            dm_companion_ui_dock_insets(0, 0, 0);
+        }
+    }
+#endif
     NSString *line = [NSString stringWithFormat:@"%@, hinge %ld%s, divisions %@, picture %@, controls %@", onTV ? @"pad only (picture on the TV)" : layout.separated ? @"split" : self.fill ? @"overlay, Fill" : @"overlay",
                       (long)self.hingeStatus, self.partiallyOpen ? " (half open)" : "", regionLog, NSStringFromCGRect(layout.game), NSStringFromCGRect(layout.controls)];
     if (![line isEqualToString:self.layoutLog]) { self.layoutLog = line; LOG("front end: layout %s", line.UTF8String); }
@@ -512,7 +573,11 @@ void front_program_handoff(int index, const char *name) {   // front.h; on the g
     else if (err) LOG("[RED] front end: the notification for program %d could not be scheduled: %s", index, err.localizedDescription.UTF8String);
     else LOG("front end: \"Starting %s\" shown, notification for program %d scheduled", nm.UTF8String, index);
 }
-void front_run(void (*guest)(void)) { guest(); }   // Already on main.m's big-stack thread
+void front_run(void (*guest)(void)) {   // Already on main.m's big-stack thread
+    void dm_companion_host_ready(void);
+    dm_companion_host_ready();   // the guest modules are loaded: the companion reader can now answer main's base, size and build ID
+    guest();
+}
 
 // The account applet offers only choices allowed by the host. Native actions keep
 // the choice with the player, including creation, skip and cancellation.
