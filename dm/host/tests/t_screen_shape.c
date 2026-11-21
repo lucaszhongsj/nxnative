@@ -116,7 +116,7 @@ int main(void) {
     shape("1.77", 0, 0, "main's ceiling is exclusive: 16:9");
     shape("0", 0, 0, "0 is 16:9");
     shape(NULL, 0, 0, "unset is 16:9");
-#if DM_GAME_SCREEN_ASPECT
+#if DM_GAME_SCREEN_UNION
     union_shape();
     {   // The boot shape takes the same cap from the environment (front_ios.m sets it before the host starts)
         memset(g_page, 0, sizeof g_page);
