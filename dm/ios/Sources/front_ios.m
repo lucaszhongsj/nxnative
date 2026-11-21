@@ -17,6 +17,7 @@
 #import "CloudSaves.h"
 
 void dm_gamepad_active(void);
+#include "game_profile.h"
 #import "DmLayout.h"
 #import "DmGameMenu.h"
 
@@ -82,8 +83,31 @@ static void tv_attach(void);
 }
 @end
 
+// SwiftUI's companion (ACNHCompanion.swift): a hosting controller for the game's data-driven interface. Only a build whose profile has companion.json
+// defines DM_COMPANION (build_ipa.sh) and compiles the renderer, so nothing refers to this symbol in the other games' apps.
+#if DM_COMPANION
+extern void *dm_companion_view_controller(void);
+void dm_companion_ui_state(int hidden, int physical, int presented);   // ACNHCompanion.swift: band shown, controller in use, pad hidden
+void dm_companion_ui_dock_insets(double left, double right, double bottom);   // the band's parts under the safe area
+extern void dm_companion_background_state(int on);
+#endif
+
+// DmGamepad.m: a 3D layout floats the pad over the band, so the band keeps only its wallpaper until Tap comes back. Always
+// defined, so a build without the renderer still links the pad.
+void dm_companion_ui_background(int on) {
+#if DM_COMPANION
+    static int last = -1;   // the band's own state, so the log names each switch once
+    if (on != last) { last = on; LOG("front end: companion band %s", on ? "keeps its wallpaper alone (3D)" : "shows its page"); }
+    dm_companion_background_state(on);
+#else
+    (void)on;
+#endif
+}
+
 @interface DmRootVC : UIViewController
 @property (nonatomic, strong) DmGameView *game;
+@property (nonatomic, strong) UIView *companion;   // under the pad, in the band a split gives it (DmLayout.h dm_layout): what the game's own screens cannot show there
+@property (nonatomic, strong) UIViewController *companionVC;   // owns the SwiftUI companion; the view alone would let the controller go
 @property (nonatomic, strong) UIView *pad;
 @property (nonatomic, strong) UILabel *fps;
 @property (nonatomic) BOOL launched;
@@ -91,6 +115,11 @@ static void tv_attach(void);
 @property (nonatomic) BOOL fill;   // DM_PICTURE_FIT=fill: in landscape the picture covers the screen, its edges cropped (DmLayout.h dm_layout_picture)
 @property (nonatomic) BOOL partiallyOpen;   // an iPhone Duo's hinge half open (UIHingeInteraction, iOS 27.1)
 @property (nonatomic) NSInteger hingeStatus;
+@property (nonatomic) BOOL standing;   // the last orientation followOrientation saw: YES with the phone up
+@property (nonatomic) BOOL shapeAuto;   // Picture shape "auto" resolved the area's shape: the phone may turn, so the picture follows it (dm_screen_shape)
+@property (nonatomic) float lastShape;   // the shape last given to the game (0: 16:9)
+@property (nonatomic) uint32_t lastPixelW, lastPixelH;   // the view's pixels last given to the game (the picture's output is capped to them)
+@property (nonatomic) int modeWhenLying;   // the console mode to go back to when the phone lies down; -1 = standing, nothing to restore
 @property (nonatomic, copy) NSString *layoutLog;   // the last layout line logged
 #if __has_include(<UIKit/UIHingeInteraction.h>)
 - (void)hingeChanged:(UIHinge *)hinge API_AVAILABLE(ios(27.1));
@@ -119,6 +148,10 @@ static void launcher_done(void) { [g_root startGame]; }
             [weakSelf hingeChanged:update.hinge];
         }]];
     }
+#endif
+#if DM_COMPANION
+    [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(appStateChanged:) name:UIApplicationWillResignActiveNotification object:nil];
+    [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(appStateChanged:) name:UIApplicationDidBecomeActiveNotification object:nil];
 #endif
     front_ios_power_watch();
     front_ios_notify_setup();
@@ -150,19 +183,55 @@ static void launcher_done(void) { [g_root startGame]; }
 // The game view, the pad and the frame-rate counter are made once the launcher has set the switches they read (DM_SHOW_FPS, DM_METAL_HUD); the host's loading began at app launch (main.m)
 - (void)startGame {
     if (self.game) return;
+    self.modeWhenLying = -1;   // the first layout pass sets the mode for the orientation the game starts in
     dm_cloud_saves_env();   // DM_SAVE_SYNC from the launcher's Cloud saves pick, before the game's first save mount reads it (CloudSaves.m, save_sync.h)
     front_hud_env();   // apply the Play selection before the device check and game view (GitHub issue #840)
     const char *dev = front_ios_device_check();
     if (dev) { [self showHint:[NSString stringWithFormat:@"This device is not supported.\n%s", dev]]; return; }   // the host does not start
-    {   // Picture shape "auto" (the launcher's Match screen): the app window's own shape when it is taller than 16:9 (an iPad's 4:3, an unfolded iPhone Duo's 1.43:1; loader.c
-        // takes 1.3 to 1.77), else 16:9. The window's, not the screen's: on an iPad under Stage Manager or Split View the app does not fill the screen. Resolved here, before the
-        // host writes the state page (main.c dm_fps_state_apply)
+    {   // Picture shape "auto" (the launcher's Match screen). Resolved here, before the host writes the state page (main.c dm_fps_state_apply).
+        // A build whose stubs read the union window (`screen_union`) asks for the shape of the area the picture fills, so its background covers it uncropped:
+        // lying down the screen's own wide shape (a 19.5:9 phone at 2.17:1), standing up the upper half's shape (0.92), so the picture fills that half
+        // and the panel takes the lower half. The console mode is not part of it: it changes the game's resolution, not the picture's shape. Physical
+        // rotation changes nothing. Another build keeps the window's own shape where its long side over the short one is 1.3 to 1.77 (an iPad's 4:3,
+        // an unfolded Duo's 1.43), else 16:9: a phone standing up has no stubs to draw its half. The window's, not the screen's: on an iPad under
+        // Stage Manager or Split View the app does not fill the screen.
         const char *a = getenv("DM_SCREEN_ASPECT");
+#if !DM_GAME_SCREEN_ASPECT
         if (a && !strcmp(a, "auto")) {
-            CGSize sz = self.view.window ? self.view.window.bounds.size : UIScreen.mainScreen.bounds.size; double r = MAX(sz.width, sz.height) / MAX(MIN(sz.width, sz.height), 1);
+            CGSize sz = self.view.window ? self.view.window.bounds.size : UIScreen.mainScreen.bounds.size;
+            double r = MAX(sz.width, sz.height) / MAX(MIN(sz.width, sz.height), 1);
             char v[16]; if (r >= 1.3 && r < 1.77) snprintf(v, sizeof v, "%.3f", r); else strcpy(v, "0");
             setenv("DM_SCREEN_ASPECT", v, 1); LOG("front end: picture shape auto: window %.0fx%.0f points (%.3f:1) → DM_SCREEN_ASPECT=%s", sz.width, sz.height, r, v);
         }
+#else
+        if (a && !strcmp(a, "auto")) {
+            // The window's bounds are still the other shape on a cold start (the scene turns after this call). Put its edges in the order the scene's
+            // orientation says, so a phone launched lying down resolves to its wide shape, not to the standing one.
+            CGSize sz = self.view.window ? self.view.window.bounds.size : UIScreen.mainScreen.bounds.size;
+            UIWindowScene *scene = self.view.window.windowScene;
+            BOOL portrait = scene ? UIInterfaceOrientationIsPortrait(scene.interfaceOrientation) : sz.height > sz.width;
+            if (!portrait && sz.width < sz.height) sz = CGSizeMake(sz.height, sz.width);
+            if (portrait && sz.width > sz.height) sz = CGSizeMake(sz.height, sz.width);
+            float r = dm_picture_shape_auto(sz);
+            char v[16]; if (r > 0) snprintf(v, sizeof v, "%.3f", r); else strcpy(v, "0");
+            setenv("DM_SCREEN_ASPECT", v, 1); LOG("front end: picture shape auto: window %.0fx%.0f points (%s) → DM_SCREEN_ASPECT=%s", sz.width, sz.height, portrait ? "standing" : "lying down", v);
+            // Only the 19.5:9 phone's two shapes are followed: its window textures are made large enough for both (the union), so the picture follows the
+            // phone turning (dm_screen_shape, followShape below), and its output is capped to the view's pixels (loader.c shape_output_capped). Every
+            // other device keeps main's answer above and no union.
+            self.shapeAuto = DM_GAME_SCREEN_UNION && dm_picture_shape_follows(sz); self.lastShape = self.shapeAuto ? r : 0;
+            if (self.shapeAuto) {
+                // The pixels the picture is shown in (the game view is the window's width both ways): the host caps the picture's output to them, so the game
+                // draws at the screen's resolution instead of the shape's 1920-wide space -- a standing phone drew 1880x2040 into a 1206x1311 view, 2.4 times
+                // the pixels, and a turn's frames were 2.2 times the lying-down ones
+                CGFloat sc = self.view.window ? self.view.window.screen.nativeScale : UIScreen.mainScreen.nativeScale;
+                char px[32]; snprintf(px, sizeof px, "%ux%u", (unsigned)(sz.width * sc), (unsigned)(sz.height * sc));
+                setenv("DM_SCREEN_ASPECT_PX", px, 1); LOG("front end: picture shape auto: the picture's output is capped to the window's %s pixels", px);
+                self.lastPixelW = (uint32_t)(sz.width * sc); self.lastPixelH = (uint32_t)(sz.height * sc);   // the layout's first pass then has nothing to send: the host applies the boot shape with these pixels
+                setenv("DM_SCREEN_ASPECT_UNION", "1", 1); g_picture_aspect = r;
+                LOG("front end: picture shape auto: the game's window holds every shape (DM_SCREEN_ASPECT_UNION), so the picture follows the phone turning");
+            }
+        }
+#endif
     }
     self.fill = dm_picture_fill(getenv("DM_PICTURE_FIT"));
     if (self.fill) LOG("front end: picture Fill (DM_PICTURE_FIT=fill), the 16:9 picture covers the screen in landscape and its edges are cropped");
@@ -174,19 +243,83 @@ static void launcher_done(void) { [g_root startGame]; }
     if (getenv("DM_METAL_HUD") && atoi(getenv("DM_METAL_HUD"))) { g_layer.developerHUDProperties = @{@"mode": @"default"}; LOG("front end: Metal performance HUD on (DM_METAL_HUD)"); }   // Apple's HUD over the game: frame rate, frame and GPU time, memory
     else if (front_ios_hud_enabled_from_saved_choice()) g_layer.developerHUDProperties = @{@"mode": @"disabled"};   // the launcher switched off a HUD enabled by the saved choice
     dm_haptics_apple_init();
+    // The band under the picture in a split (DmLayout.h dm_layout companion): the SwiftUI companion's view, with the pad floating over it. Hidden while
+    // there is no split: the picture takes the whole view and the pad's own background is all there is. The companion takes its own touches; the pad keeps
+    // the ones that land on a key (DmGamepad.m hitTest). A game without a companion keeps the empty placeholder.
+#if DM_COMPANION
+    UIViewController *companionVC = (__bridge_transfer UIViewController *)dm_companion_view_controller();
+#else
+    UIViewController *companionVC = nil;
+#endif
+    self.companionVC = companionVC;
+    self.companion = companionVC ? companionVC.view : [[UIView alloc] initWithFrame:CGRectZero];
+    self.companion.backgroundColor = [UIColor colorWithWhite:0.07 alpha:1];
+    self.companion.hidden = YES;
+    if (companionVC) {   // a child, not only a subview: SwiftUI's appearance callbacks and safe-area propagation follow containment
+        [self addChildViewController:companionVC];
+        [self.view addSubview:companionVC.view];
+        [companionVC didMoveToParentViewController:self];
+    } else {
+        [self.view addSubview:self.companion];
+    }
     self.pad = dm_gamepad_view(self.view.bounds);
     self.pad.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
     [self.view addSubview:self.pad];
     const char *fps = getenv("DM_SHOW_FPS");
     [self showFPS:fps ? atoi(fps) != 0 : [[NSBundle.mainBundle objectForInfoDictionaryKey:@"DMShowFPS"] boolValue]];
     [self.view setNeedsLayout]; [self.view layoutIfNeeded];
+#if DM_GAME_PORTRAIT_PAD
+    [self showPadSwitchHint];   // this profile's pad switches on a triple tap at the bottom; say so once, at the start
+#endif
     UIApplication.sharedApplication.idleTimerDisabled = YES;
     tv_attach();   // a TV connected while the launcher showed
     front_ios_boot();
 }
+static UIWindow *g_tv;   // the TV scene's window while one shows the picture (tv_attach)
+// Console mode follows the screen's orientation while no TV shows the picture: a phone standing up is handheld, so the game's own touch screens (its software
+// keyboard above all) take touches, and the picture is the handheld 1280x720 one; lying down it returns to the mode the player had. A TV docks the game
+// whatever the phone does (tv_attach / tv_detach own the mode then). A choice made in the in-game menu while standing up is the one lying down returns to.
+// The switch is dm_set_opmode, which pushes the console mode change notification the game watches, so it follows while it runs.
+- (void)followOrientation:(CGRect)b {
+    if (g_tv) return;   // the picture is on the TV: docked there
+    BOOL standing = b.size.height > b.size.width;
+    if (standing == self.standing) return;
+    self.standing = standing;
+    if (standing) {
+        self.modeWhenLying = dm_opmode();
+        if (self.modeWhenLying != 0) { dm_set_opmode(0); dm_gamepad_opmode_changed(); LOG("front end: console mode handheld, a phone standing up (the game's own keyboard takes touches)"); }
+    } else if (self.modeWhenLying >= 0) {
+        int m = self.modeWhenLying; self.modeWhenLying = -1;
+        if (dm_opmode() != m) { dm_set_opmode(m); dm_gamepad_opmode_changed(); LOG("front end: console mode %s again, lying down", m ? "docked" : "handheld"); }
+    }
+}
+#if DM_COMPANION
+- (void)appStateChanged:(NSNotification *)note {   // the panel stops sampling while the app is in the background; the band is laid out again on return
+    if (!self.companionVC) return;
+    BOOL physical = dm_gamepad_controller_connected();
+    // The notification says which transition happened: applicationState may still read Active when WillResignActive arrives.
+    BOOL active = [note.name isEqualToString:UIApplicationDidBecomeActiveNotification];
+    dm_companion_ui_state(physical, physical, active && !self.companion.hidden);
+    [self.view setNeedsLayout];
+}
+#endif
 - (void)viewDidLayoutSubviews {
     [super viewDidLayoutSubviews];
     CGRect b = self.view.bounds; if (!self.game) return;
+    [self followOrientation:b];
+    if (self.shapeAuto) {   // the picture takes the area's shape now (a phone that turned); the game's window holds every shape (DM_SCREEN_ASPECT_UNION)
+        float a = dm_picture_shape_auto(b.size);
+        CGFloat sc = self.view.window ? self.view.window.screen.nativeScale : UIScreen.mainScreen.nativeScale;
+        uint32_t pw = (uint32_t)(b.size.width * sc), ph = (uint32_t)(b.size.height * sc);   // the game view's pixels: the window's width both ways
+        BOOL turned = a > self.lastShape * 1.01f || a < self.lastShape * 0.99f;
+        if (turned || pw != self.lastPixelW || ph != self.lastPixelH) {
+            self.lastShape = a; self.lastPixelW = pw; self.lastPixelH = ph;
+            dm_screen_shape_px(a, pw, ph);
+            // This pass lays the views out with the new shape: letting the present report it first sizes the first pass's game view by the shape of the
+            // area the phone just left -- with Fill that view is 2.4 times the screen for one layout pass, and the next one snaps it back
+            g_picture_aspect = a > 0 ? a : DM_PICTURE_16_9;
+        }
+    }
     CGRect division = CGRectNull;   // an iPhone Duo's fold, as UIKit reports it (iOS 27.1)
     NSMutableArray<NSString *> *regionLog = [NSMutableArray array];
 #if __has_include(<UIKit/UIHingeInteraction.h>)
@@ -203,17 +336,62 @@ static void launcher_done(void) { [g_root startGame]; }
     BOOL onTV = self.game.superview != self.view;   // the TV's view lays the picture out; the phone is all pad
     DmLayout layout = onTV ? dm_layout_pad_only(b) : dm_layout_picture(dm_layout(b, gameInsets, self.partiallyOpen, division, g_picture_aspect), b, self.fill, g_picture_aspect);
     if (!onTV) self.game.frame = layout.game;
+    self.companion.frame = layout.companion;
+    self.companion.hidden = !layout.separated;
     layout.topSafeOnly = duoPortrait;
+#if DM_COMPANION
+    if (self.companionVC) {   // the renderer follows the band's presentation (and stops sampling while it is hidden), and lays its content out of the safe area
+        BOOL physical = dm_gamepad_controller_connected();
+        BOOL presented = layout.separated && UIApplication.sharedApplication.applicationState == UIApplicationStateActive;
+        dm_companion_ui_state(physical, physical, presented);
+        if (layout.separated) {
+            CGRect safe = UIEdgeInsetsInsetRect(b, self.view.safeAreaInsets);
+            dm_companion_ui_dock_insets(MAX(0, CGRectGetMinX(safe) - CGRectGetMinX(layout.companion)),
+                                        MAX(0, CGRectGetMaxX(layout.companion) - CGRectGetMaxX(safe)),
+                                        MAX(0, CGRectGetMaxY(layout.companion) - CGRectGetMaxY(safe)));
+        } else {
+            dm_companion_ui_dock_insets(0, 0, 0);
+        }
+    }
+#endif
     NSString *line = [NSString stringWithFormat:@"%@, hinge %ld%s, divisions %@, picture %@, controls %@", onTV ? @"pad only (picture on the TV)" : layout.separated ? @"split" : self.fill ? @"overlay, Fill" : @"overlay",
                       (long)self.hingeStatus, self.partiallyOpen ? " (half open)" : "", regionLog, NSStringFromCGRect(layout.game), NSStringFromCGRect(layout.controls)];
     if (![line isEqualToString:self.layoutLog]) { self.layoutLog = line; LOG("front end: layout %s", line.UTF8String); }
     self.pad.frame = b;
     dm_gamepad_arrange(self.pad, layout);
-    if (self.fps) {   // the top row's free stretch: right of DmGamepad.m's L3 key (102 + 17 of its units from the safe edge), level with − / + (22 units down); u is its unit
+    if (self.fps) {
+#if DM_GAME_PORTRAIT_PAD
+        // This profile's pad keeps the top row to the shoulders and − / +: the counter sits under the menu gear, centred on it.
+        CGRect gear = dm_gamepad_menu_rect(self.pad);
+        self.fps.frame = CGRectMake(floor(CGRectGetMidX(gear) - 32), floor(CGRectGetMaxY(gear) + 6), 64, 22);
+#else
+        // The top row's free stretch: right of DmGamepad.m's L3 key (102 + 17 of its units from the safe edge), level with − / + (22 units down).
         CGRect s = CGRectIntersection(layout.controls, UIEdgeInsetsInsetRect(b, gameInsets));
         CGFloat u = layout.separated ? MIN(MIN(s.size.height / 430.0, s.size.width / 700.0), 1.3) : MIN(b.size.height / 430.0, 1.3);
         self.fps.frame = CGRectMake(floor(CGRectGetMinX(s) + 130 * u), floor(CGRectGetMinY(s) + 22 * u - 11), 64, 22);
+#endif
     }
+}
+// This profile's pad switches between the pad and the game's own touch screen on a triple tap in the bottom strip (DmGamepad.m bottomNavTap). Said
+// once, when the game starts, for ten seconds: the game's own start-up screens are what the player sees first, and the strip is invisible.
+- (void)showPadSwitchHint {
+    UILabel *l = [UILabel new];
+    BOOL chinese = [NSLocale.preferredLanguages.firstObject hasPrefix:@"zh"];
+    l.text = chinese ? @"三击底部切换摇杆 / 触控" : @"Triple-tap the bottom to switch";
+    l.font = [UIFont systemFontOfSize:12 weight:UIFontWeightSemibold];
+    l.textColor = UIColor.whiteColor; l.textAlignment = NSTextAlignmentCenter; l.numberOfLines = 2;
+    l.backgroundColor = [UIColor colorWithWhite:0 alpha:0.55]; l.layer.cornerRadius = 8; l.layer.masksToBounds = YES;
+    l.userInteractionEnabled = NO;   // the strip under it still takes its taps
+    // On the home indicator itself: the label's own bottom edge sits on the indicator's top edge, so it points at what it names.
+    l.frame = CGRectMake(CGRectGetMidX(self.view.bounds) - 85, CGRectGetMaxY(self.view.bounds) - 13 - 28, 170, 28);
+    l.autoresizingMask = UIViewAutoresizingFlexibleTopMargin | UIViewAutoresizingFlexibleLeftMargin | UIViewAutoresizingFlexibleRightMargin;
+    l.alpha = 0;
+    [self.view addSubview:l];
+    [UIView animateWithDuration:0.25 animations:^{ l.alpha = 1; }];
+    LOG("front end: pad switch hint shown (a triple tap at the bottom)");
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(10 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        [UIView animateWithDuration:0.35 animations:^{ l.alpha = 0; } completion:^(BOOL done) { (void)done; [l removeFromSuperview]; }];
+    });
 }
 - (void)showFPS:(BOOL)on {   // the frame-rate counter: DM_SHOW_FPS at Play, then the in-game menu
     if (on && !self.fps) { self.fps = front_ios_fps_label(); [self.view addSubview:self.fps]; [self.view setNeedsLayout]; }   // above the pad, which hides while a controller is connected
@@ -246,7 +424,7 @@ UIViewController *front_ios_root(void) { return [DmRootVC new]; }
 - (void)viewDidLoad { [super viewDidLoad]; self.view.backgroundColor = UIColor.blackColor; }
 - (void)viewDidLayoutSubviews { [super viewDidLayoutSubviews]; for (UIView *v in self.view.subviews) v.frame = dm_aspect_fit(self.view.bounds, g_picture_aspect); }
 @end
-static UIWindow *g_tv; static int g_tv_mode_was = -1;
+static int g_tv_mode_was = -1;   // the console mode to go back to when the TV is unplugged
 static void tv_attach(void) {
     DmGameView *v = g_root.game; if (!g_tv || !v || v.superview == g_tv.rootViewController.view) return;
     // at most 1080p: the game renders 1080p docked, and a 4K drawable only adds an upscale and a 4K stream (an AirPlay TV showed black, the GPU went from 15 to 60 ms a frame).
@@ -287,6 +465,7 @@ bool dm_setting_live(const char *env, const char *value) {
         if (!value) return true;
         int m = atoi(value) ? 1 : 0;
         if (g_tv_mode_was >= 0) { g_tv_mode_was = m; LOG("front end: console mode %s once the TV is unplugged (in-game menu)", m ? "docked" : "handheld"); return true; }
+        if (g_root.standing) g_root.modeWhenLying = m;   // the player chose it while standing up: lying down keeps that choice, not the one it replaced
         dm_set_opmode(m); dm_gamepad_opmode_changed(); LOG("front end: console mode %s (in-game menu)", m ? "docked" : "handheld");
         return true;
     }
@@ -470,7 +649,11 @@ void front_program_handoff(int index, const char *name) {   // front.h; on the g
     else if (err) LOG("[RED] front end: the notification for program %d could not be scheduled: %s", index, err.localizedDescription.UTF8String);
     else LOG("front end: \"Starting %s\" shown, notification for program %d scheduled", nm.UTF8String, index);
 }
-void front_run(void (*guest)(void)) { guest(); }   // Already on main.m's big-stack thread
+void front_run(void (*guest)(void)) {   // Already on main.m's big-stack thread
+    void dm_companion_host_ready(void);
+    dm_companion_host_ready();   // the guest modules are loaded: the companion reader can now answer main's base, size and build ID
+    guest();
+}
 
 // The account applet offers only choices allowed by the host. Native actions keep
 // the choice with the player, including creation, skip and cancellation.

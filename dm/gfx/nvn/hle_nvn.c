@@ -2720,6 +2720,21 @@ static void fstep_tick(const win_t *o, int c) {
         t0 = t; v0 = vs; memset(held, 0, sizeof held); drain_n = drain_cut = 0;
     }
 }
+// The picture of a window that holds every shape (loader.c DM_SCREEN_ASPECT_UNION: the state page's +0x68 / +0x6c name it): the output (+0x64 / +0x48) at
+// the window's origin. The game's own crop then names part of the full-shape picture (a console mode change moves it), while the present shows the picture
+// itself, stretched to the drawable. 0: no union, or the rectangle does not fit the texture (the game's own crop stands)
+static int screen_picture(int r[4], int tw, int th) {
+    if (!dm_fps_state) return 0;
+    uint32_t uw, uh, ow, oh;
+    memcpy(&uw, dm_fps_state + 0x68, 4); memcpy(&uh, dm_fps_state + 0x6c, 4);
+    if (!uw || !uh) return 0;
+    memcpy(&ow, dm_fps_state + 0x64, 4); memcpy(&oh, dm_fps_state + 0x48, 4);
+    if (!ow || !oh || (int)ow > tw || (int)oh > th) { mtl_present_picture(1920, 1080); return 0; }   // the picture's area left the range: the game's own 16:9 window
+    // The present's own picture shape (present_shape, nvn_mtl.m) takes what this frame was queued with: a turn's fields change at the game's frame
+    // (loader.c shape_apply), and the display link encodes the frame later, when the next one may already have read another shape
+    mtl_present_picture(ow, oh);
+    r[0] = 0; r[1] = 0; r[2] = (int)ow; r[3] = (int)oh; return 1;
+}
 // The crop a present shows: the window's own (nvnWindowSetCrop), else the vi layer's (vi::SetLayerCrop, hle_vi.c); on the Switch both become the crop of the buffer queued to the layer.
 // Link's Awakening crops only its layer: in handheld mode it draws 1280x720 into its 1920x1080 window textures and crops the layer to that. A layer crop that does not fit the
 // texture is reported once and the whole texture shown, as before the layer crop was read here. lc receives the layer crop
@@ -2768,6 +2783,7 @@ NVN(nvnQueuePresentTexture, void, NVNqueue *q, NVNwindow *w, int idx) {
     uint64_t t0 = now_ns();
     if (idx >= 0 && idx < o->ntex && idx < 4) {   // enqueue only, return immediately
         const tex_t *t = CTX(o->tex[idx]); int lc[4]; const int *crop = present_crop(o->crop, (int)t->d.width, (int)t->d.height, lc);
+        int pc[4]; if (screen_picture(pc, (int)t->d.width, (int)t->d.height)) crop = pc;   // the picture inside a window that holds every shape (DM_SCREEN_ASPECT_UNION)
         nvn_queue_present_release(o->ticket[idx]);
         o->ticket[idx] = nvn_queue_present((queue_t *)q,t,present_period(o) / 1e9,crop);
     }
