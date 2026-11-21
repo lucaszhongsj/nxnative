@@ -113,6 +113,9 @@ void *dm_companion_view_controller(void) {
 }
 void dm_companion_ui_state(int hidden, int physical, int presented) { (void)hidden; (void)physical; (void)presented; }
 void dm_companion_ui_dock_insets(double left, double right, double bottom) { (void)left; (void)right; (void)bottom; }
+// The band's applet state and the picture's shape go to the host, which the harness does not link: front_ios.m only has to reach them.
+void dm_companion_background_state(int on) { (void)on; }
+void dm_screen_shape_px(float aspect, uint32_t px_w, uint32_t px_h) { (void)aspect; (void)px_w; (void)px_h; }
 int front_ios_boot_ok(void) { return 1; }
 bool front_ios_hud_enabled_from_saved_choice(void) { return false; }   // main.m: the launcher never switched a HUD off here
 void front_ios_boot(void) {}
