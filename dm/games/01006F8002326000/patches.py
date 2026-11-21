@@ -588,7 +588,7 @@ def screen_shape(ctx):
             ('b', at + 4)]))
         put(at, [B(at, start)], 'resolution table entry of the frame (crop, render scale): the screen\'s shape (bit 7), after a runtime change\'s fields')
     # The display buffer's own size ([main+0x59ea928] +0x3a8 / +0x3ac): what the render scale above divides by, and what everything that maps the screen
-    # reads (the layouts' captures and scissors, the scene camera's aspect). In a window that holds every shape the buffer is the union (1920x2048)
+    # reads (the layouts' captures and scissors, the scene camera's aspect). In a window that holds every shape the buffer is the union (1920x2040)
     # while the picture is the output's rectangle, and the game rendered a picture of the buffer's shape that the present cropped: a phone lying down
     # showed the upper half of its standing picture, stretched. The buffer's size is the output's in every frame instead; the window's textures stay the
     # union, and the present takes the output's rectangle of them. At 16:9 (+0x48 = 0) the game's own value stands. x16 / x17 are free; x9 holds the buffer
