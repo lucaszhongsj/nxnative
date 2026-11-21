@@ -16,7 +16,7 @@ static inline UIEdgeInsets dm_game_safe_insets(CGRect bounds, UIEdgeInsets inset
     return duo && bounds.size.height > bounds.size.width ? UIEdgeInsetsMake(insets.top, 0, 0, 0) : insets;
 }
 
-// The picture's width / height before the game's first present (front.h front_picture_shape gives the real one: a taller shape under DM_SCREEN_ASPECT, 1920x1344)
+// The picture's width / height before the game's first present (front.h front_picture_shape gives the real one: a taller shape under DM_SCREEN_ASPECT, 1920x2088 at 0.92)
 #define DM_PICTURE_16_9 (16.0 / 9.0)
 
 // The largest centered rectangle of the picture's shape (aspect = width / height) in b
@@ -108,5 +108,6 @@ UIView *dm_gamepad_view(CGRect frame);
 void dm_gamepad_arrange(UIView *view, DmLayout layout);
 void dm_gamepad_reset(void);
 void dm_gamepad_opmode_changed(void);   // the console mode changed (the in-game menu, a TV): the Tap layout exists only in handheld mode
+int dm_gamepad_controller_connected(void);   // a physical controller is in use: the touch gamepad is off (DmGamepad.m padsChanged)
 
 NS_ASSUME_NONNULL_END

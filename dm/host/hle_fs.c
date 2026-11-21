@@ -19,6 +19,7 @@
 #include <sys/xattr.h>
 #include "romfs_image.h"
 #include "save_sync.h"
+#include "companion.h"
 
 #define RES_PATH_NOT_FOUND 0x202u      // fs module 2, description 1
 #define RES_PATH_EXISTS    0x402u      // fs module 2, description 2
@@ -1504,3 +1505,71 @@ HLE_FORCE("_ZN2nn2fs18IsSaveDataExistingERKNS_7account3UidE", "fsp-srv; save dat
 HLE_FORCE("_ZN2nn2fs26SetPriorityOnCurrentThreadENS0_8PriorityE", "fsp-srv; file read priority, ignored by the host", void, h_fs_SetPrio, int prio) { (void)prio; }
 HLE_FORCE("_ZN2nn2fs6detail18IsEnabledAccessLogEj", "fsp-srv; access log always off (returns bool)", unsigned, h_fs_AccessLogMask, unsigned mask) { (void)mask; return 0; }
 HLE_FORCE("_ZN2nn2fs6detail18IsEnabledAccessLogEv", "fsp-srv; access log always off (returns bool)", unsigned, h_fs_AccessLog, void) { return 0; }
+
+// The companion reads its art from the same RomFS the game mounts: DM_ROMFS is either an unpacked folder or a single
+// DMROMFS1 image file. Paths are relative to the rom mount, without a mount name. out == NULL && n == 0 asks for the size.
+size_t dm_companion_read_romfs(const char *path, uint64_t offset, void *out, size_t n) {
+    if (!path) return 0;
+    while (*path == '/') path++;
+    if (!*path || strchr(path, ':') || strstr(path, "..")) return 0;
+    const char *base = getenv("DM_ROMFS");
+    if (!base) return 0;
+    struct stat st;
+    if (stat(base, &st)) return 0;
+    if (S_ISDIR(st.st_mode)) {
+        char full[1100];
+        if (snprintf(full, sizeof full, "%s/%s", base, path) >= (int)sizeof full) return 0;
+        int fd = open(full, O_RDONLY | O_CLOEXEC | O_NOFOLLOW);
+        if (fd < 0) return 0;
+        size_t result = 0;
+        if (!fstat(fd, &st) && S_ISREG(st.st_mode) && st.st_size > 0 && (uint64_t)st.st_size <= (128u << 20)) {
+            if (!out && !n) result = (size_t)st.st_size;
+            else if (offset <= (uint64_t)st.st_size && n <= (uint64_t)st.st_size - offset) {
+                size_t done = 0;
+                while (done < n) {
+                    ssize_t got = pread(fd, (uint8_t *)out + done, n - done, (off_t)(offset + done));
+                    if (got < 0 && errno == EINTR) continue;
+                    if (got <= 0) break;
+                    done += (size_t)got;
+                }
+                result = done;
+            }
+        }
+        close(fd);
+        return result;
+    }
+    if (!S_ISREG(st.st_mode)) return 0;
+    // The image descriptor stays valid only under g_lock: the mount table is freed under it. Read inside the lock,
+    // as the guest's own image ReadFile does, so the mount table cannot change between the lookup and the pread.
+    // Companion asset workers are not parked with the guest threads.
+    PATH_LOCK(); pthread_mutex_lock(&g_lock);
+    size_t result = 0;
+    int found = 0;
+    for (int i = 0; i < g_nmnt; i++) {
+        romfs_img *m = g_mnt[i].img;
+        if (!m) continue;
+        int64_t k = img_find(m, path);
+        if (k < 0 || !m->e[k].type) continue;
+        found = 1;
+        uint64_t size = m->e[k].b;
+        if (size > (128u << 20)) {
+            LOG("fs companion: %s is too large in the RomFS image (%llu bytes)", path, (unsigned long long)size);
+            break;
+        }
+        if (!out && !n) { result = (size_t)size; break; }
+        if (!out || offset > size || n > size - offset) break;
+        int fd = m->fd; uint64_t at = m->e[k].a + offset;
+        size_t done = 0;
+        while (done < n) {
+            ssize_t got = pread(fd, (uint8_t *)out + done, n - done, (off_t)(at + done));
+            if (got < 0 && errno == EINTR) continue;
+            if (got <= 0) break;
+            done += (size_t)got;
+        }
+        result = done;
+        break;
+    }
+    pthread_mutex_unlock(&g_lock);
+    if (!found) LOG("fs companion: %s is not in the RomFS image", path);
+    return result;
+}

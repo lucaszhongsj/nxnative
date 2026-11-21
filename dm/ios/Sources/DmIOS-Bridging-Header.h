@@ -3,3 +3,6 @@
 #import "DmGameMenu.h"
 #include "save_sync.h"
 int front_screen_max_fps(void);   // front.h, front_ios.m: the Frame rate row offers 120 only on a 120 Hz screen (LauncherSettings.swift offeredOptions)
+// The optional portrait companion's native engine and its C layout helpers; Swift reaches them only under the DM_COMPANION compilation condition.
+#import "companion_apple.h"
+#include "companion_layout.h"
