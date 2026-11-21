@@ -151,3 +151,5 @@ This project is built on other people's work ([licenses](dm/third_party/README.m
 ## License
 
 MIT ([LICENSE](LICENSE)). Third-party code keeps its own license ([dm/third_party](dm/third_party/README.md)).
+
+The optional [Eden Duo companion](dm/third_party/eden_duo/NOTICES.txt) is GPL-3.0-or-later. A build that includes it is distributed under the requirements of GPL-3.0-or-later, with its corresponding source and the notices of its component files; the rest of the source tree stays MIT.
