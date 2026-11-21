@@ -18607,7 +18607,11 @@ static id<MTLTexture> present_raw_src(id<MTLTexture> src) {
 // differs from the game's, e.g. iPhone about 19.5:9 against the game's 16:9); when the ratios differ by under 1 % (the remainder from a game width that is a multiple of 8 in the
 // full-screen setup, e.g. 1952x900 against 2868x1320 differs by 0.17 %) the whole canvas, leaving no border of a few pixels
 static MTLViewport present_viewport(double pw, double ph, double dw, double dh) {
-    double s = fmin(dw / pw, dh / ph);
+    // The front end's picture fit (DM_PICTURE_FIT, the in-game menu's Picture: Fit or Fill): Fill covers the drawable and crops the edges, the way the front
+    // end lays its views out. A turn's first frame can still hold the picture of the shape before it, and letterboxing it into the new drawable made it shrink
+    // into a strip for one frame (33 ms at 30 fps); covering it keeps the screen full until the game's new-shape frame lands
+    const char *fit = getenv("DM_PICTURE_FIT");   // the in-game menu changes it while the game runs (GameMenu.swift sets the environment)
+    double s = fit && !strcmp(fit, "fill") ? fmax(dw / pw, dh / ph) : fmin(dw / pw, dh / ph);
     MTLViewport vp = {floor((dw - pw * s) / 2), floor((dh - ph * s) / 2), round(pw * s), round(ph * s), 0, 1};
     if (fabs((dw / dh) / (pw / ph) - 1) < 0.01) vp = (MTLViewport){0, 0, dw, dh, 0, 1};
     return vp;
@@ -18616,15 +18620,27 @@ static MTLViewport present_viewport(double pw, double ph, double dw, double dh) 
 // Mario Galaxy 2 draws its storybook cutscenes anamorphically into 1200x960 of a 1920x1080 swapchain (800x640 handheld). The layer fills the display, 16:9, unless the game sized it
 // (vi::CreateLayer with a size, hle_vi.c). A screen taller than 16:9 (DM_SCREEN_ASPECT, loader.c) counts only for a texture of its shape: only builds with screen-shape stubs render it.
 static _Atomic uint64_t g_layer_shape, g_screen_shape;   // w | h << 32, 0 = none
+// The picture's rectangle at the texture's origin, when the window holds more than one shape (loader.c DM_SCREEN_ASPECT_UNION): the drawable shows that
+// rectangle at its own shape, whatever the texture's. 0: the picture is the whole texture (the shape rules below)
+static _Atomic uint64_t g_picture_shape;
 void mtl_present_layer(uint32_t w, uint32_t h) { atomic_store(&g_layer_shape, (uint64_t)w | (uint64_t)h << 32); }
 void mtl_present_screen(uint32_t w, uint32_t h) { atomic_store(&g_screen_shape, (uint64_t)w | (uint64_t)h << 32); }
+void mtl_present_picture(uint32_t w, uint32_t h) { atomic_store(&g_picture_shape, (uint64_t)w | (uint64_t)h << 32); }
 static void present_shape(id<MTLTexture> src, double *w, double *h) {
+    uint64_t p = atomic_load(&g_picture_shape);
+    if (p) { *w = (double)(uint32_t)p; *h = (double)(p >> 32); return; }   // the picture the state page names, inside a window that holds every shape
     uint64_t v = atomic_load(&g_screen_shape);
     if (v && fabs(((double)src.width / src.height) / ((double)(uint32_t)v / (double)(v >> 32)) - 1) < 0.01) { *w = src.width; *h = src.height; return; }
     v = atomic_load(&g_layer_shape);
     *w = v ? (double)(uint32_t)v : 1920; *h = v ? (double)(v >> 32) : 1080;
 }
 static MTLViewport present_fit(id<MTLTexture> src, double dw, double dh) { double w, h; present_shape(src, &w, &h); return present_viewport(w, h, dw, dh); }
+// The viewport a present's picture is drawn with: in a window that holds every shape, the picture's own rectangle (its crop), so the frame carries the
+// shape it was queued with -- at a turn the next frame may already be queued with the new one, which the state page (and so g_picture_shape) names first
+static MTLViewport present_picture_fit(id<MTLTexture> src, const NSUInteger r[4], double dw, double dh) {
+    if (atomic_load(&g_picture_shape) && (r[2] || r[3])) return present_viewport((double)r[2], (double)r[3], dw, dh);
+    return present_fit(src, dw, dh);
+}
 // The valid source rectangle of a present (x, y, width, height; the crop of nvnWindowSetCrop, zero = the whole texture); 0 when it lies outside the texture
 static int present_crop_rect(id<MTLTexture> src, const int crop[4], NSUInteger r[4]) {
     r[0] = 0; r[1] = 0; r[2] = src.width; r[3] = src.height;
@@ -18645,7 +18661,7 @@ static int present_encode(id<MTLCommandBuffer> cb, id<MTLTexture> src, id<MTLTex
     present_pipeline(dst.pixelFormat);
     MTLRenderPassDescriptor *rp = [MTLRenderPassDescriptor renderPassDescriptor];
     double dw = dst.width, dh = dst.height;
-    MTLViewport vp = present_fit(src, dw, dh);
+    MTLViewport vp = present_picture_fit(src, r, dw, dh);
     int full = vp.originX == 0 && vp.originY == 0 && vp.width == dw && vp.height == dh;
     static double last_vp[4];   // Log one line when the viewport changes (used by the real-device screen-level acceptance screen_check.py to check the aspect ratio)
     if (memcmp(last_vp, &vp, sizeof last_vp)) { memcpy(last_vp, &vp, sizeof last_vp);
@@ -18968,12 +18984,15 @@ static int present_encode_m4(id<MTL4CommandBuffer> cb, id<MTLTexture> src, id<MT
     NSUInteger r[4]; if (!present_crop_rect(src, crop, r)) return 0;
     present_pipeline(dst.pixelFormat);
     double dw = dst.width, dh = dst.height;
-    MTLViewport vp = present_fit(src, dw, dh);
+    MTLViewport vp = present_picture_fit(src, r, dw, dh);
     int full = vp.originX == 0 && vp.originY == 0 && vp.width == dw && vp.height == dh;
     int flipped = atomic_load_explicit(&g_origin_ll, memory_order_relaxed), wrote = 0;
     static int direct_ok = -1; if (direct_ok < 0) { const char *e = getenv("DM_FX_DIRECT"); direct_ok = !(e && !strcmp(e, "0")); }
     // The picture fills dst unflipped: MetalFX may write dst itself, as the pass would only copy its output 1:1 (fx_encode)
-    id<MTLTexture> tex = present_raw_src(src), up = fx ? fx_encode(fx, cb, tex, r, vp, dst.pixelFormat, fx == &g_fx_present, direct_ok && full && !flipped ? dst : nil, &wrote) : nil;
+    // A picture of another shape, drawn covering the drawable (Fill): one frame at a turn. Scaled bilinearly, so the scaler's sizes (and a remake) stay those of
+    // the frames around it
+    int covers = vp.originX < 0 || vp.originY < 0 || vp.width > dw || vp.height > dh;
+    id<MTLTexture> tex = present_raw_src(src), up = fx && !covers ? fx_encode(fx, cb, tex, r, vp, dst.pixelFormat, fx == &g_fx_present, direct_ok && full && !flipped ? dst : nil, &wrote) : nil;
     if (wrote) return PRESENT_METALFX;
     if (up && fx == &g_fx_present) { static int once; if (!once++)
         MLOG("present upscaling: the present pass draws MetalFX's output into the drawable: %s (drawable %lux%lu format %lu usage %#lx, picture %lux%lu)",

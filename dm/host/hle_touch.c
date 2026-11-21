@@ -23,7 +23,12 @@ static int64_t g_tsamp; static uint64_t g_tlast_ns;
 // it clamps there). A wider picture centres the interface across a fraction of the width, so x maps; a taller one centres it across a fraction of
 // the height, so y maps. 16:9 is left alone.
 __attribute__((weak)) uint8_t *dm_fps_state;   // loader.c defines it; a unit test that links only this file has no frame step page, and NULL means 16:9
+// A game whose interface is centred on a taller or wider picture reads a touch in the middle of it, not at the picture's edge: the host maps the
+// touch back onto the centred 16:9 interface. Only a build with screen-shape stubs draws that way (DM_GAME_SCREEN_ASPECT); the others take the touch as it is.
 static float ui_x(float x) {
+#if !DM_GAME_SCREEN_ASPECT
+    return x;
+#endif
     if (!dm_fps_state) return x;
     float r; memcpy(&r, dm_fps_state + 0x58, 4);
     if (!(r > 16.0f / 9.0f)) return x;
@@ -31,6 +36,9 @@ static float ui_x(float x) {
     return v < 0 ? 0 : v > 1 ? 1 : v;
 }
 static float ui_y(float y) {
+#if !DM_GAME_SCREEN_ASPECT
+    return y;
+#endif
     if (!dm_fps_state) return y;
     float r; memcpy(&r, dm_fps_state + 0x58, 4);
     float v = y;

@@ -106,6 +106,12 @@ typedef struct { const char *name; sf_answer answer; } sf_service_ent;
 int dm_opmode(void);
 void dm_set_opmode(int m);          // On change, push notification 30 / 31 according to the switches the game has turned on
 void dm_hid_opmode_changed(void);   // hle_hid.c: the npads follow the console mode; signals the style event of each npad whose style changed
+// The picture's area changed shape while the game runs (a phone turned): loader.c writes it into the frame step state page the screen-shape stubs read every
+// frame. Needs a build whose window holds every shape (DM_SCREEN_ASPECT_UNION); 0 or outside the profile's range: 16:9
+void dm_screen_shape(float aspect);
+// The same, with the pixels of the view the picture is shown in: the picture's output is capped to them (the shape's 1920-wide space is a coordinate
+// space; a standing phone's 1880x2040 picture was drawn into a 1206x1311 view). 0, 0: no cap
+void dm_screen_shape_px(float aspect, uint32_t px_w, uint32_t px_h);
 // Focus (1 foreground / 2 focus lost / 3 background): called by the front end on lifecycle changes; a change pushes notification 15
 void dm_focus_set(int st);
 // Library applet stand-ins (controller, keyboard, error, Mii, account, shop): on Horizon the applet takes the application's focus until it closes, and the Show call returns after
@@ -116,7 +122,7 @@ void dm_applet_leave(void);
 static inline void dm_applet_leave_(const char *const *name) { (void)name; dm_applet_leave(); }
 #define DM_APPLET(name) const char *const dm_applet_ __attribute__((cleanup(dm_applet_leave_))) = (name); dm_applet_enter(dm_applet_)
 // Audio pause / resume following the lifecycle (called by the front end on going to background / returning to foreground)
-extern uint8_t *dm_fps_state;   // frame step state page (loader.c install_fps_state): +0 float target fps, +4 movie flag (dm_movie_hz() != 0, written by the host at each present: Tears of the Kingdom's step stub caps its first, undecided steps by it), +0x10 float render scale, +0x18 double game seconds stepped; NULL when the build has none
+extern uint8_t *dm_fps_state;   // frame step state page (loader.c install_fps_state): +0 float target fps, +4 movie flag (dm_movie_hz() != 0, written by the host at each present: Tears of the Kingdom's step stub caps its first, undecided steps by it), +0x10 float render scale, +0x18 double game seconds stepped, +0x48 the screen shape's output height, +0x4c the layout height, +0x50 its float, +0x54 the conversion sites (one bit each), +0x58 the ratio and +0x5c its field-of-view factor, +0x64 the output width, +0x68 / +0x6c the window that holds every shape (0 = none; dm_screen_shape), +0x80 the HUD's edge parameters; NULL when the build has none
 extern int dm_fps_step_max;   // loader.c: the largest step the frame step stubs give the game (patch_nso.py ctx.step_max; 0 = FSTEP_MAX)
 int dm_movie_hz(void);   // hle_movie.c: the picture rate of the movie playing (the fastest video decoder that handed out a picture in the last half second), 0 when none: the frame step follows it
 void dm_movie_picture(const void *dec, const char *lib, int64_t ts_ns, int unknown_hz);   // hle_movie.c: video decoder dec (nn::movie's or nn::codec's) handed out a picture of this time; unknown_hz: its rate while the times give none

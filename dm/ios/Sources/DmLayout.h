@@ -7,9 +7,8 @@ NS_ASSUME_NONNULL_BEGIN
 
 // game: the picture. companion: the band under it, where a phone standing up shows what the game's own screens cannot (the pad floats over it, so the
 // panel is only where no key is drawn). controls: the pad's area, which in a split is the companion's band. Zero and unused where separated is NO.
-// A split's companion and controls are the same rectangle: DmGamepad.m owns the band's hit testing and takes every touch in it (one on no control
-// goes to gameBegin, which a split refuses outside the picture), so the panel takes no touch of its own. A panel that must be touched needs that
-// dispatch changed first.
+// A split's companion and controls are the same rectangle: DmGamepad.m owns the band's hit testing, taking its controls' touches and the home
+// indicator's strip (where the triple tap switches 3D and Tap); a touch on no control passes to the panel below it.
 typedef struct { CGRect game, companion, controls; BOOL separated, topSafeOnly; } DmLayout;
 
 static inline UIEdgeInsets dm_game_safe_insets(CGRect bounds, UIEdgeInsets insets, BOOL duo) {
@@ -89,6 +88,69 @@ static inline DmLayout dm_layout(CGRect b, UIEdgeInsets insets, BOOL partiallyOp
 // The picture is on a TV (front_ios.m DmTVSceneDelegate): the controls take the whole view and no touch goes to the game's touch screen (the game is docked there).
 static inline DmLayout dm_layout_pad_only(CGRect b) { return (DmLayout){ CGRectZero, CGRectZero, b, NO, NO }; }
 
+// ---- A standing phone's controls ----
+// The touch pad of a portrait split (DmGamepad.m): two rows in the band, the left stick and the ABXY diamond in the upper one, the D-pad and the
+// right stick in the lower one, each in its own column. The rows are at 50 % and 80 % of the band, which leaves the top of the band clear for the
+// companion panel and keeps the lower row clear of the home indicator; the columns at a quarter and three quarters of its width, mirrored about
+// its middle, so neither thumb's pair is squeezed against the other.
+#define DM_PAD_PORTRAIT_ROW_TOP 0.50
+#define DM_PAD_PORTRAIT_ROW_LOW 0.80
+#define DM_PAD_PORTRAIT_COL_LEFT 0.25
+#define DM_PAD_PORTRAIT_COL_RIGHT 0.75
+// The sizes of that pad, in u, shared by the pad that draws them (DmGamepad.m) and the unit below.
+//
+// A profile's later generation (DM_GAME_PORTRAIT_PAD) draws every gap between neighbouring keys at DM_PAD_PORTRAIT_GAP_U: the ABXY keys are sized so
+// their outer edge sits on the stick's ring with that gap between them, the D-pad's arms are spaced by it, and the shoulders are that far apart with
+// the stick clicks on the line between them. The first generation keeps the overlay's key distance and takes the D-pad out to the diamond's reach.
+#define DM_PAD_SPLIT_SCALE 1.25
+#define DM_PAD_STICK_R_U 77
+#define DM_PAD_PORTRAIT_GAP_U 14.2   // between neighbouring keys -- the shoulders, the stick clicks, the ABXY keys and the D-pad's arms (10 points at
+                                     // the unit the two rows give a 390 x 844 band, u = 0.704)
+#define DM_PAD_DPAD_ARM_RATIO (17.0 / 48.0)
+#define DM_PAD_DPAD_SCALE 0.85       // the D-pad's arm against the stick's ring
+typedef struct { CGFloat faceGap, faceR, dpadR, armW, armIn; } DmPadPortraitSizes;   // in u
+static inline DmPadPortraitSizes dm_pad_portrait_sizes(BOOL spaced) {
+    if (!spaced) return (DmPadPortraitSizes){50, 27 * DM_PAD_SPLIT_SCALE, 83.75, 27, 18};
+    // The ABXY keys keep the landscape's proportions -- key distance 50 u, key radius 27 u, so their outer edge is the stick's ring -- so the two
+    // layouts read as one pad. The pad's gap spaces the shoulders, the stick clicks and the D-pad's arms; the diamond's own gap follows its keys.
+    CGFloat dpadR = DM_PAD_DPAD_SCALE * DM_PAD_STICK_R_U;
+    return (DmPadPortraitSizes){50, 27, dpadR, dpadR * DM_PAD_DPAD_ARM_RATIO, DM_PAD_PORTRAIT_GAP_U / M_SQRT2};
+}
+// The unit of that pad, in the same measure as the landscape's (1 = 430 points tall): the gap between the two rows, so every device gets the largest
+// size its rows allow. The upper row reaches down with the diamond's lower key (the stick's ring when that is larger) and the lower one up with the
+// D-pad's drawn arm or the right stick's ring; the band's width only has to keep the two columns apart.
+static inline CGFloat dm_pad_portrait_unit(CGRect band, BOOL spaced) {
+    CGFloat rows = (DM_PAD_PORTRAIT_ROW_LOW - DM_PAD_PORTRAIT_ROW_TOP) * band.size.height;
+    CGFloat span, columns;
+    if (spaced) {   // each row reaches to the stick's ring (the diamond's outer edge is that ring; the D-pad's arm stays inside it), so the
+                    // gap between the rows is two rings; the width keeps the two columns apart by the same reach
+        span = 2 * DM_PAD_STICK_R_U;
+        columns = span;
+    } else {        // the first generation's numbers, unchanged
+        span = DM_PAD_STICK_R_U + hypot(83.75, 27);
+        columns = hypot(83.75, 27) + (50 + 27 * DM_PAD_SPLIT_SCALE);
+    }
+    CGFloat byRows = (rows - 8) / span;
+    CGFloat byHeight = MIN(band.size.height / 430.0, 1.3);
+    CGFloat byWidth = band.size.width * 0.5 / columns;
+    return MIN(MIN(byRows, byHeight), MIN(byWidth, 1.3));
+}
+// The lower row sits a little deeper on the later generation's pad: its D-pad and right stick move down by that share of the band.
+#define DM_PAD_PORTRAIT_LOW_SHIFT 0.025
+static inline CGPoint dm_pad_portrait_row(CGRect band, BOOL lower, BOOL spaced) {
+    CGFloat share = lower ? DM_PAD_PORTRAIT_ROW_LOW + (spaced ? DM_PAD_PORTRAIT_LOW_SHIFT : 0) : DM_PAD_PORTRAIT_ROW_TOP;
+    return CGPointMake(0, CGRectGetMinY(band) + band.size.height * share);
+}
+// The shoulders' own offset on the later generation's pad, as shares of the band: they sit in from the edge and down from its top.
+#define DM_PAD_PORTRAIT_SHOULDER_SHIFT 0.025
+// The later generation's landscape layout keeps the three clusters on one line, with the margins the shoulders' own circles keep to the screen's edges:
+// the stick's ring, the diamond's outer edge and the D-pad's circle all sit DM_PAD_SPACED_EDGE_X_U from the side and DM_PAD_SPACED_EDGE_Y_U from the
+// top and bottom, so the stick's and the diamond's centres are that plus their reach (77 u), and the D-pad's centre is on the same line.
+#define DM_PAD_SPACED_EDGE_X_U (44.0 - 26.0)   // the shoulders' centres (44 u) less their radius (26 u)
+#define DM_PAD_SPACED_EDGE_Y_U (40.0 - 26.0)
+#define DM_PAD_SPACED_LOW_X_U 264.0            // the D-pad's centre from the outer edge: clear of the stick by the pad's own gap
+static inline CGPoint dm_pad_portrait_column(CGRect band, BOOL right) { return CGPointMake(CGRectGetMinX(band) + band.size.width * (right ? DM_PAD_PORTRAIT_COL_RIGHT : DM_PAD_PORTRAIT_COL_LEFT), 0); }
+
 // Fill covers the full view only in the overlay layout (landscape). A portrait or tabletop split keeps the picture fitted in its
 // area above the controls, where cropping a small picture would cost more than the bars.
 static inline DmLayout dm_layout_picture(DmLayout l, CGRect b, BOOL fill, CGFloat aspect) {
@@ -108,6 +170,7 @@ UIView *dm_gamepad_view(CGRect frame);
 void dm_gamepad_arrange(UIView *view, DmLayout layout);
 void dm_gamepad_reset(void);
 void dm_gamepad_opmode_changed(void);   // the console mode changed (the in-game menu, a TV): the Tap layout exists only in handheld mode
+CGRect dm_gamepad_menu_rect(UIView *view);   // the menu gear's rectangle in the pad's own unit: the frame-rate counter sits under it
 int dm_gamepad_controller_connected(void);   // a physical controller is in use: the touch gamepad is off (DmGamepad.m padsChanged)
 
 NS_ASSUME_NONNULL_END

@@ -395,7 +395,8 @@ HLE_FORCE("_ZN2nn2oe27SetPerformanceConfigurationEi", "set the CPU/GPU clock con
     LOG("oe::SetPerformanceConfiguration cfg=%#x (ignored)", cfg);
 }
 
-// Scripted state changes (verify lifecycle / overheat downgrade without a window): DM_OE_SCRIPT="focus=3@10,focus=1@20,opmode=0@30" (second N); bg=1 / bg=0 run the whole background round trip (see script_bg)
+// Scripted state changes (verify lifecycle / overheat downgrade without a window): DM_OE_SCRIPT="focus=3@10,focus=1@20,opmode=0@30" (second N); bg=1 / bg=0 run the whole background round trip (see script_bg);
+// shape=0.92@40 turns the picture's shape (dm_screen_shape, a window that holds every shape: loader.c DM_SCREEN_ASPECT_UNION)
 // Time counts from the game's first notification fetch. Coexists with front end calls.
 #include <unistd.h>
 // bg=1 / bg=0: the whole "to background / back to foreground" sequence, in the same order as the scene lifecycle in front_ios.m (resign active -> enter background; enter foreground -> become active), minus the audio session reset iOS does on returning.
@@ -407,14 +408,15 @@ static void script_bg(int on) {
 static void *oe_script(void *arg) {
     char *buf = arg; uint64_t t0 = now_ns();
     for (char *save, *tok = strtok_r(buf, ",", &save); tok; tok = strtok_r(NULL, ",", &save)) {
-        char key[16]; int v; double at;
-        if (sscanf(tok, "%15[a-z]=%d@%lf", key, &v, &at) != 3) die("DM_OE_SCRIPT entry '%s' should be key=value@seconds", tok);
+        char key[16]; double v; double at;
+        if (sscanf(tok, "%15[a-z]=%lf@%lf", key, &v, &at) != 3) die("DM_OE_SCRIPT entry '%s' should be key=value@seconds", tok);
         uint64_t due = t0 + (uint64_t)(at * 1e9), now = now_ns();
         if (due > now) usleep((useconds_t)((due - now) / 1000));
-        if (!strcmp(key, "focus")) dm_focus_set(v);
-        else if (!strcmp(key, "opmode")) dm_set_opmode(v);
-        else if (!strcmp(key, "bg")) script_bg(v);
-        else die("DM_OE_SCRIPT unknown key '%s' (focus / opmode / bg)", key);
+        if (!strcmp(key, "focus")) dm_focus_set((int)v);
+        else if (!strcmp(key, "opmode")) dm_set_opmode((int)v);
+        else if (!strcmp(key, "bg")) script_bg((int)v);
+        else if (!strcmp(key, "shape")) dm_screen_shape((float)v);
+        else die("DM_OE_SCRIPT unknown key '%s' (focus / opmode / bg / shape)", key);
     }
     return NULL;
 }
