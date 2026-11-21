@@ -154,9 +154,9 @@ static void launcher_done(void) { [g_root startGame]; }
     front_hud_env();   // apply the Play selection before the device check and game view (GitHub issue #840)
     const char *dev = front_ios_device_check();
     if (dev) { [self showHint:[NSString stringWithFormat:@"This device is not supported.\n%s", dev]]; return; }   // the host does not start
-    {   // Picture shape "auto" (the launcher's Match screen): the app window's own shape when it is taller than 16:9 (an iPad's 4:3, an unfolded iPhone Duo's 1.43:1; loader.c
-        // takes 1.3 to 1.77), else 16:9. The window's, not the screen's: on an iPad under Stage Manager or Split View the app does not fill the screen. Resolved here, before the
-        // host writes the state page (main.c dm_fps_state_apply)
+    {   // Picture shape "auto" (the launcher's Match screen): the app window's own shape when it is taller or wider than 16:9 (an iPad's 4:3, an unfolded iPhone Duo's 1.43:1,
+        // loader.c takes 1.3 to 1.77), else 16:9. The window's, not the screen's: on an iPad under Stage Manager or Split View the app does
+        // not fill the screen. Resolved here, before the host writes the state page (main.c dm_fps_state_apply)
         const char *a = getenv("DM_SCREEN_ASPECT");
         if (a && !strcmp(a, "auto")) {
             CGSize sz = self.view.window ? self.view.window.bounds.size : UIScreen.mainScreen.bounds.size; double r = MAX(sz.width, sz.height) / MAX(MIN(sz.width, sz.height), 1);
