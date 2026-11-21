@@ -104,6 +104,15 @@ int duo_harness_rumble(void) { return g_rumble; }
 void dm_haptics_apple_init(void) {}
 void dm_haptics_apple_controller(int player, GCController *controller) { (void)player; (void)controller; }
 
+// The harness links front_ios.m but no SwiftUI companion: the production root still asks for the band's view, and an empty one stands in for it.
+void dm_companion_host_ready(void) {}
+void *dm_companion_view_controller(void) {
+    UIViewController *vc = [UIViewController new];
+    vc.view.backgroundColor = UIColor.clearColor;
+    return (__bridge_retained void *)vc;
+}
+void dm_companion_ui_state(int hidden, int physical, int presented) { (void)hidden; (void)physical; (void)presented; }
+void dm_companion_ui_dock_insets(double left, double right, double bottom) { (void)left; (void)right; (void)bottom; }
 int front_ios_boot_ok(void) { return 1; }
 bool front_ios_hud_enabled_from_saved_choice(void) { return false; }   // main.m: the launcher never switched a HUD off here
 void front_ios_boot(void) {}

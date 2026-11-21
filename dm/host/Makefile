@@ -14,6 +14,8 @@ $(error no game profile $(GAME) (neither in dm/games nor in DM_GAMES_DIR))
 endif
 endif
 GAME_H = gen/$(GAME)/game_profile.h
+# A profile may opt into a companion module: it sets COMPANION_CXX / COMPANION_C / COMPANION_INCLUDES. The adapter is title-independent, the module is not.
+-include $(GAME_DIR)/companion.mk
 include ../mac/min_os.mk
 # -O2 as the other native code here (libvpx, dav1d, the launcher; the iOS host builds at Xcode Release's -Os). Not -O3 (no measured gain over -O2) and not -flto, which moves
 # hle_bigstack.c's inline-assembly entry apart from its return path (SIGBUS in dm_bigstack_enter on Breath of the Wild, PR #556)
@@ -50,6 +52,33 @@ gen/dav1d/%.o: $(DAV1D)/% $(DAV1D_H) ../mac/min_os.mk
 	clang -O2 -g -mmacosx-version-min=$(MACOS_MIN) -fvisibility=hidden -fomit-frame-pointer -fno-align-functions -I$(DAV1D) -I$(DAV1D)/include -I$(DAV1D)/config -c $< -o $@
 $(DAV1D_LIB): $(DAV1D_OBJ)
 	rm -f $@; ar rcs $@ $^
+# A game's optional companion module (companion.mk in its profile): the Eden Duo ACNH C++ reader and its zstd decompressor, built into one static library with
+# the ObjC++ ABI adapter. Only that profile gets it; a build without COMPANION_CXX links no companion at all (the adapter's provider() then returns null).
+ifneq ($(strip $(COMPANION_CXX)),)
+COMPANION_DIR = gen/$(GAME)/companion
+COMPANION_HEADERS = $(sort $(wildcard $(COMPANION_VENDOR)/acnh/*.h $(COMPANION_VENDOR)/acnh/*.inc $(COMPANION_VENDOR)/acnh/third_party/*.h $(COMPANION_VENDOR)/core/mods/*.h $(COMPANION_VENDOR)/core/mods/modules/*.h $(COMPANION_VENDOR)/bc_decoder/*.h $(COMPANION_VENDOR)/stb/*.h ../third_party/zstd/*.h ../third_party/zstd/common/*.h ../third_party/zstd/decompress/*.h)) companion.h companion_apple.h
+COMPANION_CXX_SRC = companion_apple.mm $(COMPANION_CXX)
+COMPANION_C_SRC = $(COMPANION_C)
+COMPANION_SRC = $(COMPANION_CXX_SRC) $(COMPANION_C_SRC)
+COMPANION_OBJ = $(foreach s,$(COMPANION_SRC),$(COMPANION_DIR)/$(notdir $(basename $(s))).o)
+# Object names are flattened to one directory, so two sources with the same base name would silently share (and overwrite) one object.
+ifneq ($(words $(COMPANION_OBJ)),$(words $(sort $(COMPANION_OBJ))))
+$(error two companion sources share a base name: $(COMPANION_OBJ))
+endif
+COMPANION_LIB = $(COMPANION_DIR)/libcompanion.a
+COMPANION_DEFS = -DDM_HAS_COMPANION=1 -DZSTD_DISABLE_ASM=1 -DZSTD_LEGACY_SUPPORT=0
+# One rule per source: a pattern rule cannot reach zstd's common/ and decompress/ subdirectories from a single % step.
+define companion_object
+$(COMPANION_DIR)/$(notdir $(basename $(1))).o: $(1) $(COMPANION_HEADERS) $(GAME_DIR)/companion.mk
+	@mkdir -p $$(dir $$@)
+	$(if $(filter %.c,$(1)),clang -O2 -g -Wall -Wno-unused-function,clang++ -O2 -g -std=c++20 -fobjc-arc -ffp-contract=off) -mmacosx-version-min=$(MACOS_MIN) -I$(COMPANION_VENDOR) $(COMPANION_INCLUDES) $(COMPANION_DEFS) -I$(dir $(GAME_H)) -I../gfx/nvn/include -c $$< -o $$@
+endef
+$(foreach s,$(COMPANION_SRC),$(eval $(call companion_object,$(s))))
+$(COMPANION_LIB): $(COMPANION_OBJ)
+	rm -f $@; ar rcs $@ $^
+else
+COMPANION_LIB =
+endif
 # The host's own Metal shaders (dm/gfx/msl/*.metal) compiled for MSL_SDK into gen/msl-<sdk>/host_msl_gen.h (dm/gfx/tools/host_msl.py; dm/gfx/nvn/host_msl.m loads them), so the host
 # compiles no MSL at run time. The iOS build (dm/ios/tools/gen_build.py) makes it with MSL_SDK=iphoneos, for the app's deployment target (MSL_MIN_iphoneos, as project.yml)
 MSL_SDK ?= macosx
@@ -89,8 +118,8 @@ $(OBJ_DIR)/host/%.o: % Makefile ../mac/min_os.mk | $(GAME_H) $(MSL_H)
 $(OBJ_DIR)/gfx/%.o: ../gfx/% Makefile ../mac/min_os.mk | $(GAME_H) $(MSL_H)
 	@mkdir -p $(dir $@)
 	clang $(HOST_CFLAGS) -MMD -MP -c $< -o $@
-$(HOST_BIN): $(HOST_OBJ) $(VPX_LIB) $(DAV1D_LIB) Makefile ../mac/min_os.mk
-	clang $(HOST_CFLAGS) -o $@ $(HOST_OBJ) $(VPX_LIB) $(DAV1D_LIB) $(HOST_FRAMEWORKS)
+$(HOST_BIN): $(HOST_OBJ) $(VPX_LIB) $(DAV1D_LIB) $(COMPANION_LIB) Makefile ../mac/min_os.mk
+	clang $(HOST_CFLAGS) -o $@ $(HOST_OBJ) $(VPX_LIB) $(DAV1D_LIB) $(COMPANION_LIB) $(HOST_FRAMEWORKS)
 	dsymutil $@
 ifneq ($(strip $(GAME)),)
 -include $(HOST_OBJ:.o=.d)
