@@ -40,11 +40,12 @@ static inline dm_companion_surface_layout dm_companion_surface_make_safe(CGSize 
         p.body=CGRectMake(0,0,size.width,size.height);
         p.footer=CGRectMake(0,nav_top,size.width,nav_height);
         p.nav_scale=scale;
-        // The art window carries the selected tab's capsule (canvas 952..1080, 128): its foot sits
-        // on the gesture edge, 14 canvas points above the dock row's own top. The window's own
-        // middle (1016) is what the canvas is placed by, so 952 maps to its top and 1080 to its foot.
+        // The art window carries the selected tab's capsule (canvas 952..1080, 128). Like a wide
+        // panel's bar, it centres in the footer's whole height, so the icons and labels stay clear
+        // of the content above and keep the same room above and below, the home indicator's strip
+        // included. The window's own middle (1016) is what the canvas is placed by.
         CGFloat nav_w=1240*scale,nav_h=128*scale,nav_x=(size.width-nav_w)/2;
-        p.nav_art=CGRectMake(nav_x,nav_top-(128-114)*scale,nav_w,nav_h);
+        p.nav_art=CGRectMake(nav_x,nav_top+(nav_height-nav_h)/2,nav_w,nav_h);
         p.nav_controls=p.footer;
         p.nav_offset=CGPointMake(nav_x,CGRectGetMidY(p.nav_art)-1016*scale);
         // The footer is drawn over the body and takes its touches, so the content stops at the

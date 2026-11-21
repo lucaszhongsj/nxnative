@@ -201,6 +201,14 @@ int main(int argc, char **argv) { @autoreleasepool {
             EXPECT("picture width",sizes[i].w,(int)vp.width);EXPECT("picture height",sizes[i].h,(int)vp.height);
         }
         EXPECT("empty content is not upscaled",0,fx_wanted((MTLViewport){0,0,2868,1320,0,1},0,720));
+        // DM_PICTURE_FIT (the front end's Picture setting): Fit letterboxes a picture of another shape, Fill covers the drawable and crops its edges. A
+        // turn's first frame is exactly this case: the standing picture (1880x2040) in the lying-down drawable, one frame before the new shape lands
+        { MTLViewport vp = present_viewport(1880, 2040, 2868, 1320);
+          EXPECT("Fit letterboxes the picture of another shape", 1320, (int)vp.height); EXPECT("Fit narrows it", 1216, (int)vp.width); }
+        setenv("DM_PICTURE_FIT", "fill", 1);
+        { MTLViewport vp = present_viewport(1880, 2040, 2868, 1320);
+          EXPECT("Fill covers the drawable's width", 2868, (int)vp.width); EXPECT("Fill runs past its height", 1, vp.height > 1320); }
+        unsetenv("DM_PICTURE_FIT");
     }
     if([MTLFXSpatialScalerDescriptor supportsMetal4FX:g_dev]) {   // the present pass through MetalFX into an offscreen canvas (present_offscreen_m4, as DM_NVN_SHOT_OUT uses it)
         g_fx_mode=1;
@@ -392,7 +400,11 @@ int main(int argc, char **argv) { @autoreleasepool {
         id<MTLTexture> tall=[g_dev newTextureWithDescriptor:td2];
         present_shape(tall,&sa,&sb);EXPECT("a taller texture without DM_SCREEN_ASPECT: 16:9",1080,(int)sb);
         mtl_present_screen(1920,1344);present_shape(tall,&sa,&sb);EXPECT("DM_SCREEN_ASPECT: a texture that follows it keeps the taller shape",1344,(int)sb);
-        present_shape(sw,&sa,&sb);EXPECT("DM_SCREEN_ASPECT: a 16:9 texture of a build without stubs stays 16:9",1080,(int)sb);mtl_present_screen(0,0);
+        present_shape(sw,&sa,&sb);EXPECT("DM_SCREEN_ASPECT: a 16:9 texture of a build without stubs stays 16:9",1080,(int)sb);
+        // A window that holds every shape (loader.c DM_SCREEN_ASPECT_UNION): the picture is the state page's rectangle, whatever the texture's shape
+        mtl_present_picture(1920,888);present_shape(tall,&sa,&sb);EXPECT("a window that holds every shape: the picture's width",1920,(int)sa);EXPECT("a window that holds every shape: the picture's height",888,(int)sb);
+        mtl_present_picture(1880,2040);present_shape(tall,&sa,&sb);EXPECT("a phone that turned: the picture follows",2040,(int)sb);
+        mtl_present_picture(0,0);present_shape(tall,&sa,&sb);EXPECT("no picture rectangle: the shape rules above stand",1344,(int)sb);mtl_present_screen(0,0);
         // The front end's layout and the mouse follow the same shape, not the crop's (front_picture_shape): a real present of the 5:4 crop
         tex_t st={.magic=MAGIC('T', 'E', 'X', 0), .serial =10002};st.d.width=TW;st.d.height=TH;st.d.depth=st.d.levels=1;st.d.format=NVN_FORMAT_RGBA8;st.d.target=NVN_TEXTURE_TARGET_2D;serial_put(st.serial,sw);
         win_t w3={.ntex=1};w3.tex[0]=(NVNtexture *)&st;set((NVNwindow *)&w3,crop54[0],crop54[1],crop54[2],crop54[3]);

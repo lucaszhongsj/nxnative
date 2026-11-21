@@ -241,6 +241,8 @@ def header_one(g):
          f'#define DM_GAME_MEM_MAP_LIMIT {int(mml == "on")}',
          f'#define DM_GAME_STDALLOC_CAP {int(g.get("stdalloc_cap", "0"), 0):#x}ull',   # StandardAllocator's address space with virtual address memory (hle_svc.c); 0 = what the alias region has room for
          f'#define DM_GAME_SCREEN_ASPECT {("off", "on").index(g.get("screen_aspect", "off"))}',   # stubs that follow a screen taller than 16:9 (DM_SCREEN_ASPECT): off / on
+         f'#define DM_GAME_SCREEN_UNION {("off", "on").index(g.get("screen_union", "off"))}',   # the stubs read the window that holds every shape (loader.c DM_SCREEN_ASPECT_UNION): off / on
+         f'#define DM_GAME_PORTRAIT_PAD {("off", "spaced").index(g.get("portrait_pad", "off"))}',   # the standing phone's two-row pad (DmGamepad.m): off = its first generation, spaced = the keys a quarter larger with their gap kept, the D-pad and the 2D layout at that generation
          f'#define DM_GAME_DISPLAY_VERSIONS {vers}',
          f'#define DM_GAME_PRESENT_DISPLAY {int(pi == "display")}',
          f'#define DM_GAME_CORE_PREEMPT {int(cp == "on")}',
