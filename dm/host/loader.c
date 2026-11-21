@@ -365,11 +365,21 @@ static void install_fps_state(module_t *m) {
     if (m->render_scale_max > 1) g_render_scale_max = (float)m->render_scale_max;
 }
 // ---- Screen shape (DM_SCREEN_ASPECT; the profile's screen-shape stubs) ----
-// The range follows the profile: a build with screen-shape stubs (Animal Crossing's patches.py) follows its own half of a standing phone (0.92) and a
-// 19.5:9 phone lying down (2.17), so it takes 0.9 to 2.4; the others keep the 1.3 to 1.77 their stubs were built and checked for.
-#define DM_SCREEN_ASPECT_MIN (DM_GAME_SCREEN_ASPECT ? 0.9f : 1.3f)
-#define DM_SCREEN_ASPECT_MAX (DM_GAME_SCREEN_ASPECT ? 2.4f : 1.77f)
-#define DM_SCREEN_ASPECT_RANGE DM_GAME_SCREEN_ASPECT ? "0.9 to 2.4" : "1.3 to 1.77"
+// The range is main's (1.3 to 1.77, a screen taller than 16:9) plus one device's two shapes: a 19.5:9 phone, standing up (its upper half, 0.92:
+// 0.920 to 0.924 by screen resolution) and lying down (2.17: 2.164 to 2.174). Only the profile whose stubs read the window that holds every shape
+// (Animal Crossing's patches.py) follows them; every other shape is outside the range and keeps 16:9.
+#define DM_SCREEN_ASPECT_MIN 1.3f
+#define DM_SCREEN_ASPECT_MAX 1.77f
+#define DM_SCREEN_PORTRAIT_MIN 0.91f
+#define DM_SCREEN_PORTRAIT_MAX 0.93f
+#define DM_SCREEN_LANDSCAPE_MIN 2.15f
+#define DM_SCREEN_LANDSCAPE_MAX 2.19f
+#define DM_SCREEN_ASPECT_RANGE (DM_GAME_SCREEN_UNION ? "1.3 to 1.77, or a 19.5:9 phone's 0.91 to 0.93 standing and 2.15 to 2.19 lying down" : "1.3 to 1.77")
+static int shape_in_range(float a) {
+    if (a >= DM_SCREEN_ASPECT_MIN && a < DM_SCREEN_ASPECT_MAX) return 1;   // main's range
+    if (!DM_GAME_SCREEN_UNION) return 0;   // the phone's shapes need the profile whose stubs read the output's width (its union window)
+    return (a >= DM_SCREEN_PORTRAIT_MIN && a < DM_SCREEN_PORTRAIT_MAX) || (a >= DM_SCREEN_LANDSCAPE_MIN && a < DM_SCREEN_LANDSCAPE_MAX);
+}
 // The output a shape asks for: the game's own 1920-wide values scale to its width, and its height is the one that gives the ratio, a multiple of 8.
 // Below 16:9 the width narrows when the height would pass the game's layout tables (2048): 0.92 asks for 2088 and gets 1880x2040
 static void shape_output(float a, uint32_t *w, uint32_t *h) {
@@ -458,7 +468,7 @@ void dm_screen_shape(float a) {
         if (!g_fps_applied) return;   // the front end's first layout, before the host applies the boot shape (dm_fps_state_apply): that apply carries this shape and its pixels
         static int once; if (!once++) LOG("[RED] %s: the picture's shape changed while the game runs, but its window holds one shape (no DM_SCREEN_ASPECT_UNION): keeping it", g_fps_mod); return;
     }
-    if (!(a >= DM_SCREEN_ASPECT_MIN && a < DM_SCREEN_ASPECT_MAX)) {   // 16:9: every field zeroed, as a game started without a shape has them
+    if (!shape_in_range(a)) {   // 16:9: every field zeroed, as a game started without a shape has them
         static const size_t off[] = {0x60, 0x74, 0x78, 0x7c};   // the constants outside the frame stub's copy: the tolerance and the HUD camera's
         uint32_t z = 0;
         for (unsigned i = 0; i < sizeof off / sizeof *off; i++) memcpy(dm_fps_state + off[i], &z, 4);
@@ -503,7 +513,7 @@ void dm_fps_state_apply(void) {
     g_union_w = g_union_h = 0;
     if (as && *as && strcmp(as, "0") && strcmp(as, "auto")) {   // 0: 16:9; auto: the iOS front end resolves it to the screen's shape (a Mac window has none)
         char *end; float a = strtof(as, &end);
-        if (end == as || *end || !(a >= DM_SCREEN_ASPECT_MIN && a < DM_SCREEN_ASPECT_MAX)) LOG("[RED] DM_SCREEN_ASPECT=%s: a width / height from %s; keeping 16:9", as, DM_SCREEN_ASPECT_RANGE);
+        if (end == as || *end || !shape_in_range(a)) LOG("[RED] DM_SCREEN_ASPECT=%s: a width / height from %s; keeping 16:9", as, DM_SCREEN_ASPECT_RANGE);
         else {
             const char *ms = getenv("DM_SCREEN_ASPECT_SITES"); uint32_t mask = ms ? (uint32_t)strtoul(ms, NULL, 0) : 0xffffffffu;   // the stubs of the game's own conversions, one bit each (+0x54)
             memcpy(dm_fps_state + 0x54, &mask, 4);
@@ -516,7 +526,7 @@ void dm_fps_state_apply(void) {
             if (un && *un && strcmp(un, "0")) {
                 if (!DM_GAME_SCREEN_UNION) LOG("[RED] DM_SCREEN_ASPECT_UNION: this profile's screen-shape stubs do not read the window's union size; keeping one shape");
                 else if (mask & (1u << 10)) {
-                    uint32_t w0, h0, w1, h1; shape_output(DM_SCREEN_ASPECT_MIN, &w0, &h0); shape_output(DM_SCREEN_ASPECT_MAX, &w1, &h1);
+                    uint32_t w0, h0, w1, h1; shape_output(DM_SCREEN_PORTRAIT_MIN, &w0, &h0); shape_output(DM_SCREEN_LANDSCAPE_MAX, &w1, &h1);   // the two shapes it holds: the tallest and the widest
                     g_union_w = w0 > w1 ? w0 : w1; g_union_h = h0 > h1 ? h0 : h1;
                     LOG("%s: screen shape: the window holds every shape (%ux%u, DM_SCREEN_ASPECT_UNION): the picture may change shape while the game runs", g_fps_mod, g_union_w, g_union_h);
                 } else LOG("[RED] DM_SCREEN_ASPECT_UNION needs the resolution table forced to the picture's mode (bit 10 of DM_SCREEN_ASPECT_SITES): keeping one shape");

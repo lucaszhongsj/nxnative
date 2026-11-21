@@ -2,6 +2,7 @@
 // its safe area and an iPhone Duo's fold (UIKit's division region, which includes its interactive margins), so the Duo harness tests them without a device (dm/ios/tests/duo).
 #pragma once
 #import <UIKit/UIKit.h>
+#include "game_profile.h"   // DM_GAME_SCREEN_UNION: the one device dm_picture_shape_auto follows beyond main's range
 
 NS_ASSUME_NONNULL_BEGIN
 
@@ -37,15 +38,28 @@ static inline CGRect dm_aspect_fill(CGRect b, CGFloat aspect) {
 
 static inline BOOL dm_picture_fill(const char *_Nullable value) { return value && !strcmp(value, "fill"); }   // DM_PICTURE_FIT: fit (default) or fill
 
-// Picture shape "auto" (the launcher's Match screen): the shape of the area the picture fills, so its background covers that
-// area with nothing cropped. Lying down that is the screen's own wide shape (a 19.5:9 phone at 2.17:1); standing up it is the
-// upper half's shape (twice the screen's width / its height: 0.92 on a 19.5:9 phone). A game's screen-shape stubs translate the
-// shape into its own sizes, and the shapes a game accepts are the ones the adapter was built for; the range is loader.c's (0.9 to
-// 2.4). 0 = 16:9.
+// Picture shape "auto" (the launcher's Match screen): for the one device the adapter follows beyond main's taller-screen range, a 19.5:9 phone,
+// the shape of the area the picture fills. Standing up that is the upper half's shape (twice the screen's width / its height: 0.92); lying down
+// the screen's own wide shape (2.17). Every other window keeps main's answer, the screen's long side over its short one from 1.3 to 1.77 (an
+// iPad's 4:3, an unfolded Duo's 1.43). The bands are loader.c's. 0 = 16:9.
 static inline float dm_picture_shape_auto(CGSize window) {
-    double r = window.height > window.width ? 2 * window.width / MAX(window.height, 1)   // standing up: the upper half's shape
-                                            : MAX(window.width, window.height) / MAX(MIN(window.width, window.height), 1);
-    return r >= 0.9 && r < 2.4 ? (float)r : 0.0f;   // loader.c's range; outside it, 16:9
+#if DM_GAME_SCREEN_UNION
+    if (window.height > window.width) {
+        double half = 2 * window.width / MAX(window.height, 1);   // standing up: the upper half's shape
+        if (half >= 0.91 && half < 0.93) return (float)half;
+    } else {
+        double wide = MAX(window.width, window.height) / MAX(MIN(window.width, window.height), 1);
+        if (wide >= 2.15 && wide < 2.19) return (float)wide;
+    }
+#endif
+    double r = MAX(window.width, window.height) / MAX(MIN(window.width, window.height), 1);   // main's shape: a screen taller than 16:9
+    return r >= 1.3 && r < 1.77 ? (float)r : 0.0f;
+}
+
+// Whether the picture's shape changes as the phone turns: only the 19.5:9 phone's two shapes above.
+static inline BOOL dm_picture_shape_follows(CGSize window) {
+    float r = dm_picture_shape_auto(window);
+    return (r >= 0.91f && r < 0.93f) || (r >= 2.15f && r < 2.19f);
 }
 
 static inline CGRect dm_horizontal_division(CGRect b, CGRect division) {

@@ -60,14 +60,14 @@ static void union_shape(void) {
     memset(g_page, 0, sizeof g_page); g_pic_w = g_pic_h = 0;
     setenv("DM_SCREEN_ASPECT", "2.17", 1); setenv("DM_SCREEN_ASPECT_UNION", "1", 1);
     dm_fps_state_apply();
-    check(at(0x68) == 1920 && at(0x6c) == 2048, "the union window is the range's widest and tallest output (1920x2048)");
+    check(at(0x68) == 1920 && at(0x6c) == 2040, "the union window is the widest and tallest output the 19.5:9 phone asks for (1920x2040)");
     check(at(0x64) == 1920 && at(0x48) == 888 && g_pic_w == 1920 && g_pic_h == 888, "the picture keeps the shape asked for (1920x888), and the present is told its rectangle");
     dm_screen_shape(0.92f);
     check(at(0x64) == 1920 && at(0x48) == 888, "the phone turns: the frame's fields wait for its first read (no frame mixes two shapes)");
     check(at(0x220) == 1880 && at(0x224) == 2040 && at(0x23c) == 1, "the request names the picture (1880x2040), with its sequence");
     frame_commit();
     check(at(0x64) == 1880 && at(0x48) == 2040 && atf(0x58) > 0.92f && atf(0x58) < 0.9217f, "the next frame applies it: the picture follows (1880x2040) inside the same window");
-    check(at(0x68) == 1920 && at(0x6c) == 2048, "the window keeps its size while the game runs");
+    check(at(0x68) == 1920 && at(0x6c) == 2040, "the window keeps its size while the game runs");
     dm_screen_shape(0.0f);
     check(at(0x64) == 1880 && at(0x48) == 2040, "16:9 waits for the same read");
     frame_commit();
@@ -99,22 +99,21 @@ int main(void) {
     dm_fps_state = g_page;
     g_fps_mod = "test";
 
-#if DM_GAME_SCREEN_ASPECT
-    shape("0.92", 1880, 2040, "a phone standing up: its upper half's shape, below the overlay's 1.3");
+#if DM_GAME_SCREEN_UNION
+    shape("0.92", 1880, 2040, "a 19.5:9 phone standing up: its upper half's shape");
 #else
-    shape("0.92", 0, 0, "a profile without screen-shape stubs keeps the 1.3 range: 16:9");
+    shape("0.92", 0, 0, "a profile without the union stubs keeps main's 1.3 range: 16:9");
 #endif
-    shape("1.43", 1920, 1344, "an iPhone Duo");
-#if DM_GAME_SCREEN_ASPECT
+    shape("1.12", 0, 0, "a 16:9 phone standing up is not the adapted device: 16:9");
+    shape("1.43", 1920, 1344, "an iPhone Duo keeps main's range");
+#if DM_GAME_SCREEN_UNION
     shape("2.17", 1920, 888, "a 19.5:9 phone lying down");
 #else
-    shape("2.17", 0, 0, "without the stubs the range stops at 1.77: 16:9");
+    shape("2.17", 0, 0, "without the union stubs the range stops at 1.77: 16:9");
 #endif
-#if DM_GAME_SCREEN_ASPECT
-    shape("0.9", 1840, 2048, "the range's own floor");   // 2048 * 0.9 rounded down to a multiple of 8, its height capped at the layouts' 2048
-#endif
-    shape("0.89", 0, 0, "below the range: 16:9");
-    shape(DM_GAME_SCREEN_ASPECT ? "2.4" : "1.77", 0, 0, "the range's ceiling is exclusive: 16:9");
+    shape("0.90", 0, 0, "below the portrait band: 16:9");
+    shape("2.19", 0, 0, "above the landscape band: 16:9");
+    shape("1.77", 0, 0, "main's ceiling is exclusive: 16:9");
     shape("0", 0, 0, "0 is 16:9");
     shape(NULL, 0, 0, "unset is 16:9");
 #if DM_GAME_SCREEN_ASPECT
