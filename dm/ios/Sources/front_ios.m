@@ -189,7 +189,7 @@ static void launcher_done(void) { [g_root startGame]; }
     const char *dev = front_ios_device_check();
     if (dev) { [self showHint:[NSString stringWithFormat:@"This device is not supported.\n%s", dev]]; return; }   // the host does not start
     {   // Picture shape "auto" (the launcher's Match screen). Resolved here, before the host writes the state page (main.c dm_fps_state_apply).
-        // A build with screen-shape stubs asks for the shape of the area the picture fills, so its background covers that area with nothing cropped:
+        // A build whose stubs read the union window (`screen_union`) asks for the shape of the area the picture fills, so its background covers it uncropped:
         // lying down the screen's own wide shape (a 19.5:9 phone at 2.17:1), standing up the upper half's shape (0.92), so the picture fills that half
         // and the panel takes the lower half. The console mode is not part of it: it changes the game's resolution, not the picture's shape. Physical
         // rotation changes nothing. Another build keeps the window's own shape where its long side over the short one is 1.3 to 1.77 (an iPad's 4:3,
@@ -215,17 +215,21 @@ static void launcher_done(void) { [g_root startGame]; }
             float r = dm_picture_shape_auto(sz);
             char v[16]; if (r > 0) snprintf(v, sizeof v, "%.3f", r); else strcpy(v, "0");
             setenv("DM_SCREEN_ASPECT", v, 1); LOG("front end: picture shape auto: window %.0fx%.0f points (%s) → DM_SCREEN_ASPECT=%s", sz.width, sz.height, portrait ? "standing" : "lying down", v);
-            // The pixels the picture is shown in (the game view is the window's width both ways): the host caps the picture's output to them, so the game
-            // draws at the screen's resolution instead of the shape's 1920-wide space -- a standing phone drew 1880x2040 into a 1206x1311 view, 2.4 times
-            // the pixels, and a turn's frames were 2.2 times the lying-down ones (loader.c shape_output_capped)
-            CGFloat sc = self.view.window ? self.view.window.screen.nativeScale : UIScreen.mainScreen.nativeScale;
-            char px[32]; snprintf(px, sizeof px, "%ux%u", (unsigned)(sz.width * sc), (unsigned)(sz.height * sc));
-            setenv("DM_SCREEN_ASPECT_PX", px, 1); LOG("front end: picture shape auto: the picture's output is capped to the window's %s pixels", px);
-            self.lastPixelW = (uint32_t)(sz.width * sc); self.lastPixelH = (uint32_t)(sz.height * sc);   // the layout's first pass then has nothing to send: the host applies the boot shape with these pixels
-            // The game's window textures are built once, at start: a profile whose stubs read the union size has the host make them large enough for every
-            // shape its range allows, so the phone can turn while the game runs (dm_screen_shape, followShape below)
-            self.shapeAuto = r > 0 && DM_GAME_SCREEN_UNION; self.lastShape = self.shapeAuto ? r : 0;
-            if (self.shapeAuto) { setenv("DM_SCREEN_ASPECT_UNION", "1", 1); g_picture_aspect = r; LOG("front end: picture shape auto: the game's window holds every shape (DM_SCREEN_ASPECT_UNION), so the picture follows the phone turning"); }
+            // Only the 19.5:9 phone's two shapes are followed: its window textures are made large enough for both (the union), so the picture follows the
+            // phone turning (dm_screen_shape, followShape below), and its output is capped to the view's pixels (loader.c shape_output_capped). Every
+            // other device keeps main's answer above and no union.
+            self.shapeAuto = DM_GAME_SCREEN_UNION && dm_picture_shape_follows(sz); self.lastShape = self.shapeAuto ? r : 0;
+            if (self.shapeAuto) {
+                // The pixels the picture is shown in (the game view is the window's width both ways): the host caps the picture's output to them, so the game
+                // draws at the screen's resolution instead of the shape's 1920-wide space -- a standing phone drew 1880x2040 into a 1206x1311 view, 2.4 times
+                // the pixels, and a turn's frames were 2.2 times the lying-down ones
+                CGFloat sc = self.view.window ? self.view.window.screen.nativeScale : UIScreen.mainScreen.nativeScale;
+                char px[32]; snprintf(px, sizeof px, "%ux%u", (unsigned)(sz.width * sc), (unsigned)(sz.height * sc));
+                setenv("DM_SCREEN_ASPECT_PX", px, 1); LOG("front end: picture shape auto: the picture's output is capped to the window's %s pixels", px);
+                self.lastPixelW = (uint32_t)(sz.width * sc); self.lastPixelH = (uint32_t)(sz.height * sc);   // the layout's first pass then has nothing to send: the host applies the boot shape with these pixels
+                setenv("DM_SCREEN_ASPECT_UNION", "1", 1); g_picture_aspect = r;
+                LOG("front end: picture shape auto: the game's window holds every shape (DM_SCREEN_ASPECT_UNION), so the picture follows the phone turning");
+            }
         }
 #endif
     }
