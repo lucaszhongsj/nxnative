@@ -4,6 +4,9 @@
 #include <string.h>
 #include <stdint.h>
 typedef struct { uint32_t id; float x, y; } dm_touch;
+// The frame step page hle_touch.c reads +0x58 from: zero (16:9) until the picture-shape cases set a ratio.
+static uint8_t g_state_page[0x60];
+uint8_t *dm_fps_state = g_state_page;
 void dm_touch_set(const dm_touch *t, int n);
 int touch_fill(void *out, uint64_t now_ns);
 int touch_fill_n(void *out, int max, uint64_t now_ns, int points);
@@ -63,6 +66,18 @@ int main(void) {
         int r = touch_fill_n(got, 16, T0 + 283333339, 0); cases++;
         if (r != 0 || memcmp(got, exp, sizeof exp)) { fails++; printf("\u2717 console mode: an empty state numbered 18\n"); } else printf("\u2713 console mode: an empty state numbered 18\n"); }
     expect("handheld after console mode: number 19, the Start kept (640, 360)", T0 + 300000006, 19, 1, (want_pt[]){{16666667, 1, 6, 640, 360}});
+    dm_touch_set(NULL, 0); touch_fill((uint8_t[0x290]){0}, T0 + 316666673);                 // sample 20: End
+    // 9 Picture shapes: a wider picture centres the interface across part of the width, so x maps; a taller one centres it across part of
+    // the height, so y maps. The game reads the touch panel as 1280x720, so the mapped value is what lands there.
+    float r = 2.0f; memcpy(g_state_page + 0x58, &r, 4);
+    dm_touch w = {7, 0.0f, 0.5f}; dm_touch_set(&w, 1);
+    expect("wider picture: x 0 lands on the interface's left edge (0, 360)", T0 + 333333340, 21, 1, (want_pt[]){{16666667, 1, 7, 0, 360}});
+    dm_touch_set(NULL, 0); touch_fill((uint8_t[0x290]){0}, T0 + 350000007);                 // sample 22: End
+    r = 0.92f; memcpy(g_state_page + 0x58, &r, 4);
+    dm_touch t = {8, 0.5f, 0.0f}; dm_touch_set(&t, 1);
+    expect("taller picture: y 0 lands on the interface's top edge (640, 0)", T0 + 366666674, 23, 1, (want_pt[]){{16666667, 1, 8, 640, 0}});
+    dm_touch_set(NULL, 0); touch_fill((uint8_t[0x290]){0}, T0 + 383333341);                 // sample 24: End
+    r = 0.0f; memcpy(g_state_page + 0x58, &r, 4);
     printf("== %d checks, %d failed ==\n", cases, fails);
     return fails != 0;
 }
