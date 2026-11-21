@@ -203,6 +203,8 @@ struct EdenNode:Identifiable {
 }
 struct EdenFrame {
     let bindings:EdenBindings,page:String,nodes:[EdenNode],scrolls:[[String:Any]]
+    let wallpaperNode:EdenNode?
+    let plainWallpaper:String?   // a 3D layout keeps the default wallpaper (theme 0), not the page's chosen one
     let extraWidth: Double
     private let extraRecipeColumns: Int
     private let wideRecipes: Bool
@@ -266,6 +268,16 @@ struct EdenFrame {
                 rect.origin.x+=Double(i%cols)*step;rect.origin.y+=Double(i/cols)*b.value(d["repeat_row_dy"])
                 if let k=d["x_bind"] as? String{rect.origin.x+=b.number(k)*((d["x_scale"] as? NSNumber)?.doubleValue ?? 1)}
                 if let k=d["y_bind"] as? String{rect.origin.y+=b.number(k)*((d["y_scale"] as? NSNumber)?.doubleValue ?? 1)}
+                var data=d
+                if page=="phone" {
+                    rect=Self.phoneRect(rect,index:index,i:i)
+                    // The frame module draws its rounded card from the w/h query.
+                    if index==1 || index==2,let src=data["src"] as? String {
+                        data["src"]=src.replacingOccurrences(of:"w=1071&h=1048",with:"w=1216&h=1048")
+                    }
+                    // The app labels grow with the icons: the authored 3.3 was for a 210-point disc.
+                    if index==7 || index==11 { data["text_scale"]=4.2; data["wrap_width"]=200 }
+                }
                 if extraWidth > 0 {
                     rect = Self.wideRect(rect, kind:d["type"] as? String ?? "rect",
                                          index:index, page:page, width:extraWidth,
@@ -281,7 +293,7 @@ struct EdenFrame {
                     rect.origin.y-=offsets[s] ?? 0
                     if let clip,rect.height>0 && !clip.intersects(rect){continue}
                 }
-                result.append(EdenNode(id:index*256+i,data:d,rect:rect,clip:clip))
+                result.append(EdenNode(id:index*256+i,data:data,rect:rect,clip:clip))
             }
         }
         // Scroll adornments belong directly after their list, before later cards
@@ -305,7 +317,15 @@ struct EdenFrame {
         }
         let sorted=result.sorted { $0.id < $1.id }
         // A 3D layout floats its pad over the band: only the wallpaper stays, so the controls read against one surface.
-        nodes=backgroundOnly ? sorted.filter { $0.data["type"] as? String == "image" && $0.rect.width >= 1240 } : sorted
+        // The wallpaper is taken before a page's nodes are dropped: it is the exact full-canvas image, and nothing else
+        // from the page (a card, a dock, the theme sheet) may reach the band then.
+        let wall=sorted.first { $0.kind=="image" && $0.rect == CGRect(x:0,y:0,width:1240,height:1080) }
+        wallpaperNode=wall
+        // A page's wallpaper carries its own content panel (the pockets' paper, the map's sea); drawn full-bleed in a
+        // 3D layout that reads as a card behind the pad. 3D takes the player's chosen theme's whole-page picture
+        // instead (bg/<theme>/all), so the wallpaper they picked stays, without a page's panel.
+        plainWallpaper=backgroundOnly ? "module:acnh/bg/\(max(0,Int(b.number("@flag:theme"))))/all" : nil
+        nodes=backgroundOnly ? [] : sorted
     }
     static func scrollLimit(_ spec:[String:Any], _ bindings:EdenBindings) -> Double {
         let cols = max(1,bindings.value(spec["cols"]))
@@ -327,6 +347,35 @@ struct EdenFrame {
             else if n.rect.minY<960 {body.append(n)}
         }
         return (body,footer)
+    }
+    // The phone page fills the band like the other pages: the authored layout centres a
+    // 732x643 app grid in a 1071-wide card, which reads as a small block on a phone's
+    // narrow band. Grid cells follow the authored 3-column repeat; the theme sheet
+    // (index >= 70) and the dock (>= 35) keep their authored rects.
+    private static func phoneRect(_ rect:CGRect,index:Int,i:Int) -> CGRect {
+        guard index < 35, rect.minY < 960 else { return rect }
+        // 3 x 3, the authored page's capacity (repeat 9, a fresh island fills six): the card keeps the module's own
+        // height so the artwork behind the icons grows with them, and the last row's labels stay clear of the page
+        // dots at 935.
+        let cell=CGPoint(x:240+CGFloat(i%3)*380,y:300+CGFloat(i/3)*240)
+        var rect=rect
+        switch index {
+        case 1...4: rect=CGRect(x:12,y:12,width:1216,height:1048)
+        case 5,9: rect=Self.centre(CGSize(width:220,height:220),at:cell)
+        case 6,10: rect=Self.centre(CGSize(width:132,height:132),at:cell)
+        case 7,11: rect.origin=CGPoint(x:cell.x,y:cell.y+84)    // under the icon, inside the disc
+        case 8,12: rect=Self.centre(CGSize(width:300,height:300),at:cell)
+        case 13...16: rect.origin.y=935
+        case 17...20: rect=Self.centre(rect.size,at:CGPoint(x:72,y:500))
+        case 21...24: rect=Self.centre(rect.size,at:CGPoint(x:1168,y:500))
+        case 25: rect.origin=CGPoint(x:620,y:150)
+        case 26...28: rect=Self.centre(rect.size,at:CGPoint(x:1160,y:150))
+        default:break
+        }
+        return rect
+    }
+    private static func centre(_ size:CGSize,at point:CGPoint) -> CGRect {
+        CGRect(x:point.x-size.width/2,y:point.y-size.height/2,width:size.width,height:size.height)
     }
     private static func wideRect(_ rect:CGRect,kind:String,index:Int,page:String,width:Double,
                                  widePockets:Bool,wideRecipes:Bool) -> CGRect {
@@ -853,10 +902,11 @@ private func edenLabelKey(_ text:String,_ scale:Double,_ color:Any?,_ weight:Str
             #endif
             let f=EdenFrame(model:model,manifest:manifest,local:local,extraWidth:layout.extraWidth,backgroundOnly:model.backgroundOnly)
             let (bodyNodes,footerNodes)=f.sections(renderNodes(f))
-            let hasDock=footerNodes.contains(where: { $0.isDockArtwork })
-            let navNodes=footerNodes.filter { !$0.isDockArtwork }
+            // A 3D layout keeps the wallpaper alone: no bar, no dock, no page below it, whatever reached this point.
+            let hasDock = !model.backgroundOnly && footerNodes.contains(where: { $0.isDockArtwork })
+            let navNodes=model.backgroundOnly ? [] : footerNodes.filter { !$0.isDockArtwork }
             let artwork=layout.bodyArtwork(bodyNodes)
-            let wallpaper=artwork.background.map(f.source)
+            let wallpaper=f.plainWallpaper ?? (f.wallpaperNode ?? artwork.background).map(f.source)
             let nodes=artwork.content+navNodes
             let keys=assetKeys(navNodes+artwork.content,f,wallpaper:wallpaper)
             Canvas{context,_ in
@@ -875,6 +925,7 @@ private func edenLabelKey(_ text:String,_ scale:Double,_ color:Any?,_ weight:Str
 
             }
             .background(edenColor(manifest.root["background"],"#FF000000"))
+            .onChange(of:wallpaper){ value in if model.backgroundOnly { FileHandle.standardError.write(Data("companion: 3D band wallpaper \(value ?? "none")\n".utf8)) } }
             .contentShape(layout.touchShape)
             .gesture(DragGesture(minimumDistance:0).updating($dragTouch){_,active,_ in active=true}.onChanged{g in
                 let inNav=layout.navControls.contains(g.startLocation)
@@ -922,8 +973,6 @@ private func edenLabelKey(_ text:String,_ scale:Double,_ color:Any?,_ weight:Str
                 }
             })
             .simultaneousGesture(MagnificationGesture().updating($pinchTouch){_,active,_ in active=true}.onChanged{v in beginInteraction();if f.page=="map" {mapZoom=min(3,max(1,pinchStart*v));mapPan=clampedPan(mapPan,f)}}.onEnded{_ in pinchStart=mapZoom})
-            // The same bottom bar triple tap as DmGamepad.m's, on the Tap side: the panel takes these touches, so it switches back to 3D.
-            .simultaneousGesture(SpatialTapGesture(count:3).onEnded{value in if layout.navControls.contains(value.location){model.toggleLayout()}})
             .accessibilityRepresentation {
                 ForEach(accessibleNodes(nodes)){n in
                     Button(n.data["apple_label"] as? String ?? accessibilityLabel(n,f)){model.uiActivity?(1,true);action(n,f);model.uiActivity?(1,false)}.accessibilityIdentifier("duo."+(n.data["id"] as? String ?? n.action)+".\(n.payload)")

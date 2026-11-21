@@ -7,8 +7,10 @@
 //   3D (full, Pro Controller style): everything in 2D (left stick and diamond keep their place and size), plus a D-pad (inward of and below the left stick, 8-way), a right stick that is not drawn
 //     (a touch landing in the right third of the screen on no control holds it: centred where it lands, the centre dragged along once the finger passes the stick radius) and L3 / R3 (small round keys in the top row, inward of ZL / ZR).
 //     Breath of the Wild crouches with L3 and uses the scope with R3; 3D World and Breath of the Wild turn the camera with the right stick.
+//   A standing phone (a portrait split) lays its controls out in two rows instead: the left stick and the ABXY diamond in the upper row, the D-pad and the right stick in the lower one, each in its own column, at 50 % and 80 % of the band.
+//     Its right stick has a ring of its own and is drawn and pressed there, its keys are a quarter larger than the overlay's and its D-pad reaches as far as the diamond's keys, so the two read as one size.
 //   Touch-down ownership: the menu button where it is nearer than a locked key (a view of its own, DmMenuButton), locked keys next (shoulders, − / +, L3 / R3), then whichever of the diamond, the D-pad and the left stick has the smallest distance / grab radius (the left stick's grab circle borders the D-pad),
-//     then in 3D the right stick for a touch in the right third.
+//     then in 3D the right stick: its own ring where a standing phone draws one, the right third of the screen otherwise.
 //   Everything hugs the edges and corners to leave the picture room; controls sit over the picture, one CAShapeLayer each: a press only swaps the fill, a stick only moves its knob, nothing redraws the whole screen.
 //   Touches no control takes (in 3D, those outside the right third) go to the game's touch screen when DmLayout assigns a local game viewport (pushGame; Super Mario Galaxy's pointer in handheld mode).
 //   The virtual gamepad (all but the menu button) hides while a physical controller is connected and comes back when it is removed; unclaimed touches go to the game only when a local game viewport exists. Physical controllers keep every button (D-pad and right stick included) and map by position: bottom = B, right = A, left = Y, top = X (same positions as on a Switch controller); a Nintendo pad maps by its labels (pad_apple.h).
@@ -128,7 +130,17 @@ static const CGFloat
     K_DPAD_GRAB = 1.3,                              // D-pad grab radius (times the outer edge)
     K_RSTICK_R = 60,                                // right stick (not drawn): radius around its centre, the touch-down point
     K_RSWIPE = 1.0 / 3,                             // right stick area: this fraction of the screen width from the right edge (not in u)
-    K_CLICK_X = 102, K_CLICK_R = 17;                // L3 / R3: centre from the outer edge (level with ZL / ZR), radius
+    // A standing phone's band: two rows of controls whose sizes and unit are DmLayout.h's (dm_pad_portrait_sizes, dm_pad_portrait_unit), one generation each
+    K_SPLIT_SCALE = DM_PAD_SPLIT_SCALE,             // the portrait keys are a quarter larger than the overlay's: a standing phone's band is a third of the screen
+    K_TOP_LIFT = 5,                                 // this profile's top row sits this far higher than its margins give it (a device): the shoulders,
+                                                    // the stick clicks, the pills, the menu gear and the frame-rate counter under it, standing or lying down
+    K_CLICK_X = 102, K_CLICK_R = 17,                // L3 / R3: centre from the outer edge (level with ZL / ZR), radius
+    K_NAV_BAR_SHARE = 0.35,                           // the home indicator's length, the share of the screen's short side the system draws it at
+    K_NAV_H = 34, K_NAV_SLOP = 10, K_NAV_GAP = 0.5;   // the home indicator takes the triple tap that switches the pad and the touch screen. Its
+                                                      // length follows the screen's short side (K_NAV_BAR_SHARE: about 141 points on a 402-point
+                                                      // phone) and doubles lying down; the safe strip it sits in is 34 tall instead of the bar's
+                                                      // own 5, where a finger cannot land. K_NAV_SLOP goes around both for the finger's aim, and
+                                                      // K_NAV_GAP is the taps' spacing in seconds (a slow triple tap still counts)
 static const int k_btns[] = {B_ZL, B_L, B_ZR, B_R, B_MINUS, B_PLUS, B_LS, B_RS};   // keys locked at touch-down (L3 / R3 only in the 3D layout)
 static NSString *const k_layout_key = @"DmPadLayout";   // NSUserDefaults: 0 = 2D, 1 = 3D, 2 = Tap (DM_GAME_PAD_LAYOUT's numbers)
 int dm_opmode(void);   // hle_oe.c: 0 = handheld
@@ -152,10 +164,11 @@ static void pads_start(void);   // Physical controllers, below
     NSMapTable<UITouch *, NSNumber *> *_owner;     // touch → control (with the key for C_BTN or the stick for C_STICK, << 8)
     UITouch *_stick[2]; CGPoint _stickNow[2];      // the touch holding each stick and where it is now (0 left, 1 right)
     CGPoint _rCentre;                              // the right stick's centre: where its touch landed, dragged along past K_RSTICK_R
+    NSTimeInterval _navTapAt; int _navTaps;         // the taps of a bottom triple tap so far, and when the last one came
     uint64_t _faceBits, _dpadBits, _btnBits;
     NSMapTable<UITouch *, NSNumber *> *_faceOf;    // which keys each touch on the diamond currently holds
     CAShapeLayer *_key[B_N]; CATextLayer *_label[B_N];   // one layer per key
-    CAShapeLayer *_ring, *_knob;                   // the left stick (the right one is not drawn)
+    CAShapeLayer *_ring, *_knob, *_rring, *_rknob;   // the sticks; the right one is drawn only where the geometry gives it a place (a standing phone)
     DmMenuButton *_menu;                           // opens the in-game menu (GameMenu.swift)
     UIImpactFeedbackGenerator *_touchFeedback;       // one short feedback per touch-control press edge
     unsigned _hapticSticks;
@@ -205,6 +218,10 @@ static BOOL fullOnly(int b) { return b == B_LS || b == B_RS || b >= B_LEFT; }   
         _knob = shape(_controls);
         CAShapeLayer *in = [CAShapeLayer layer]; in.fillColor = nil; in.strokeColor = k_line.CGColor; in.lineWidth = 1.5;   // inner ring of the knob
         [_knob addSublayer:in];
+        _rring = shape(_controls); _rring.fillColor = k_ringFill.CGColor; _rring.name = @"rightStickRing";   // named for the Duo harness, which checks that it shows with the band
+        _rknob = shape(_controls);
+        CAShapeLayer *rin = [CAShapeLayer layer]; rin.fillColor = nil; rin.strokeColor = k_line.CGColor; rin.lineWidth = 1.5;
+        [_rknob addSublayer:rin];
         static NSString *const names[B_N] = {@"A", @"B", @"X", @"Y", @"L3", @"R3", @"L", @"R", @"ZL", @"ZR", @"+", @"−"};
         for (int b = 0; b < B_N; b++) {
             _key[b] = shape(_controls);
@@ -218,9 +235,11 @@ static BOOL fullOnly(int b) { return b == B_LS || b == B_RS || b >= B_LEFT; }   
         __weak DmGamepad *weakSelf = self;
         [_menu addAction:[UIAction actionWithHandler:^(UIAction *a) { (void)a; [weakSelf reset]; }] forControlEvents:UIControlEventMenuActionTriggered];   // the menu opens: release every key and touch first
         [self addSubview:_menu];
-        NSNumber *saved = [NSUserDefaults.standardUserDefaults objectForKey:k_layout_key];
+        // This profile's layout switch is for the run only: it starts from the profile's own pad_layout and never reads a stored choice.
+        NSNumber *saved = g_padSpaced ? nil : [NSUserDefaults.standardUserDefaults objectForKey:k_layout_key];
         int l = saved ? (int)saved.integerValue : DM_GAME_PAD_LAYOUT;
-        if (l == 2 && dm_opmode() != 0) l = 0;   // Tap only in handheld mode (env.txt's DM_OPMODE may have changed it)
+        // Tap is the game's touch screen on the standard rules (handheld only); this profile's is the band's panel, which takes touches either way.
+        if (!g_padSpaced && l == 2 && dm_opmode() != 0) l = 0;
         _full = l == 1; _tap = l == 2;
         [self applyLayout];
         NSNotificationCenter *nc = NSNotificationCenter.defaultCenter;
@@ -248,13 +267,15 @@ extern void dm_companion_ui_background(int on) __attribute__((weak));
 }
 - (int)padLayout { return _tap ? 2 : _full ? 1 : 0; }
 - (void)setPadLayout:(int)l {   // the in-game menu's pick: release every touch first (no key stays held), save, lay out again
-    if (l == 2 && dm_opmode() != 0) l = 0;
+    if (g_padSpaced && l == 0) l = 1;   // this profile has 3D and Tap only, in either console mode: 2D is never entered
+    if (!g_padSpaced && l == 2 && dm_opmode() != 0) l = 0;
     [self reset];
     _full = l == 1; _tap = l == 2;
-    [NSUserDefaults.standardUserDefaults setObject:@(l) forKey:k_layout_key];
+    if (!g_padSpaced) [NSUserDefaults.standardUserDefaults setObject:@(l) forKey:k_layout_key];   // this profile keeps it for the run only
     [self applyLayout]; [self setNeedsLayout];
 }
 - (void)opmodeChanged {   // docked: the Tap layout goes (the game reads no touch screen then), unsaved, so handheld mode at the next start brings it back
+    if (g_padSpaced) return;   // this profile's Tap is the band's panel, which takes touches in either mode
     if (!_tap || dm_opmode() == 0) return;
     [self reset]; _tap = NO; _full = NO; [self applyLayout]; [self setNeedsLayout];
 }
@@ -273,63 +294,134 @@ extern void dm_companion_ui_background(int on) __attribute__((weak));
 }
 - (CGRect)safe { return CGRectIntersection(_layout.controls, UIEdgeInsetsInsetRect(self.bounds, dm_game_safe_insets(self.bounds, self.safeAreaInsets, _layout.topSafeOnly))); }
 - (CGRect)corner { if (_layout.separated) return self.safe; UIEdgeInsets i = self.safeAreaInsets; i.left *= K_CORNER_IN; i.right *= K_CORNER_IN; return UIEdgeInsetsInsetRect(self.bounds, i); }   // the rectangle the bottom-corner controls use
-- (CGFloat)u { if (_layout.separated) { CGRect s = self.safe; return MIN(MIN(s.size.height / 430.0, s.size.width / 700.0), 1.3); } return MIN(self.bounds.size.height / 430.0, 1.3); }   // 1 = 430 points tall (iPhone Pro Max landscape)
+- (CGFloat)u { if (self.portraitControls) return self.portraitUnit; if (_layout.separated) { CGRect s = self.safe; return MIN(MIN(s.size.height / 430.0, s.size.width / 700.0), 1.3); } return MIN(self.bounds.size.height / 430.0, 1.3); }   // 1 = 430 points tall (iPhone Pro Max landscape)
 static CGPoint side(CGRect s, int right, CGFloat dx, CGFloat y) { return CGPointMake(right ? CGRectGetMaxX(s) - dx : CGRectGetMinX(s) + dx, y); }
-- (BOOL)portraitControls { return _layout.separated && self.bounds.size.height > self.bounds.size.width; }
+static CGFloat dist(CGPoint a, CGPoint b) { return hypot(a.x - b.x, a.y - b.y); }
+// The two-row pad below is a profile's own (DM_GAME_PORTRAIT_PAD): another game keeps the overlay's single row in its band.
+- (BOOL)portraitControls { return g_padSpaced && _layout.separated && self.bounds.size.height > self.bounds.size.width; }
+
+// The standing phone's pad at its later generation: the keys spaced for their size, the D-pad sized from them, and the menu without 2D
+// (DM_GAME_PORTRAIT_PAD, the profile's portrait_pad row). A profile without it keeps the first generation.
+static BOOL g_padSpaced = DM_GAME_PORTRAIT_PAD;
+// The unit of a standing phone's controls: the gap between the two rows, so every device gets the largest size its rows allow (DmLayout.h).
+- (CGFloat)portraitUnit { return dm_pad_portrait_unit(self.safe, g_padSpaced); }
+- (DmPadPortraitSizes)portraitSizes { return dm_pad_portrait_sizes(g_padSpaced); }
+
 - (CGPoint)portraitThumbCenter:(BOOL)right {
-    CGRect s = self.safe;
-    return CGPointMake(CGRectGetMinX(s) + s.size.width * (right ? 0.72 : 0.28),
-                       CGRectGetMinY(s) + s.size.height * 0.58);
+    CGPoint c = dm_pad_portrait_column(self.safe, right); CGPoint r = dm_pad_portrait_row(self.safe, NO, g_padSpaced);
+    return CGPointMake(c.x, r.y);
 }
 - (CGPoint)faceCenter { CGRect s = self.corner; CGFloat u = self.u;
     if (self.portraitControls) return [self portraitThumbCenter:YES];
+    if (g_padSpaced) {   // the diamond's outer edge keeps the shoulders' margin, on the stick's own line
+        CGFloat reach = (DM_PAD_SPACED_EDGE_X_U + K_FACE_GAP + K_FACE_R) * u;
+        return side(s, 1, reach, CGRectGetMaxY(s) - (DM_PAD_SPACED_EDGE_Y_U + K_FACE_GAP + K_FACE_R) * u);
+    }
     CGFloat edge = _layout.separated ? self.faceGap + self.faceHitR : 0;
     return side(s, 1, MAX(K_FACE_X * u, edge), CGRectGetMaxY(s) - MAX(K_PAD_Y * u, edge)); }
-- (CGFloat)faceGap { return K_FACE_GAP * self.u; }
-- (CGFloat)faceR { return K_FACE_R * self.u; }
-- (CGFloat)faceHitR { return MAX(self.faceR * 1.25, _layout.separated ? 22 : 0); }
+- (CGFloat)faceGap { return (self.portraitControls ? [self portraitSizes].faceGap : K_FACE_GAP) * self.u; }
+- (CGFloat)faceR { return (self.portraitControls ? [self portraitSizes].faceR : K_FACE_R) * self.u; }
+// The hit circle is a quarter larger than the drawn key (half of a 44-point target at the smallest sizes), and in a split it reaches the midpoint
+// between two keys -- where both count -- and stops short of a neighbour's centre, so a key's centre selects that key alone.
+- (CGFloat)faceHitR { CGFloat r = self.faceR * 1.25; if (self.portraitControls) return MIN(MAX(r, self.faceGap * 0.75), 1.2 * self.faceGap); return MAX(r, _layout.separated ? 22 : 0); }
 - (CGPoint)facePos:(int)b { CGPoint c = self.faceCenter; CGFloat g = self.faceGap;
     switch (b) { case B_A: return CGPointMake(c.x + g, c.y); case B_B: return CGPointMake(c.x, c.y + g); case B_X: return CGPointMake(c.x, c.y - g); default: return CGPointMake(c.x - g, c.y); } }
 - (CGPoint)stickHome {
-    if (self.portraitControls) {
-        CGPoint p = [self portraitThumbCenter:NO];
-        if (_full) p.x -= self.dpadR + 6 * self.u;
-        return p;
-    }
+    if (self.portraitControls) return [self portraitThumbCenter:NO];
     CGRect s = self.corner;
+    if (g_padSpaced) return side(s, 0, (DM_PAD_SPACED_EDGE_X_U + K_STICK_R) * self.u, CGRectGetMaxY(s) - (DM_PAD_SPACED_EDGE_Y_U + K_STICK_R) * self.u);
     return side(s, 0, K_STICK_X * self.u, CGRectGetMaxY(s) - K_PAD_Y * self.u);
 }
-- (CGPoint)stickCentre:(int)i { return i ? _rCentre : self.stickHome; }
-- (CGFloat)stickR:(int)i { return (i ? K_RSTICK_R : K_STICK_R) * self.u; }
-- (BOOL)inRightArea:(CGPoint)p { CGRect b = _layout.controls; return p.x >= CGRectGetMaxX(b) - b.size.width * K_RSWIPE; }
+// The drawn right stick is a little under the left one (DM_PAD_DPAD_SCALE, the D-pad's own measure), so the lower row reads as one size.
+- (CGFloat)stickR:(int)i { return (i ? (self.rightStickDrawn ? DM_PAD_DPAD_SCALE * K_STICK_R : K_RSTICK_R) : K_STICK_R) * self.u; }
+// The right stick of a standing phone's 3D layout has a place of its own, so it is drawn and pressed there. The 2D layout has no right stick at all,
+// and a lying phone keeps the undrawn one (a touch in the right third holds it), so neither draws a ring.
+- (BOOL)rightStickDrawn { return self.portraitControls && _full; }
+- (CGPoint)rightStickHome {
+    CGPoint c = dm_pad_portrait_column(self.safe, YES); CGPoint r = dm_pad_portrait_row(self.safe, YES, g_padSpaced);
+    return CGPointMake(c.x, r.y);
+}
+- (BOOL)inRightArea:(CGPoint)p {
+    if (self.rightStickDrawn) return dist(p, self.rightStickHome) <= MAX([self stickR:1], 22);
+    CGRect b = _layout.controls; return p.x >= CGRectGetMaxX(b) - b.size.width * K_RSWIPE;
+}
 - (CGPoint)dpadCenter {
     if (self.portraitControls) {
-        CGPoint p = [self portraitThumbCenter:NO];
-        p.x += [self stickR:0] + 6 * self.u;
-        return p;
+        CGPoint c = dm_pad_portrait_column(self.safe, NO); CGPoint r = dm_pad_portrait_row(self.safe, YES, g_padSpaced);
+        return CGPointMake(c.x, r.y);
     }
     CGRect s = self.corner; CGFloat u = self.u;
+    if (g_padSpaced) return side(s, 0, DM_PAD_SPACED_LOW_X_U * u, CGRectGetMaxY(s) - (DM_PAD_SPACED_EDGE_Y_U + K_STICK_R) * u);   // on the stick's and the diamond's line
     return side(s, 0, K_LOW_X * u, CGRectGetMaxY(s) - K_LOW_Y * u);
 }
-- (CGFloat)dpadR { return K_DPAD_R * self.u; }
+- (CGFloat)dpadR {
+    if (self.portraitControls) return [self portraitSizes].dpadR * self.u;
+    return (g_padSpaced ? DM_PAD_DPAD_SCALE * K_STICK_R : K_DPAD_R) * self.u;
+}
+- (CGFloat)armW {
+    if (self.portraitControls) return [self portraitSizes].armW * self.u;
+    if (g_padSpaced) return self.dpadR * DM_PAD_DPAD_ARM_RATIO;   // the later generation keeps the arms' 17:48 proportion at its larger reach
+    return K_ARM_W * self.u;
+}
+- (CGFloat)armIn {
+    if (self.portraitControls) return [self portraitSizes].armIn * self.u;
+    return K_ARM_IN * self.u;
+}
 static BOOL isDrop(int b) { return b == B_ZL || b == B_L || b == B_ZR || b == B_R; }
 static BOOL isClick(int b) { return b == B_LS || b == B_RS; }
+// A standing phone's band is a third of the screen, so its keys are drawn a quarter larger than the overlay's: the shoulder teardrops, the L3 / R3
+// clicks and the stick's knob. The band is for the thumb, not for the art.
+- (CGFloat)splitScale { return self.portraitControls ? K_SPLIT_SCALE : 1; }
 - (CGPoint)dropCenter:(int)b { CGRect s = self.safe; CGFloat u = self.u; BOOL z = b == B_ZL || b == B_ZR;
     CGFloat edge = _layout.separated ? 22 : 0;
+    if (g_padSpaced) {
+        // The later generation draws each shoulder at the ABXY key's radius, and its circle keeps the margin it had: the centre moves by however much
+        // the radius changed. A standing phone's column also sits in from the edge and down from the band's top, and the two keys of a column stay the
+        // gap apart they had (ten points on a standing phone, a key and a half on a lying one).
+        CGFloat rNew = [self dropR:B_ZL], rOld = K_ZL_R * u * self.splitScale;
+        CGFloat x = MAX(K_ZL_X * u, edge) + (rNew - rOld), y = MAX(K_ZL_Y * u, edge) + (rNew - rOld);
+        if (self.portraitControls) { x += s.size.width * DM_PAD_PORTRAIT_SHOULDER_SHIFT; y += s.size.height * DM_PAD_PORTRAIT_SHOULDER_SHIFT; }
+        if (!z) y += 2 * rNew + (self.portraitControls ? DM_PAD_PORTRAIT_GAP_U * u : (K_L_Y - K_ZL_Y - K_ZL_R - K_L_R) * u);
+        return side(s, b == B_ZR || b == B_R, x, CGRectGetMinY(s) + y - K_TOP_LIFT);
+    }
     return side(s, b == B_ZR || b == B_R, MAX((z ? K_ZL_X : K_L_X) * u, edge), CGRectGetMinY(s) + MAX((z ? K_ZL_Y : K_L_Y) * u, edge)); }
-- (CGFloat)dropR:(int)b { return (b == B_ZL || b == B_ZR ? K_ZL_R : K_L_R) * self.u; }
+// The later generation draws every shoulder at the ABXY key's own radius, so the top row and the diamond read as one size.
+- (CGFloat)dropR:(int)b { return (g_padSpaced ? K_FACE_R : (b == B_ZL || b == B_ZR ? K_ZL_R : K_L_R) * self.splitScale) * self.u; }
 - (CGPoint)clickCenter:(int)b { CGRect s = self.safe; CGFloat u = self.u; CGFloat edge = _layout.separated ? 22 : 0;
+    if (g_padSpaced && !self.portraitControls)   // the landscape layout's clicks go to the line between the column's two shoulders
+        return side(s, b == B_RS, MAX(K_CLICK_X * u, edge), CGRectGetMinY(s) + MAX((K_ZL_Y + K_L_Y) / 2 * u, edge));
+    if (g_padSpaced && self.portraitControls) {
+        // On the line between the column's two shoulders, a gap from each: their radii differ, so the distance that clears the larger one wins and
+        // the other keeps a little more room.
+        CGPoint zl = [self dropCenter:B_ZL], l = [self dropCenter:B_L];
+        CGFloat mid = (zl.y + l.y) / 2, r3 = [self clickR], gap = DM_PAD_PORTRAIT_GAP_U * u;
+        CGFloat need = MAX(r3 + [self dropR:B_ZL] + gap, r3 + [self dropR:B_L] + gap);
+        CGFloat dx = sqrt(MAX(need * need - (mid - zl.y) * (mid - zl.y), 0));
+        return side(s, b == B_RS, MAX(K_ZL_X * u, edge) + s.size.width * DM_PAD_PORTRAIT_SHOULDER_SHIFT + dx, mid);
+    }
     return side(s, b == B_RS, MAX(K_CLICK_X * u, edge), CGRectGetMinY(s) + MAX(K_ZL_Y * u, edge)); }
+- (CGFloat)clickR { return K_CLICK_R * self.u * self.splitScale; }
+// The top row's centre: − / + and the menu gear. The later pad's row keeps the margin the shoulders' circles keep to the edge, so the pills' top
+// edge sits on the shoulders' top edge; another profile keeps the overlay's row.
+- (CGFloat)topRowCenter {
+    CGRect s = self.safe; CGFloat u = self.u;
+    if (!g_padSpaced) return CGRectGetMinY(s) + MAX(K_PILL_Y * u, _layout.separated ? 14 : 0);
+    CGFloat margin = MAX(K_ZL_Y * u, _layout.separated ? 22 : 0)
+                   + (self.portraitControls ? s.size.height * DM_PAD_PORTRAIT_SHOULDER_SHIFT : 0)
+                   - K_ZL_R * u * self.splitScale;
+    return CGRectGetMinY(s) + margin + K_PILL_H / 2 * u - K_TOP_LIFT;
+}
 - (CGRect)pillRect:(int)b { CGRect s = self.safe; CGFloat u = self.u, w = K_PILL_W * u, h = K_PILL_H * u;
-    CGPoint c = CGPointMake(CGRectGetMidX(s) + (b == B_PLUS ? K_PILL_DX : -K_PILL_DX) * u, CGRectGetMinY(s) + MAX(K_PILL_Y * u, _layout.separated ? 14 : 0));   // − on the left, + on the right
+    CGPoint c = CGPointMake(CGRectGetMidX(s) + (b == B_PLUS ? K_PILL_DX : -K_PILL_DX) * u, [self topRowCenter]);   // − on the left, + on the right
     return CGRectMake(c.x - w / 2, c.y - h / 2, w, h); }
-- (CGPoint)menuCenter { CGRect s = self.safe; return CGPointMake(CGRectGetMidX(s), CGRectGetMinY(s) + MAX(K_PILL_Y * self.u, _layout.separated ? 14 : 0)); }
+- (CGPoint)menuCenter { CGRect s = self.safe; return CGPointMake(CGRectGetMidX(s), [self topRowCenter]); }   // level with − / +
+// Where the menu gear is drawn: the front end puts the frame-rate counter under it, so it keeps clear of the top row.
+- (CGRect)menuRect { CGPoint c = self.menuCenter; CGFloat r = K_MENU_R * self.u; return CGRectMake(c.x - r, c.y - r, 2 * r, 2 * r); }
 
-static CGFloat dist(CGPoint a, CGPoint b) { return hypot(a.x - b.x, a.y - b.y); }
 - (CGFloat)buttonDistance:(int)b point:(CGPoint)p {
     CGFloat u = self.u;
     if (isDrop(b)) return dist(p, [self dropCenter:b]) / MAX([self dropR:b] * 1.35, _layout.separated ? 22 : 0);
-    if (isClick(b)) return dist(p, [self clickCenter:b]) / MAX(K_CLICK_R * u * 1.35, _layout.separated ? 22 : 0);
+    if (isClick(b)) return dist(p, [self clickCenter:b]) / MAX(self.clickR * 1.35, _layout.separated ? 22 : 0);
     CGRect r = CGRectInset([self pillRect:b], -8 * u, -8 * u);
     if (!_layout.separated && !CGRectContainsPoint(r, p)) return CGFLOAT_MAX;
     CGFloat w = MAX(r.size.width, _layout.separated ? 28 : 0), h = MAX(r.size.height, _layout.separated ? 28 : 0);
@@ -369,9 +461,12 @@ static CGFloat dist(CGPoint a, CGPoint b) { return hypot(a.x - b.x, a.y - b.y); 
     if (a < -22.5 && a > -157.5) m |= 1ull << B_DOWN;
     return m;
 }
-- (CGPoint)knobOffset:(int)i {   // knob offset from the stick centre (clamped to the stick radius)
+// The knob's offset from the stick's centre, clamped to the stick's radius. The drawn right stick reads the finger's place in its ring, as the
+// left stick does; the undrawn one follows the finger, so its offset is the finger's distance from where the touch landed.
+- (CGPoint)knobOffset:(int)i {
     if (!_stick[i]) return CGPointZero;
-    CGPoint h = [self stickCentre:i]; CGFloat dx = _stickNow[i].x - h.x, dy = _stickNow[i].y - h.y, d = hypot(dx, dy), R = [self stickR:i];
+    CGPoint o = i != 1 ? self.stickHome : (self.rightStickDrawn ? self.rightStickHome : _rCentre);
+    CGFloat dx = _stickNow[i].x - o.x, dy = _stickNow[i].y - o.y, d = hypot(dx, dy), R = [self stickR:i];
     if (d > R) { dx *= R / d; dy *= R / d; }
     return CGPointMake(dx, dy);
 }
@@ -402,7 +497,7 @@ static CGFloat dist(CGPoint a, CGPoint b) { return hypot(a.x - b.x, a.y - b.y); 
     g_touch_btn = face | dpad | btn; g_touch_lx = ax[0]; g_touch_ly = ax[1]; g_touch_rx = ax[2]; g_touch_ry = ax[3];
     pthread_mutex_unlock(&g_mu);
     publish();
-    BOOL stick = _stick[0] != nil;   // only the left stick is drawn: the right one needs no refresh
+    BOOL stick = _stick[0] != nil || (self.rightStickDrawn && _stick[1] != nil);   // the standing phone draws the right stick too
     if (changed || stick || _stickShown) [self refresh];   // also refresh on the stick release so the knob returns to the centre
     _stickShown = stick;
 }
@@ -437,28 +532,75 @@ int front_web_touch(void);
 - (UIView *)hitTest:(CGPoint)p withEvent:(UIEvent *)e {
     UIView *v = [super hitTest:p withEvent:e];
     if (v != self) return v;   // a key or the menu button took it
-    if (_layout.separated && CGRectContainsPoint(_layout.controls, p) && ![self controlAt:p]) return nil;   // the companion's view below takes the tap (tabs, item slots)
+    // The home indicator's strip in the band is the pad's own: it counts the triple tap there, so the touch must reach the pad rather than the panel below.
+    if (_layout.separated && CGRectContainsPoint(_layout.controls, p)) {
+        if (g_padSpaced && CGRectContainsPoint([self navTapArea], p) && [self btnAt:p] < 0) return self;
+        if (![self controlAt:p]) return nil;   // the companion's view below takes the tap (tabs, item slots)
+    }
     return front_web_touch() && ![self controlAt:p] ? nil : v;   // an offline HTML page over the picture
+}
+// This profile's pad switches between the pad and the game's own touch screen on a triple tap on the home indicator — its own width plus the finger's
+// error around it, at the bottom centre — three taps a quarter second apart. Every tap there is swallowed, so a mis-aimed
+// one cannot become a game touch either. Only 3D and Tap take part, in either console mode: Tap is the band's panel, which takes touches docked too.
+// The switch is for the run: setPadLayout does not store it here.
+- (CGRect)navTapArea {   // the home indicator's own length (twice as long lying down) and the finger's slop around it, at the bottom centre of the controls.
+    // Standing up it stops at the safe area's bottom edge: the band's bar above it (its tabs and labels) keeps its own taps, so a tab and the
+    // triple tap do not claim the same place. Lying down the bar floats over the picture's bottom, where no panel sits under it.
+    CGRect c = _layout.controls;
+    BOOL standing = self.bounds.size.height > self.bounds.size.width;
+    CGFloat bar = K_NAV_BAR_SHARE * MIN(self.bounds.size.width, self.bounds.size.height);
+    CGFloat w = MIN((standing ? bar : 2 * bar) + 2 * K_NAV_SLOP, c.size.width);
+    CGFloat h = MIN(standing ? self.safeAreaInsets.bottom : K_NAV_H + K_NAV_SLOP, c.size.height);
+    return CGRectMake(CGRectGetMidX(c) - w / 2, CGRectGetMaxY(c) - h, w, h);
+}
+- (BOOL)bottomNavTap:(UITouch *)t at:(CGPoint)p {
+    CGRect a = [self navTapArea];
+    if (!CGRectContainsPoint(a, p)) {
+        CGFloat fromFoot = CGRectGetMaxY(_layout.controls) - p.y;   // along the bottom edge but outside the strip: where it landed, for the strip's own bounds
+        if (fromFoot >= 0 && fromFoot <= K_NAV_H + 8) LOG("front end: nav tap outside at (%.0f,%.0f), area (%.0f,%.0f %.0fx%.0f)", p.x, p.y, a.origin.x, a.origin.y, a.size.width, a.size.height);
+        return NO;
+    }
+    NSTimeInterval now = t.timestamp;
+    if (_navTapAt > 0 && now - _navTapAt <= K_NAV_GAP) {
+        if (++_navTaps >= 3) {
+            _navTapAt = 0; _navTaps = 0;
+            LOG("front end: nav tap 3/3 at (%.0f,%.0f): pad layout %s → %s", p.x, p.y, _tap ? "Tap" : "3D", _tap ? "3D" : "Tap");
+            [self setPadLayout:(_tap ? 1 : 2)];   // back to the pad, or to the band's panel
+        } else {
+            NSTimeInterval gap = now - _navTapAt;
+            _navTapAt = now;
+            LOG("front end: nav tap %d/3 at (%.0f,%.0f), area (%.0f,%.0f %.0fx%.0f), %.2f s after the last", _navTaps, p.x, p.y,
+                a.origin.x, a.origin.y, a.size.width, a.size.height, gap);
+        }
+    } else {
+        if (_navTapAt > 0) LOG("front end: nav tap at (%.0f,%.0f): too late (%.2f s after the last), starting over", p.x, p.y, now - _navTapAt);
+        else LOG("front end: nav tap 1/3 at (%.0f,%.0f), area (%.0f,%.0f %.0fx%.0f)", p.x, p.y, a.origin.x, a.origin.y, a.size.width, a.size.height);
+        _navTapAt = now; _navTaps = 1;
+    }
+    return YES;
 }
 - (void)touchesBegan:(NSSet<UITouch *> *)ts withEvent:(UIEvent *)e {
     BOOL game = NO;
     for (UITouch *t in ts) {
-        if (_padOff) { game |= [self gameBegin:t]; continue; }
+        if (_padOff) {   // a controller plays, but the home indicator's strip still switches the layouts
+            if (!(g_padSpaced && [self bottomNavTap:t at:[t locationInView:self]])) game |= [self gameBegin:t];
+            continue;
+        }
         CGPoint p = [t locationInView:self];
         if (_layout.separated && !CGRectContainsPoint(_layout.controls, p)) { game |= [self gameBegin:t]; continue; }
         int hit = _tap ? -1 : [self btnAt:p];   // the menu button took its own touches (menuTakes)
         if (hit >= 0) { [_owner setObject:@(C_BTN | (uint64_t)hit << 8) forKey:t]; continue; }
-        if (_tap) { game |= [self gameBegin:t]; continue; }
+        if (_tap) { if (!(g_padSpaced && [self bottomNavTap:t at:p])) game |= [self gameBegin:t]; continue; }
         // diamond, D-pad, left stick: take the one with the smallest distance / grab radius, if it is <= 1
         CGFloat best = 1; int kind = C_NONE, idx = 0;
         CGFloat f = dist(p, self.faceCenter) / (self.faceGap + MAX(self.faceR * 1.6, self.faceHitR)); if (f <= best) { best = f; kind = C_FACE; }
         if (_full) { CGFloat d = dist(p, self.dpadCenter) / MAX(self.dpadR * K_DPAD_GRAB, _layout.separated ? 22 : 0); if (d < best) { best = d; kind = C_DPAD; } }
         if (!_stick[0]) { CGFloat s = dist(p, self.stickHome) / MAX([self stickR:0] * K_STICK_GRAB, _layout.separated ? 22 : 0); if (s < best) { best = s; kind = C_STICK; } }
-        if (kind == C_NONE && _full && !_stick[1] && [self inRightArea:p]) { kind = C_STICK; idx = 1; _rCentre = p; }   // the right stick: centred where the touch lands
+        if (kind == C_NONE && _full && !_stick[1] && [self inRightArea:p]) { kind = C_STICK; idx = 1; _rCentre = p; }   // the right stick: its own ring where one is drawn, else where the touch lands
         if (kind == C_FACE) { [_owner setObject:@(C_FACE) forKey:t]; [_faceOf setObject:@([self faceAt:p]) forKey:t]; }
         else if (kind == C_DPAD) [_owner setObject:@(C_DPAD) forKey:t];
         else if (kind == C_STICK) { [_owner setObject:@(C_STICK | (uint64_t)idx << 8) forKey:t]; _stick[idx] = t; _stickNow[idx] = p; }
-        else game |= [self gameBegin:t];
+        else if (!(g_padSpaced && [self bottomNavTap:t at:p])) game |= [self gameBegin:t];   // no control took it: the bottom strip may
     }
     if (game) [self pushGame];
     [self recompute];
@@ -469,7 +611,7 @@ int front_web_touch(void);
         uint64_t v = [_owner objectForKey:t].unsignedLongLongValue; int c = (int)(v & 0xff); CGPoint p = [t locationInView:self];
         if (c == C_FACE) [_faceOf setObject:@([self faceAt:p]) forKey:t];
         else if (c == C_STICK) { _stickNow[v >> 8] = p;
-            if ((v >> 8) == 1) { CGFloat d = dist(p, _rCentre), R = [self stickR:1];   // the right stick's centre follows a finger past its radius, so turning back responds at once
+            if ((v >> 8) == 1 && !self.rightStickDrawn) { CGFloat d = dist(p, _rCentre), R = [self stickR:1];   // the undrawn right stick's centre follows a finger past its radius, so turning back responds at once
                 if (d > R) _rCentre = CGPointMake(p.x - (p.x - _rCentre.x) * R / d, p.y - (p.y - _rCentre.y) * R / d); } }
         else if (c == C_GAME) game = YES;
     }
@@ -536,23 +678,32 @@ static void placeLabel(CATextLayer *t, CGPoint c, CGFloat fs) {
             BOOL right = b == B_ZR || b == B_R; CGPoint c = [self dropCenter:b];
             setPath(_key[b], dropPath(c, [self dropR:b], right ? -M_PI_4 : -3 * M_PI_4, 4 * u)); placeLabel(_label[b], c, 16 * u);   // tip toward the near top corner
         } else if (isClick(b)) {
-            CGPoint c = [self clickCenter:b]; setPath(_key[b], circlePath(c, K_CLICK_R * u)); placeLabel(_label[b], c, 13 * u);
+            CGPoint c = [self clickCenter:b]; setPath(_key[b], circlePath(c, self.clickR)); placeLabel(_label[b], c, 13 * u);
         } else {
             CGRect rc = [self pillRect:b];
             setPath(_key[b], CGPathCreateWithRoundedRect(rc, rc.size.height / 2, rc.size.height / 2, NULL)); placeLabel(_label[b], CGPointMake(CGRectGetMidX(rc), CGRectGetMidY(rc)), 18 * u);
         }
     }
     static const struct { int b; CGFloat angle; } arms[] = {{B_UP, 0}, {B_RIGHT, M_PI_2}, {B_DOWN, M_PI}, {B_LEFT, -M_PI_2}};   // the same arm in 90° steps
-    for (int i = 0; i < 4; i++) setPath(_key[arms[i].b], armPath(self.dpadCenter, self.dpadR, K_ARM_W * u, K_ARM_IN * u, arms[i].angle, 6 * u));
+    for (int i = 0; i < 4; i++) setPath(_key[arms[i].b], armPath(self.dpadCenter, self.dpadR, self.armW, self.armIn, arms[i].angle, 6 * u));
     CGFloat mr = K_MENU_R * u; CGPoint mc = self.menuCenter;
     _menu.frame = CGRectMake(mc.x - mr, mc.y - mr, 2 * mr, 2 * mr); _menu.layer.cornerRadius = mr;
     _menu.layer.shadowPath = [UIBezierPath bezierPathWithOvalInRect:_menu.bounds].CGPath;
     [_menu setImage:[UIImage systemImageNamed:@"gearshape.fill" withConfiguration:[UIImageSymbolConfiguration configurationWithPointSize:13 * u weight:UIImageSymbolWeightSemibold]] forState:UIControlStateNormal];
     setPath(_ring, circlePath(self.stickHome, [self stickR:0]));
-    CGFloat k = K_KNOB_R * u; _knob.bounds = CGRectMake(0, 0, 2 * k, 2 * k);
+    _rring.hidden = _rknob.hidden = _tap || !self.rightStickDrawn;   // derived here, so a rotation that turns the band on shows the ring with it
+    CGFloat k = K_KNOB_R * u * self.splitScale; _knob.bounds = CGRectMake(0, 0, 2 * k, 2 * k);
     setPath(_knob, circlePath(CGPointMake(k, k), k));
     CAShapeLayer *in = (CAShapeLayer *)_knob.sublayers.firstObject; CGPathRef ip = circlePath(CGPointMake(k, k), k * 0.62);
     in.frame = _knob.bounds; in.path = ip; CGPathRelease(ip);
+    if (self.rightStickDrawn) {   // the standing phone's right stick, drawn like the left one at the D-pad's scale
+        CGFloat rk = k * DM_PAD_DPAD_SCALE;
+        setPath(_rring, circlePath(self.rightStickHome, [self stickR:1]));
+        _rknob.bounds = CGRectMake(0, 0, 2 * rk, 2 * rk);
+        setPath(_rknob, circlePath(CGPointMake(rk, rk), rk));
+        CAShapeLayer *rin = (CAShapeLayer *)_rknob.sublayers.firstObject; CGPathRef rp = circlePath(CGPointMake(rk, rk), rk * 0.62);
+        rin.frame = _rknob.bounds; rin.path = rp; CGPathRelease(rp);
+    }
     [CATransaction commit];
     [self refresh];
 }
@@ -564,6 +715,8 @@ static void placeLabel(CATextLayer *t, CGPoint c, CGFloat fs) {
         _key[b].fillColor = (on ? k_on : k_idle).CGColor; _label[b].foregroundColor = (on ? k_textOn : k_text).CGColor; }
     CGPoint h = self.stickHome, o = [self knobOffset:0];
     _knob.position = CGPointMake(h.x + o.x, h.y + o.y); _knob.fillColor = (_stick[0] ? k_on : k_idle).CGColor;
+    if (self.rightStickDrawn) { CGPoint rh = self.rightStickHome, ro = [self knobOffset:1];
+        _rknob.position = CGPointMake(rh.x + ro.x, rh.y + ro.y); _rknob.fillColor = (_stick[1] ? k_on : k_idle).CGColor; }
     [CATransaction commit];
 }
 
@@ -823,13 +976,16 @@ int front_ctrl_support(int min, int max) {
     return g_cp_ok;
 }
 
+CGRect dm_gamepad_menu_rect(UIView *view) { return g_view ? [(DmGamepad *)g_view menuRect] : CGRectZero; }
 UIView *dm_gamepad_view(CGRect frame) { DmGamepad *v = [[DmGamepad alloc] initWithFrame:frame]; g_view = v; return v; }
 int dm_gamepad_controller_connected(void) { return g_view && [g_view controllerConnected] ? 1 : 0; }
 void dm_gamepad_arrange(UIView *view, DmLayout layout) { [(DmGamepad *)view arrange:layout]; }
 void dm_gamepad_opmode_changed(void) { [g_view opmodeChanged]; }
 void dm_gamepad_touch_feedback(bool on) { [g_view setTouchFeedback:on]; }
 int dm_pad_layout(void) { return g_view ? [g_view padLayout] : 0; }
-bool dm_pad_layout_offered(int layout) { return layout == 0 || layout == 1 || (layout == 2 && dm_opmode() == 0); }
+bool dm_pad_layout_offered(int layout) {   // the later portrait pad's profile leaves 2D out of the menu; a saved 2D choice still applies (setPadLayout)
+    return (layout == 0 && !g_padSpaced) || layout == 1 || (layout == 2 && (g_padSpaced || dm_opmode() == 0));
+}
 void dm_pad_layout_set(int layout) { [g_view setPadLayout:layout]; }
 void dm_gamepad_active(void) { dispatch_async(dispatch_get_main_queue(), ^{ for (GCController *c in GCController.controllers) dm_motion_rearm(c); }); }   // On become active: motion_apple.h
 void dm_gamepad_reset(void) {   // On resign active: release everything (a key held while switching away and released in background gets no "release")

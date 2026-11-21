@@ -10,12 +10,33 @@ _dm_view_matrix:
     ldp s1, s2, [x0, #0xac]
     adrp x15, _dm_view_state@PAGE
     add x15, x15, _dm_view_state@PAGEOFF
-    ldr w15, [x15, #0x58]
-    cbz w15, Lmatrix_done
+    ldr w16, [x15, #0x1cc]       ; the picture's aspect at the game's start (0 = none): a projection the game built from it keeps that shape after a turn
+    ldr w17, [x15, #0x58]        ; the current picture's aspect
+    cbnz w16, Lmatrix_shape
+    cbz w17, Lmatrix_rule        ; no picture shape yet (16:9): nothing to record
+    mov w16, w17                 ; the first picture the game draws is the shape its views are built with
+    str w16, [x15, #0x1cc]
+Lmatrix_shape:
+    fmov s6, w16
+    fsub s6, s2, s6
+    fabs s6, s6
+    fabs s5, s2
+    ldr s4, Lshape_eps
+    fmul s5, s5, s4
+    fcmp s6, s5
+    b.hi Lmatrix_rule
+    cbz w17, Lmatrix_prev_16_9
+    fmov s2, w17                 ; a picture-shaped projection takes the current picture's aspect
+    b Lmatrix_done
+Lmatrix_prev_16_9:
+    ldr s2, Lbase                ; the picture is 16:9 again
+    b Lmatrix_done
+Lmatrix_rule:
+    cbz w17, Lmatrix_done
     ldr s6, Lbase
     fcmp s2, s6
     b.ne Lmatrix_done
-    fmov s7, w15
+    fmov s7, w17
     fdiv s6, s6, s7
     fmov s3, #1.0
     fmax s6, s6, s3
@@ -177,6 +198,10 @@ Lscreen_projection:
     b.hi Lui_return
     fdiv s0, s1, s3
 Lui_apply:
+    // Trials: bit 11 of the conversion sites turns the layouts' fit off (DM_SCREEN_ASPECT_SITES), leaving every drawing
+    // with the game's own 16:9 projection over the whole picture. The dock below still moves the projection.
+    ldr w16, [x15, #0x54]
+    tbz w16, #11, Lui_off
     ldr w16, [x15, #0x58]
     cbz w16, Lui_original
     fmov s3, w16
@@ -191,6 +216,9 @@ Lui_original:
     str s0, [x0]
     str s1, [x0, #0x14]
     mov w8, #1
+    b Lui_return
+Lui_off:
+    mov w8, wzr        ; the projection is left as the game made it
 Lui_return:
     ret
 Lui_x: .float 1.5454561710357666
@@ -437,6 +465,7 @@ Lbase: .float 1.7777777777777777778
 Lmin_width: .float 1280.0
 Lmargin: .float 1.1
 Lepsilon: .float 0.00001
+Lshape_eps: .float 0.001          ; the picture's aspect as the game computed it at start against the state page's (relative)
 
 // The minimap captures already clip at their own render-target edges. Their
 // extra screen-space ScissorOn pane was authored for a 16:9 projection and

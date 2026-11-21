@@ -110,8 +110,6 @@ struct CompanionMarker: Identifiable {
         if self.presented != presented { visible(presented) }
     }
     func select(_ next: CompanionPage) { if page == .bag && next != .bag { action("bag_cancel", 0) }; pendingPage = next; action("ui_open", next.rawValue);schedulePolling();poll() }
-    // The panel's bottom bar double tap: Tap is the layout in which the panel itself takes the touches, 3D the one with the controls.
-    func toggleLayout() { dm_pad_layout_set(dm_pad_layout() == 2 ? 1 : 2) }
     func updateNativeActivity(force: Bool = false) {
         let busy = page == .bag && (number("bag.native.open") != 0 || number("bag.busy") != 0)
             || page == .phone && (values["pdrv.idle"] as? NSNumber)?.intValue == 0

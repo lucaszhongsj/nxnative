@@ -56,7 +56,7 @@ Every patch bound tighter than it could be: the open gaps, then the blocked, kep
 
 | Game | Cuts | Gates | Frame-step and stub sites | Function-matched rules | Host rows | Binding |
 |---|---|---|---|---|---|---|
-| [Animal Crossing: New Horizons](#animal-crossing-new-horizons) | 0 | 0 | 67 | 0 | 0 | `build` → `game` ×2 |
+| [Animal Crossing: New Horizons](#animal-crossing-new-horizons) | 0 | 0 | 69 | 0 | 0 | `build` → `game` ×2 |
 | [ASTRAL CHAIN](#astral-chain) | 0 | 0 | 112 | 0 | 0 | `build` → `game` |
 | [Batman: Arkham Knight](#batman-arkham-knight) | 8 | 0 | 0 | 0 | 1 | `build` → `game` ×2 |
 | [Catherine: Full Body](#catherine-full-body) | 0 | 0 | 0 | 1 | 0 | `game` |
@@ -98,8 +98,8 @@ Every patch bound tighter than it could be: the open gaps, then the blocked, kep
 - **`build` → `game`**, rendering, blocked: the stubs have no function-matched form yet, judgement: screen shape: the sizes, the view, the layouts' projection and their edge widgets (DM_SCREEN_ASPECT). The output size is the host's, but where the game takes its sizes, its cameras and its layouts are this build's code
 - **`build` → `game`**, rendering, blocked: the stubs have no function-matched form yet, judgement: adaptive view: cached projections, scissors, captures, field ranges and UI docking (DM_SCREEN_ASPECT). The state page is the host's, but every adapter site is this build's code
 
-- **3.0.3 `main`** `ff1d1c05…` ([patches.py:701](../../dm/games/01006F8002326000/patches.py#L701))
-  <details><summary>67 frame-step sites</summary>
+- **3.0.3 `main`** `ff1d1c05…` ([patches.py:799](../../dm/games/01006F8002326000/patches.py#L799))
+  <details><summary>69 frame-step sites</summary>
 
   - frame step `+0x15083c`: refresh cached projection after a view target change
   - frame step `+0x265140`: nn::ui2d::DrawInfo::SetProjectionMtx: y row divided by the stretch, then the keyboard UI dock (bit 6, one chained stub)
@@ -112,10 +112,10 @@ Every patch bound tighter than it could be: the open gaps, then the blocked, kep
   - frame step `+0x2840e4`: adaptive-view _dm_view_backdrop_call
   - frame step `+0x29a188`: adaptive-view _dm_view_keyboard_window_call
   - frame step `+0x2b8888`: refresh cached projection after a view target change
-  - frame step `+0x5c9b80`: graphics create arg +0x60: the display size in the screen's shape (bit 0)
+  - frame step `+0x5c9b80`: graphics create arg +0x60: the display size in the screen's shape, or the window that holds every shape (bit 0)
   - frame step `+0x5c9b94`: graphics create arg +0x20: 1280 x the layout height (bit 1)
-  - frame step `+0x5cdcc8`: platform config slot 3: the arg's 1920x1080 in the screen's shape (bit 4)
-  - frame step `+0x5cdd74`: platform config slot 7: the static display size in the screen's shape (bit 2)
+  - frame step `+0x5cdcc8`: platform config slot 3: the arg's 1920x1080 in the screen's shape, or the window that holds every shape (bit 4)
+  - frame step `+0x5cdd74`: platform config slot 7: the static display size in the screen's shape, or the window that holds every shape (bit 2)
   - frame step `+0x5cddd4`: platform config slot 8: the static layout size 1280.0 x the layout height (bit 3)
   - frame step `+0x5ce924`: adaptive-view _dm_view_ui_override
   - frame step `+0x5ce93c`: refresh cached projection after a view target change
@@ -126,8 +126,10 @@ Every patch bound tighter than it could be: the open gaps, then the blocked, kep
   - frame step `+0x13a29a4`: adaptive-view _dm_view_create
   - frame step `+0x13a37b4`: adaptive-view _dm_view_sphere
   - frame step `+0x1462bb4`: adaptive-view _dm_view_units
-  - frame step `+0x1527f00`: resolution table entry of the frame (crop, render scale): the screen's shape (bit 7)
-  - frame step `+0x1527f2c`: resolution table entry of the frame (crop, render scale): the screen's shape (bit 7)
+  - frame step `+0x1527ee4`: the size table's mode: the docked entry in a window that holds every shape (bit 10)
+  - frame step `+0x1527f00`: resolution table entry of the frame (crop, render scale): the screen's shape (bit 7), after a runtime change's fields
+  - frame step `+0x1527f10`: the display buffer's size is the picture's, not the window's, in a window that holds every shape
+  - frame step `+0x1527f2c`: resolution table entry of the frame (crop, render scale): the screen's shape (bit 7), after a runtime change's fields
   - frame step `+0x2af1258`: adaptive-view _dm_view_touch_page
   - frame step `+0x31c3074`: refresh cached projection after a view target change
   - frame step `+0x31cee60`: layouts' DrawInfo: the framebuffer's size in the screen's shape (bit 8)

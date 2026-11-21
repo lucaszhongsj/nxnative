@@ -125,9 +125,15 @@ class ChainedStubSavesX30(unittest.TestCase):
 
     @staticmethod
     def _end(words, at):
+        # A stub ends at its tail: a ret, or a b that leaves the emitted stubs (a target outside them, i.e. the game's own
+        # text -- a site's next instruction lies below BASE). A b whose target is another word here is an internal jump: a
+        # stub that skips over the other shape's computation needs one, and it does not end the stub
         for i in range(at, len(words)):
             if words[i] == 0xd65f03c0: return i + 1, 'ret'
-            if words[i] & 0xfc000000 == 0x14000000: return i + 1, 'b'
+            if words[i] & 0xfc000000 == 0x14000000:
+                d = words[i] & 0x3ffffff
+                if d & 0x2000000: d -= 0x4000000
+                if not 0 <= i + d < len(words): return i + 1, 'b'
         return len(words), None
 
     @staticmethod
