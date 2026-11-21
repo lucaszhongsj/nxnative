@@ -14,7 +14,7 @@ In 3D, the right stick (the camera in most games) is not drawn: swipe on the rig
 
 A connected game controller hides the touch controls, all but the gear, and keeps every button.
 
-In portrait (an iPad, an iPhone Duo's inner screen) the picture sits above the controls; so it does on a Duo half folded, the picture on the upper half. An iPad game also runs in a window of any size (Stage Manager).
+In portrait (an iPhone, an iPad, an iPhone Duo's inner screen) the picture sits above the controls; so it does on a Duo half folded, the picture on the upper half. A phone standing up shows the 16:9 picture across the full width with no bars above or below it, and the controls get the rest of the screen, which is more than half of it; an iPad, whose picture is taller than 16:9, keeps half. A phone standing up also runs in handheld mode, so the game's own touch screens (its software keyboard among them) take touches; lying down it returns to the console mode it had. An iPad game also runs in a window of any size (Stage Manager).
 
 ## Rumble
 

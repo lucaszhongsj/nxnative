@@ -5,7 +5,12 @@
 
 NS_ASSUME_NONNULL_BEGIN
 
-typedef struct { CGRect game, controls; BOOL separated, topSafeOnly; } DmLayout;
+// game: the picture. companion: the band under it, where a phone standing up shows what the game's own screens cannot (the pad floats over it, so the
+// panel is only where no key is drawn). controls: the pad's area, which in a split is the companion's band. Zero and unused where separated is NO.
+// A split's companion and controls are the same rectangle: DmGamepad.m owns the band's hit testing and takes every touch in it (one on no control
+// goes to gameBegin, which a split refuses outside the picture), so the panel takes no touch of its own. A panel that must be touched needs that
+// dispatch changed first.
+typedef struct { CGRect game, companion, controls; BOOL separated, topSafeOnly; } DmLayout;
 
 static inline UIEdgeInsets dm_game_safe_insets(CGRect bounds, UIEdgeInsets insets, BOOL duo) {
     return duo && bounds.size.height > bounds.size.width ? UIEdgeInsetsMake(insets.top, 0, 0, 0) : insets;
@@ -33,6 +38,17 @@ static inline CGRect dm_aspect_fill(CGRect b, CGFloat aspect) {
 
 static inline BOOL dm_picture_fill(const char *_Nullable value) { return value && !strcmp(value, "fill"); }   // DM_PICTURE_FIT: fit (default) or fill
 
+// Picture shape "auto" (the launcher's Match screen): the shape of the area the picture fills, so its background covers that
+// area with nothing cropped. Lying down that is the screen's own wide shape (a 19.5:9 phone at 2.17:1); standing up it is the
+// upper half's shape (twice the screen's width / its height: 0.92 on a 19.5:9 phone). A game's screen-shape stubs translate the
+// shape into its own sizes, and the shapes a game accepts are the ones the adapter was built for; the range is loader.c's (0.9 to
+// 2.4). 0 = 16:9.
+static inline float dm_picture_shape_auto(CGSize window) {
+    double r = window.height > window.width ? 2 * window.width / MAX(window.height, 1)   // standing up: the upper half's shape
+                                            : MAX(window.width, window.height) / MAX(MIN(window.width, window.height), 1);
+    return r >= 0.9 && r < 2.4 ? (float)r : 0.0f;   // loader.c's range; outside it, 16:9
+}
+
 static inline CGRect dm_horizontal_division(CGRect b, CGRect division) {
     if (CGRectIsNull(division) || division.size.width <= division.size.height) return CGRectNull;
     // Preserve zero-height inactive folds and clip regions during display handoff.
@@ -46,24 +62,32 @@ static inline CGRect dm_horizontal_division(CGRect b, CGRect division) {
 }
 
 static inline DmLayout dm_layout(CGRect b, UIEdgeInsets insets, BOOL partiallyOpen, CGRect division, CGFloat aspect) {
-    DmLayout l = { dm_aspect_fit(b, aspect), b, NO, NO };
+    DmLayout l = { dm_aspect_fit(b, aspect), CGRectZero, b, NO, NO };
     if (CGRectIsEmpty(b)) return l;
     division = dm_horizontal_division(b, division);
     BOOL portrait = b.size.height > b.size.width;
     if (!portrait && (!partiallyOpen || CGRectIsNull(division))) return l;
-    if (CGRectIsNull(division)) division = CGRectMake(b.origin.x, CGRectGetMidY(b), b.size.width, 0);
+    // A phone standing up with no fold splits the screen at its midpoint: the picture takes the upper half, the panel the lower half. Picture shape
+    // "auto" asks for that half's own shape, so the fitted picture fills it exactly; a shape that does not match (a manual DM_SCREEN_ASPECT) keeps its
+    // whole picture and leaves bars instead of cropping it. A fold sets both edges within the safe area.
+    BOOL folded = !CGRectIsNull(division);
     CGRect safe = UIEdgeInsetsInsetRect(b, insets);
-    CGRect upper = CGRectMake(CGRectGetMinX(safe), CGRectGetMinY(safe), safe.size.width,
-                             CGRectGetMinY(division) - CGRectGetMinY(safe));
-    CGRect lower = CGRectMake(CGRectGetMinX(b), CGRectGetMaxY(division), b.size.width,
-                             CGRectGetMaxY(b) - CGRectGetMaxY(division));
+    // Where the picture's part ends and the band begins. A phone standing up with no fold splits at the midpoint, so the picture takes the upper half
+    // and the band the lower one; with "auto" the picture's shape is that half's, so it fills it with no bars. A fold sets both edges.
+    CGFloat upperBottom = folded ? CGRectGetMinY(division) : CGRectGetMidY(b);
+    CGFloat bandTop = folded ? CGRectGetMaxY(division) : upperBottom;
+    CGRect upper = folded ? CGRectMake(CGRectGetMinX(safe), CGRectGetMinY(safe), safe.size.width, upperBottom - CGRectGetMinY(safe))
+                          : CGRectMake(CGRectGetMinX(b), CGRectGetMinY(b), b.size.width, upperBottom - CGRectGetMinY(b));
+    CGRect lower = CGRectMake(CGRectGetMinX(b), bandTop, b.size.width, CGRectGetMaxY(b) - bandTop);
     if (upper.size.height <= 0 || CGRectGetMaxY(safe) <= CGRectGetMinY(lower)) return l;
-    l.game = dm_aspect_fit(upper, aspect); l.controls = lower; l.separated = YES;
+    // The picture keeps its whole shape: with "auto" that shape is the upper half's, so the fitted rectangle fills it exactly. Nothing is stretched.
+    l.game = dm_aspect_fit(upper, aspect);
+    l.companion = lower; l.controls = lower; l.separated = YES;
     return l;
 }
 
 // The picture is on a TV (front_ios.m DmTVSceneDelegate): the controls take the whole view and no touch goes to the game's touch screen (the game is docked there).
-static inline DmLayout dm_layout_pad_only(CGRect b) { return (DmLayout){ CGRectZero, b, NO, NO }; }
+static inline DmLayout dm_layout_pad_only(CGRect b) { return (DmLayout){ CGRectZero, CGRectZero, b, NO, NO }; }
 
 // Fill covers the full view only in the overlay layout (landscape). A portrait or tabletop split keeps the picture fitted in its
 // area above the controls, where cropping a small picture would cost more than the bars.

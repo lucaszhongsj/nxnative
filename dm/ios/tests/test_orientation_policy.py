@@ -7,12 +7,13 @@ IOS = Path(__file__).resolve().parents[1]
 
 
 class OrientationPolicyTests(unittest.TestCase):
-    def test_phone_landscape_and_ipad_resizing(self):
+    def test_phone_portrait_landscape_and_ipad_resizing(self):
+        phone = {"UIInterfaceOrientationPortrait", "UIInterfaceOrientationLandscapeLeft", "UIInterfaceOrientationLandscapeRight"}
         landscape = {"UIInterfaceOrientationLandscapeLeft", "UIInterfaceOrientationLandscapeRight"}
         all_orientations = landscape | {"UIInterfaceOrientationPortrait", "UIInterfaceOrientationPortraitUpsideDown"}
         for project in (IOS / "project.yml", IOS / "tests/duo/project.yml"):
             source = project.read_text()
-            for key, expected in (("UISupportedInterfaceOrientations", landscape),
+            for key, expected in (("UISupportedInterfaceOrientations", phone),
                                   ("UISupportedInterfaceOrientations~ipad", all_orientations)):
                 with self.subTest(project=project.name, key=key):
                     match = re.search(r"^        " + re.escape(key) + r":\n((?:          - .*\n)+)", source, re.MULTILINE)

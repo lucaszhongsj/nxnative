@@ -427,7 +427,9 @@ int front_web_touch(void);
 }
 - (UIView *)hitTest:(CGPoint)p withEvent:(UIEvent *)e {
     UIView *v = [super hitTest:p withEvent:e];
-    return v == self && front_web_touch() && ![self controlAt:p] ? nil : v;
+    if (v != self) return v;   // a key or the menu button took it
+    if (_layout.separated && CGRectContainsPoint(_layout.controls, p) && ![self controlAt:p]) return nil;   // the companion's view below takes the tap (tabs, item slots)
+    return front_web_touch() && ![self controlAt:p] ? nil : v;   // an offline HTML page over the picture
 }
 - (void)touchesBegan:(NSSet<UITouch *> *)ts withEvent:(UIEvent *)e {
     BOOL game = NO;

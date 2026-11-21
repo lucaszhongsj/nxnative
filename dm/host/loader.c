@@ -391,7 +391,7 @@ void dm_fps_state_apply(void) {
     const char *as = getenv("DM_SCREEN_ASPECT");
     if (as && *as && strcmp(as, "0") && strcmp(as, "auto")) {   // 0: 16:9; auto: the iOS front end resolves it to the screen's shape (a Mac window has none)
         char *end; float a = strtof(as, &end);
-        if (end == as || *end || !(a >= 0.9f && a < 2.4f)) LOG("[RED] DM_SCREEN_ASPECT=%s: a width / height from 0.9 to 2.4; keeping 16:9", as);
+        if (end == as || *end || !(a >= 1.3f && a < 2.4f)) LOG("[RED] DM_SCREEN_ASPECT=%s: a width / height from 1.3 to 2.4; keeping 16:9", as);
         else {
             // The game's layout tables stop at a display height of 2048: a taller display finds no layout
             // entry for its capture object, and the rebuild path dereferences the object it then fails to
