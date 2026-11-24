@@ -132,6 +132,15 @@ $(B)/t_screen_shape: t_screen_shape.c ../loader.c ../hle.h ../dm.h $(GAME_H) | $
 .PHONY: screen-shape
 screen-shape: $(B)/t_screen_shape
 	$(B)/t_screen_shape
+# A profile whose composition classifier is source (games/<GAME>/duo_anchor.c) gets it tested over synthetic panes; profiles without the file skip it
+DUO_SRC = ../../games/$(GAME)/duo_anchor.c
+DUO_TEST = $(if $(wildcard $(DUO_SRC)),$(B)/t_duo_anchor)
+run: duo-anchor-test
+$(B)/t_duo_anchor: t_duo_anchor.c $(DUO_SRC) | $(B)
+	$(CLANG) -O1 -g -Wall -Werror -Wno-unused-function -I.. $(GINC) -o $@ t_duo_anchor.c $(DUO_SRC)
+.PHONY: duo-anchor-test
+duo-anchor-test: $(DUO_TEST)
+	$(DUO_TEST)
 $(B)/t_nro: t_nro.c ../loader.c ../hle_ro.c ../hle.h ../dm.h $(GAME_H) | $(B)
 	$(CLANG) -O1 -g -Wall -Wno-unused-function -Wno-deprecated-declarations -I.. $(GINC) -o $@ t_nro.c
 .PHONY: nro

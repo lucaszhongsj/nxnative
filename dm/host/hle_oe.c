@@ -4,6 +4,10 @@
 #include "hle.h"
 #include "front.h"
 
+// loader.c's picture shape (the script's shape item, a window that holds every shape); loader.c's definition overrides this in the host and
+// a test that links this file alone has no state page
+__attribute__((weak)) void dm_screen_shape(float a) { (void)a; }
+
 // The operation mode is runtime state (the front end can change it: iOS overheat downgrade switches to handheld): the single source is here, taken once from DM_OPMODE at startup, the environment variable is not read again afterwards
 #include <stdatomic.h>
 #include <errno.h>

@@ -22,6 +22,7 @@ static uint8_t *test_section(const struct mach_header_64 *mh, const char *seg, c
 #include "../hle.c"
 #include "../loader.c"
 void mtl_present_screen(uint32_t w, uint32_t h) { (void)w; (void)h; }   // loader.c: a screen taller than 16:9; no renderer here
+void mtl_present_picture(uint32_t w, uint32_t h) { (void)w; (void)h; }   // loader.c: the picture's rectangle in a window that holds every shape
 #undef getsectiondata
 
 struct dm_flags g_flag;

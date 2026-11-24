@@ -56,7 +56,7 @@ Every patch bound tighter than it could be: the open gaps, then the blocked, kep
 
 | Game | Cuts | Gates | Frame-step and stub sites | Function-matched rules | Host rows | Binding |
 |---|---|---|---|---|---|---|
-| [Animal Crossing: New Horizons](#animal-crossing-new-horizons) | 0 | 0 | 69 | 0 | 0 | `build` → `game` ×2 |
+| [Animal Crossing: New Horizons](#animal-crossing-new-horizons) | 0 | 0 | 70 | 0 | 0 | `build` → `game` ×2 |
 | [ASTRAL CHAIN](#astral-chain) | 0 | 0 | 112 | 0 | 0 | `build` → `game` |
 | [Batman: Arkham Knight](#batman-arkham-knight) | 8 | 0 | 0 | 0 | 1 | `build` → `game` ×2 |
 | [Catherine: Full Body](#catherine-full-body) | 0 | 0 | 0 | 1 | 0 | `game` |
@@ -98,14 +98,14 @@ Every patch bound tighter than it could be: the open gaps, then the blocked, kep
 - **`build` → `game`**, rendering, blocked: the stubs have no function-matched form yet, judgement: screen shape: the sizes, the view, the layouts' projection and their edge widgets (DM_SCREEN_ASPECT). The output size is the host's, but where the game takes its sizes, its cameras and its layouts are this build's code
 - **`build` → `game`**, rendering, blocked: the stubs have no function-matched form yet, judgement: adaptive view: cached projections, scissors, captures, field ranges and UI docking (DM_SCREEN_ASPECT). The state page is the host's, but every adapter site is this build's code
 
-- **3.0.3 `main`** `ff1d1c05…` ([patches.py:799](../../dm/games/01006F8002326000/patches.py#L799))
-  <details><summary>69 frame-step sites</summary>
+- **3.0.3 `main`** `ff1d1c05…` ([patches.py:842](../../dm/games/01006F8002326000/patches.py#L842))
+  <details><summary>70 frame-step sites</summary>
 
   - frame step `+0x15083c`: refresh cached projection after a view target change
   - frame step `+0x265140`: nn::ui2d::DrawInfo::SetProjectionMtx: y row divided by the stretch, then the keyboard UI dock (bit 6, one chained stub)
   - frame step `+0x268ee0`: adaptive-view _dm_view_layout
   - frame step `+0x27d4c0`: adaptive-view _dm_view_footer_recalc
-  - frame step `+0x27d570`: nn::ui2d::Pane::Calculate after the global matrix: duo_calc (the HUD at the taller screen's edges, full-screen backgrounds stretched)
+  - frame step `+0x27d570`: nn::ui2d::Pane::Calculate after the global matrix: duo_calc (the composition trace; the shift is 0 at every shape the profile accepts, so the per-pane rules do not run)
   - frame step `+0x27d7bc`: adaptive-view _dm_view_footer_y
   - frame step `+0x283e9c`: adaptive-view _dm_view_transition_fast_call
   - frame step `+0x284048`: adaptive-view _dm_view_backdrop_call
@@ -150,6 +150,7 @@ Every patch bound tighter than it could be: the open gaps, then the blocked, kep
   - frame step `+0x384225c`: refresh cached projection after a view target change
   - frame step `+0x38423d8`: refresh cached projection after a view target change
   - frame step `+0x3849768`: capture manager: keep the object the destroy path clears before reading it (taller layouts)
+  - frame step `+0x3849e90`: camera photo (1280x720 target): the picture's middle 16:9 band, not the whole taller picture
   - frame step `+0x386a7a0`: game camera: the vertical angle widened so the taller screen keeps 16:9's sides (bit 5)
   - frame step `+0x386a888`: refresh cached projection after a view target change
   - frame step `+0x3883a94`: refresh cached projection after a view target change

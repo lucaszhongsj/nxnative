@@ -18305,12 +18305,39 @@ static void shot(id<MTLTexture> src, const char *path, int screen, const int cro
     CGBitmapInfo bi = bgra ? (kCGImageAlphaNoneSkipFirst | kCGBitmapByteOrder32Little) : (CGBitmapInfo)kCGImageAlphaNoneSkipLast;
     CGContextRef ctx = CGBitmapContextCreate(buf.contents, w, h, 8, row, cs, bi);
     CGImageRef img = ctx ? CGBitmapContextCreateImage(ctx) : NULL;
+    // DM_NVN_SHOT_SCALE=0.5 (screen shots only): the image is written at that fraction of its size, so a run's shots stay small enough to read at once.
+    // The texture dumps (screen=0) keep their own size: they are read for their pixels, not looked at.
+    if (img && screen) {
+        const char *se = getenv("DM_NVN_SHOT_SCALE");
+        double sc = se ? atof(se) : 0;
+        if (sc > 0 && sc < 1) {
+            size_t sw = (size_t)(w * sc), sh = (size_t)(h * sc);
+            CGContextRef dc = (sw >= 1 && sh >= 1) ? CGBitmapContextCreate(NULL, sw, sh, 8, sw * 4, cs, bi) : NULL;
+            if (dc) {
+                CGContextSetInterpolationQuality(dc, kCGInterpolationHigh);
+                CGContextDrawImage(dc, CGRectMake(0, 0, (CGFloat)sw, (CGFloat)sh), img);
+                CGImageRef small = CGBitmapContextCreateImage(dc);
+                CGContextRelease(dc);
+                if (small) { CGImageRelease(img); img = small; w = sw; h = sh; }
+            }
+        }
+    }
     CFURLRef url = CFURLCreateFromFileSystemRepresentation(NULL, (const UInt8 *)path, strlen(path), false);
-    CGImageDestinationRef dst = url ? CGImageDestinationCreateWithURL(url, (__bridge CFStringRef)UTTypePNG.identifier, 1, NULL) : NULL;
+    // The file's extension picks the format: .jpg / .jpeg write a JPEG (a tenth of a PNG's size, so a run's shots stay small enough to read quickly), anything else a PNG.
+    // The JPEG's quality is DM_NVN_SHOT_QUALITY (1 to 100, 80 by default).
+    CFStringRef type = (__bridge CFStringRef)UTTypePNG.identifier; NSDictionary *props = nil;
+    size_t plen = strlen(path);
+    if (plen >= 5 && (!memcmp(path + plen - 5, ".jpeg", 5) || !memcmp(path + plen - 5, ".JPEG", 5) || !memcmp(path + plen - 4, ".jpg", 4) || !memcmp(path + plen - 4, ".JPG", 4))) {
+        type = (__bridge CFStringRef)UTTypeJPEG.identifier;
+        const char *qe = getenv("DM_NVN_SHOT_QUALITY"); int q = qe ? atoi(qe) : 80;
+        if (q < 1 || q > 100) q = 80;
+        props = @{(__bridge NSString *)kCGImageDestinationLossyCompressionQuality: @(q)};
+    }
+    CGImageDestinationRef dst = url ? CGImageDestinationCreateWithURL(url, type, 1, NULL) : NULL;
     // If any step yields null (directory does not exist / not writable, bitmap context cannot be created), report a failure and return; previously it went straight to CFRelease(NULL) and crashed in CFRelease.cold (hit during a 1952-wide TEXDUMP)
     int ok = 0;
     if (!ctx || !img || !dst) MLOG("[RED] screenshot %s failed: %s", path, !ctx ? "cannot create the bitmap context" : !img ? "cannot get the image" : "cannot write (directory missing or not writable)");
-    else { CGImageDestinationAddImage(dst, img, NULL); ok = CGImageDestinationFinalize(dst); }
+    else { CGImageDestinationAddImage(dst, img, (__bridge CFDictionaryRef)props); ok = CGImageDestinationFinalize(dst); }
     if (dst) CFRelease(dst); if (url) CFRelease(url); CGImageRelease(img); CGContextRelease(ctx); CGColorSpaceRelease(cs);
     MLOG("screenshot %zux%zu format %lu → %s %s", w, h, (unsigned long)read.pixelFormat, path, ok ? "ok" : "failed");
 }

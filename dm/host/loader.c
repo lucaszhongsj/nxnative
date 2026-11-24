@@ -539,9 +539,74 @@ void dm_fps_state_apply(void) {
             shape_apply(a, 0);   // the game has not started: the page is its live shape, as a build without a runtime change has it
         }
     }
+    // DM_SCREEN_TRACE: the composition classifier's records (duo_anchor.c) into the state page's ring, drained here for the log at each present. Off by default:
+    // the stub pays one load per calculated pane, and dm_screen_trace_poll one per present
+    const char *tr = getenv("DM_SCREEN_TRACE");
+    uint32_t trace = tr && *tr && strcmp(tr, "0") != 0;
+    memcpy(dm_fps_state + 0x240, &trace, 4);
+    // The app-canvas background cover (duo_anchor.c): a full-screen leaf wider than the layout grows to the picture's height, its UI untouched.
+    // DM_SCREEN_BACKDROP=0 keeps the whole picture composition as the game drew it
+    const char *bd = getenv("DM_SCREEN_BACKDROP");
+    uint32_t cover = !(bd && strcmp(bd, "0") == 0);
+    memcpy(dm_fps_state + 0x250, &cover, 4);
+    if (!cover) LOG("%s: screen backdrop cover off (DM_SCREEN_BACKDROP=0)", g_fps_mod);
+    if (trace) {
+        uint32_t zero = 0;
+        memcpy(dm_fps_state + 0x24c, &zero, 4);   // the last projection view.s reported
+        memset(dm_fps_state + 0x2a0, 0, 0x40);    // the panes already traced (duo_anchor.c st + 0x220)
+        memset(dm_fps_state + 0xce0, 0, 0x64);    // head, tail, the last layout's root and present, and the hook probe's pane cache (duo_anchor.c st + 0xc60..st + 0xcc4)
+        LOG("%s: screen trace on (DM_SCREEN_TRACE): each layout and its full-screen panes, with the class the rules chose", g_fps_mod);
+    }
     char cap[32]; snprintf(cap, sizeof cap, ", capped at %d fps", t);
     LOG("%s: frame step %s%s (%s)", g_fps_mod, !t ? "as the game sets it" : "in whole vsyncs decided by the host", t ? cap : "", e ? "DM_FPS_TARGET" : "game profile fps_target");
     g_fps_applied = 1;
+}
+// The composition trace (DM_SCREEN_TRACE, on): what duo_anchor.c recorded since the last present, one line a record. The ring is at state +0x2e0: 64 records of
+// 40 bytes (kind, flags, the root's low address, the global width / height and centre offset in 720 units, the first eight name bytes, the class), with the
+// producer's head at +0xce0 and this drain's tail at +0xce4. It ends at +0xcf4, inside the frame step page: the patch area starts a page or more after it.
+// A stopped or busy guest only leaves records for the next present, and a full ring drops new ones; the producer marks only what the ring took, so its next
+// calculation retries a dropped record.
+static void trace_name(const unsigned char *r, char *out, int n) {
+    int i = 0;
+    for (; i < 8 && i < n - 1; i++) { unsigned char c = r[28 + i]; if (!c) break; out[i] = c >= 0x20 && c < 0x7f ? (char)c : '.'; }
+    out[i] = 0;
+}
+void dm_screen_trace_poll(void) {
+    if (!dm_fps_state) return;
+    uint32_t on; memcpy(&on, dm_fps_state + 0x240, 4); if (!on) return;
+    unsigned head = __atomic_load_n((unsigned *)(dm_fps_state + 0xce0), __ATOMIC_ACQUIRE);
+    uint32_t tail; memcpy(&tail, dm_fps_state + 0xce4, 4);
+    if (head - tail > 64) tail = head - 64;   // the ring wrapped past this drain: the lost records are gone
+    while (tail != head) {
+        const unsigned char *r = dm_fps_state + 0x2e0 + (tail & 63) * 40;
+        uint32_t kind, flags, root, cls; float w, h, x, y;
+        memcpy(&kind, r + 0, 4); memcpy(&flags, r + 4, 4); memcpy(&root, r + 8, 4);
+        memcpy(&w, r + 12, 4); memcpy(&h, r + 16, 4); memcpy(&x, r + 20, 4); memcpy(&y, r + 24, 4); memcpy(&cls, r + 36, 4);
+        char name[9]; trace_name(r, name, sizeof name);
+        if (kind == 0) {
+            unsigned hundred = (flags >> 8) & 0xff;
+            LOG("%s: screen trace: layout '%s' %gx%g px in the %s space, ratio %u.%02u, layouts' fit %s, last UI projection %s%s%s (root %08x)",
+                g_fps_mod, name, w, h, flags & 1 ? "1920" : "1280", hundred / 100, hundred % 100,
+                flags & 2 ? "on" : "off", flags & 4 ? "accepted" : "left to the game", flags & 8 ? ", shift off" : "", flags & 1024 ? ", cover on" : "", root);
+        } else if (kind == 1) {
+            static const char *const cls_name[] = {"none", "full-screen leaf", "-", "tall-narrow leaf", "edge move", "edge held", "container"};
+            LOG("%s: screen trace: pane '%s' %gx%g units at %+.0f,%+.0f [%s%s%s%s%s%s%s%s] -> %s (root %08x)",
+                g_fps_mod, name, w, h, x, y, flags & 1 ? "leaf " : "", flags & 2 ? "draws " : "", flags & 4 ? "full width " : "",
+                flags & 8 ? "full height " : "", flags & 16 ? "centred x " : "", flags & 32 ? "centred y " : "",
+                flags & 64 ? "within the tallest " : "", flags & 128 ? "container " : "",
+                cls < sizeof cls_name / sizeof *cls_name ? cls_name[cls] : "?", root);
+        } else if (kind == 3) {
+            unsigned texw = cls & 0xffff, texh = cls >> 16, aspect = (flags >> 16) & 0xff, gh = ((flags >> 24) & 0xff) * 8;
+            LOG("%s: screen trace: hook '%s' pane %gx%g tex %ux%u quad %gx%g aspect %u.%02u global %u px flags %02x/%02x",
+                g_fps_mod, name, w, h, texw, texh, x, y, aspect / 100, aspect % 100, gh, flags & 0xff, (flags >> 8) & 0xff);
+        } else {
+            LOG("%s: screen trace: edge '%s' %gx%g units at %+.0f,%+.0f [%s%s] -> %s (root %08x)",
+                g_fps_mod, name, w, h, x, y, flags & 256 ? "panel " : "", flags & 512 ? "docked keyboard" : "",
+                cls == 4 ? "moves out" : "held", root);
+        }
+        tail++;
+    }
+    memcpy(dm_fps_state + 0xce4, &tail, 4);
 }
 static void install_key_page(module_t *m) {
     if (m->key_page_off + m->key_page_size > m->size) die("%s: key page out of range", m->name);

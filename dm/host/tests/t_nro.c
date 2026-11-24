@@ -7,6 +7,7 @@ void dm_thread_service_connect(void) {}   // threads started so far have nothing
 #include <sys/wait.h>
 #include <unistd.h>
 void mtl_present_screen(uint32_t w, uint32_t h) { (void)w; (void)h; }   // loader.c: a screen taller than 16:9; no renderer here
+void mtl_present_picture(uint32_t w, uint32_t h) { (void)w; (void)h; }   // loader.c: the picture's rectangle in a window that holds every shape
 
 struct dm_flags g_flag;
 uint64_t now_ns(void) { return 0; }

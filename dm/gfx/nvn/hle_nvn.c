@@ -89,6 +89,7 @@ typedef struct { const char *name; void *fn; } nvn_impl;
 static int g_log;
 static pthread_mutex_t g_sub_mu = PTHREAD_MUTEX_INITIALIZER;
 static _Atomic uint64_t g_serial;
+static _Atomic int g_rt_w, g_rt_h;   // DM_DRAW_TRACE: the first colour target of the last SetRenderTargets
 uint64_t nvn_new_serial(void) { return ++g_serial; }
 void nvn_serial_floor(uint64_t s) { uint64_t c = atomic_load(&g_serial); while (c < s && !atomic_compare_exchange_weak(&g_serial, &c, s)) {} }
 static unsigned g_nsem;                          // Number of semantic implementations (filled by nvn_init_slots)
@@ -1463,6 +1464,7 @@ static const tex_t *tex_snap(void *rec_, size_t off, int k, const NVNtexture *t,
 }
 NVN(nvnCommandBufferSetRenderTargets, void, NVNcommandBuffer *c, int n, const NVNtexture *const *ct, const NVNtextureView *const *cv,
     const NVNtexture *dt, const NVNtextureView *dv) {
+    if (n > 0 && ct && ct[0] && ((const tex_t *)ct[0])->magic == MAGIC('T', 'E', 'X', 0)) { const tex_t *t = (const tex_t *)ct[0]; atomic_store(&g_rt_w, (int)t->d.width); atomic_store(&g_rt_h, (int)t->d.height); }
     if (n < 0 || n > 8) { LOG("[RED] SetRenderTargets count %d", n); n = n < 0 ? 0 : 8; }
     p_set_rt *r = REC_SNAP(c, OP_SET_RT, p_set_rt, n + 1); r->n = n;
     for (int i = 0; i < n; i++) { r->color[i] = ct ? tex_snap(r, SNAP_OFF(p_set_rt), i, ct[i], (uint64_t)__builtin_return_address(0)) : NULL; copy_view(&r->cview[i], &r->has_cview[i], cv ? cv[i] : NULL); }
@@ -1494,6 +1496,12 @@ static int slots_bound(const char *what, int st, int first, int n, int slots) {
     return k;
 }
 NVN(nvnCommandBufferSetViewports, void, NVNcommandBuffer *c, int first, int n, const float *v) {
+    // DM_VIEW_TRACE: the game code that sets each large viewport, for a picture-shape fault (one line per call, capped)
+    if (getenv("DM_VIEW_TRACE") && *getenv("DM_VIEW_TRACE")) { static _Atomic int cnt;
+        if (atomic_fetch_add(&cnt, 1) < 4000) { module_t *m = module_of(__builtin_return_address(0)); uint64_t ra = (uint64_t)__builtin_return_address(0);
+            for (int i = 0; i < n; i++) if (v[4 * i + 2] >= 200 && v[4 * i + 3] >= 200)
+                LOG("[nvn] viewport %g,%g %gx%g from %s+%#llx", v[4 * i], v[4 * i + 1], v[4 * i + 2], v[4 * i + 3],
+                    m ? m->name : "?", m ? (unsigned long long)(ra - (uint64_t)m->base) : (unsigned long long)ra); } }
     if (slots_fit(0, first, n, 16) != n) { LOG("[RED] SetViewports first=%d n=%d", first, n); return; }
     if (g_rec_compact && first >= 0) { uint8_t *q = crec(c, OPC_VIEWPORTS, (uint32_t)first | (uint32_t)n << 8 | (uint32_t)(((dev_t_ *)CB(c)->dev)->origin + 1) << 16, 16 * (size_t)n); memcpy(q, v, 16 * (size_t)n); return; }
     p_viewports *r = REC(c, OP_VIEWPORTS, p_viewports); r->first = first; r->n = n;
@@ -1651,6 +1659,10 @@ NVN_NOPROTO(nvnCommandBufferSetShadingRatePaletteMode, void, NVNcommandBuffer *c
 NVN(nvnCommandBufferDrawArraysIndirect, void, NVNcommandBuffer *c, NVNdrawPrimitive pr, NVNbufferAddress ind) { rec_draw(c, (p_draw){pr, 0, 0, 1, 0, ind}); }
 NVN(nvnCommandBufferDrawElementsInstanced, void, NVNcommandBuffer *c, NVNdrawPrimitive pr, NVNindexType it, int n, NVNbufferAddress ib,
     int bv, int bi, int inst) {
+    // DM_DRAW_TRACE: the game code that issues each small draw (a full-screen quad is 3 or 6), for a picture-shape fault (capped)
+    if (getenv("DM_DRAW_TRACE") && *getenv("DM_DRAW_TRACE") && n <= 8) { static _Atomic int cnt;
+        if (atomic_fetch_add(&cnt, 1) < 3000) { module_t *m = module_of(__builtin_return_address(0)); uint64_t ra = (uint64_t)__builtin_return_address(0);
+            LOG("[nvn] draw count=%d rt=%dx%d from %s+%#llx", n, atomic_load(&g_rt_w), atomic_load(&g_rt_h), m ? m->name : "?", m ? (unsigned long long)(ra - (uint64_t)m->base) : (unsigned long long)ra); } }
     rec_draw_idx(c, (p_draw_idx){pr, it, n, bv, bi, inst, ib});
 }
 NVN(nvnCommandBufferDispatchCompute, void, NVNcommandBuffer *c, int x, int y, int z) {

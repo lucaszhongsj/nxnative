@@ -2,7 +2,10 @@
 // The projection/scissor entry-point lead comes from the MIT-0 ACNH 3.0.X
 // Ultrawide project. Vertical coverage and dynamic cache checks are local.
 // State (the frame step page): +0x58 target aspect (0 = 16:9), +0xa0 layout match,
-// +0xa8/+0xb0/+0xb8 native UI frame stamps. No host-managed pointer is needed.
+// +0xa8/+0xb0/+0xb8 native UI frame stamps, +0x240 the composition trace's flag,
+// +0x24c the last UI projection it reported, +0x250 backdrop coverage (loader.c's
+// switches; 0 = keep the game's composition). The trace's records are at +0x2e0,
+// its head / tail at +0xce0 / +0xce4. No host-managed pointer is needed.
 .text
 .p2align 2
 .globl _dm_view_matrix
@@ -220,6 +223,12 @@ Lui_original:
 Lui_off:
     mov w8, wzr        ; the projection is left as the game made it
 Lui_return:
+    ; The composition trace (DM_SCREEN_TRACE, loader.c): the last projection this screen manager got, accepted or
+    ; left to the game, for duo_anchor.c's layout record. Off by default: one load.
+    ldr w16, [x15, #0x240]
+    cbz w16, Lui_return_done
+    str w8, [x15, #0x24c]
+Lui_return_done:
     ret
 Lui_x: .float 1.5454561710357666
 Lui_depth_z: .float -1.0002000331878662
@@ -704,6 +713,114 @@ Lscissor_origin_done:
 // Background and iris coverage constants are private to this draw; the pane,
 // layout and resource are untouched. Only full-screen centred backgrounds
 // expand their repeating UVs with the quad, retaining the pattern density.
+// The backdrop hook's gate probe (DM_SCREEN_TRACE, state +0x240): one 40-byte record a pane pointer that reaches the hook, with the fields its
+// gates compare -- the pane's own size, the texture's size, the draw quad's size, the draw's projection aspect and the two flag bytes -- so a Mac
+// run can name the gate that keeps an app-canvas background out of the cover. The ring, head and tail are duo_anchor.c's (state +0x2e0,
+// +0xce0/+0xce4); the last probed pane sits at +0xcf8. Records only, and only while the loader has turned the trace on.
+.globl _dm_view_backdrop_probe
+_dm_view_backdrop_probe:
+    stp x0, x1, [sp, #-32]!
+    stp x2, x30, [sp, #16]
+    adrp x15, _dm_view_state@PAGE
+    add x15, x15, _dm_view_state@PAGEOFF
+    ldr w9, [x15, #0x240]
+    cbz w9, Lprobe_done
+    // An 8-slot pane cache at +0xd00: a draw alternates among a working set, so one slot would re-record every draw of it
+    add x9, x15, #0xd00
+    mov w11, #8
+    mov w10, wzr
+Lprobe_scan:
+    ldr x12, [x9, x10, lsl #3]
+    cmp x12, x0
+    b.eq Lprobe_done
+    cbz x12, Lprobe_slot
+    add w10, w10, #1
+    subs w11, w11, #1
+    b.ne Lprobe_scan
+    ldrb w10, [x15, #0xd40]        // full: replace the rotating slot
+    and w10, w10, #7
+    add x9, x9, x10, lsl #3
+    b Lprobe_insert
+Lprobe_slot:
+    add x9, x9, x10, lsl #3
+Lprobe_insert:
+    str x0, [x9]
+    ldrb w10, [x15, #0xd40]
+    add w10, w10, #1
+    and w10, w10, #7
+    strb w10, [x15, #0xd40]
+    ldr w10, [x15, #0xce0]        // head
+    ldr w11, [x15, #0xce4]        // tail
+    sub w12, w10, w11
+    cmp w12, #64
+    b.hs Lprobe_done
+    and x12, x10, #63
+    add x12, x12, x12, lsl #2     // x5
+    lsl x12, x12, #3              // x40
+    add x12, x15, x12
+    add x12, x12, #0x2e0
+    mov w13, #3
+    str w13, [x12, #0]
+    ldrb w13, [x0, #0x5b]
+    ldrb w14, [x0, #0xb8]
+    orr w13, w13, w14, lsl #8
+    ldr s0, [x1, #0x24]
+    ldr s1, [x1, #0x10]
+    fdiv s0, s0, s1
+    ldr s1, Lprobe_hundred
+    fmul s0, s0, s1
+    fcvtzs w14, s0
+    cmp w14, #255
+    b.lo Lprobe_aspect
+    mov w14, #255
+Lprobe_aspect:
+    orr w13, w13, w14, lsl #16
+    ldr s2, [x0, #0x54]           // the pane's global height in px, in 8 px steps: a full-screen leaf's is ~1500 at 0.92
+    ldr s3, [x0, #0x84]
+    fmul s2, s2, s3
+    fabs s2, s2
+    fcvtzs w16, s2
+    lsr w16, w16, #3
+    cmp w16, #255
+    b.lo Lprobe_gh
+    mov w16, #255
+Lprobe_gh:
+    orr w13, w13, w16, lsl #24
+    str w13, [x12, #4]
+    str wzr, [x12, #8]
+    ldr s0, [x0, #0x50]
+    str s0, [x12, #12]
+    ldr s1, [x0, #0x54]
+    str s1, [x12, #16]
+    ldr s2, [x2, #0x210]
+    str s2, [x12, #20]
+    ldr s3, [x2, #0x214]
+    str s3, [x12, #24]
+    ldr x13, [x0, #0xb0]
+    str x13, [x12, #28]
+    ldr x13, [x1, #0xc0]
+    cbz x13, Lprobe_no_tex
+    ldp s4, s5, [x13, #0x28]
+    fcvtzs w14, s4
+    fcvtzs w16, s5
+    and w14, w14, #0xffff
+    and w16, w16, #0xffff
+    orr w14, w14, w16, lsl #16
+    str w14, [x12, #36]
+    b Lprobe_pub
+Lprobe_no_tex:
+    str wzr, [x12, #36]
+Lprobe_pub:
+    add w10, w10, #1
+    add x17, x15, #0xce0
+    stlr w10, [x17]
+Lprobe_done:
+    ldp x2, x30, [sp, #16]
+    ldp x0, x1, [sp], #32
+    ret
+.p2align 2
+Lprobe_hundred: .float 100.0
+
 .globl _dm_view_backdrop_call
 _dm_view_backdrop_call:
     stp x1, x30, [sp, #-16]!
@@ -718,6 +835,7 @@ _dm_view_backdrop_call:
 .globl _dm_view_backdrop
 _dm_view_backdrop:
     str x30, [sp, #-16]!
+    bl _dm_view_backdrop_probe
     mov w3, wzr
     bl _dm_view_transition
     ldr x30, [sp], #16
@@ -727,6 +845,11 @@ _dm_view_backdrop:
     ldr w16, [x15, #0x58]
     cbz w16, Lbackdrop_done
     ldr w16, [x15, #0x58]
+    cbz w16, Lbackdrop_done
+    // DM_SCREEN_BACKDROP=0 (state +0x250, loader.c): no backdrop coverage at all,
+    // neither this draw-time expansion nor the canvas cover (duo_anchor.c), so a
+    // run keeps the picture the game itself composed.
+    ldr w16, [x15, #0x250]
     cbz w16, Lbackdrop_done
     // WipeCircle's animated side curtains use reference-screen coverage.
     // Preserve their aperture edge while extending only the outer coverage.

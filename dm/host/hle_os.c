@@ -5,6 +5,10 @@
 #include <mach/mach_time.h>
 #include <stdatomic.h>
 
+// loader.c defines the frame step page and the composition trace drain (DM_SCREEN_TRACE); a test that links this file alone has neither
+__attribute__((weak)) uint8_t *dm_fps_state;
+__attribute__((weak)) void dm_screen_trace_poll(void) {}
+
 // ---------- Side table ----------
 // Guest object -> host state, linear probing with backward-shift deletion: no deleted markers, so every key sits once in the run of
 // occupied slots from its home slot, and an empty slot ends every search (t_objmap). Keys are guest pointers, never NULL.
@@ -82,6 +86,7 @@ void dm_guest_frame_tick(void) {
     // rendered within the last two presents" is a subtraction. The slot is past every field the frame step stubs read (+0x9c and
     // below), so a profile without an adapter only sees a value nothing reads; the write is one relaxed store per present.
     if (dm_fps_state) __atomic_store_n((uint64_t *)(dm_fps_state + 0xa8), f, __ATOMIC_RELAXED);
+    if (dm_fps_state) dm_screen_trace_poll();   // DM_SCREEN_TRACE: the composition records of the last frame
     if (!detclock_cfg()) return;
     if (!atomic_load(&g_gdet_on)) {
         atomic_store(&g_gdet, wall_guest_ns()); atomic_store(&g_gdet_on, 1);

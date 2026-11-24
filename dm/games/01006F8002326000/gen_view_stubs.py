@@ -57,7 +57,11 @@ def generate(source):
 if __name__=='__main__':
     parser=argparse.ArgumentParser(description=__doc__);parser.add_argument('source',type=Path);parser.add_argument('output',type=Path);args=parser.parse_args()
     generated=generate(args.source)
-    if args.output.exists() and '# BEGIN GENERATED VIEW CODE' in args.output.read_text():
-        old=args.output.read_text();start=old.index('# BEGIN GENERATED VIEW CODE');end=old.index('# END GENERATED VIEW CODE',start)
-        args.output.write_text(old[:start]+'# BEGIN GENERATED VIEW CODE\n'+generated+old[end:])
+    old=args.output.read_text() if args.output.exists() else ''
+    # The markers as patches.py writes them ('# ==== BEGIN GENERATED VIEW CODE ...'): a search for the bare
+    # marker missed them and replaced the whole file, hand-written stubs included.
+    if 'BEGIN GENERATED VIEW CODE' in old and 'END GENERATED VIEW CODE' in old:
+        start=old.rindex('\n',0,old.index('BEGIN GENERATED VIEW CODE'))+1
+        end=old.rindex('\n',0,old.index('END GENERATED VIEW CODE',start))+1
+        args.output.write_text(old[:start]+'# ==== BEGIN GENERATED VIEW CODE (gen_view_stubs.py; do not edit) ====\n'+generated+old[end:])
     else:args.output.write_text(generated)
