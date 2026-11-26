@@ -435,7 +435,16 @@ static UIInterfaceOrientationMask plist_orientations(void) {
     }
     return m ? m : UIInterfaceOrientationMaskAll;
 }
-UIInterfaceOrientationMask front_ios_app_orientations(void) { return dm_rotation_mask(getenv("DM_ROTATION"), plist_orientations()); }
+UIInterfaceOrientationMask front_ios_app_orientations(void) {
+    const char *rotation = getenv("DM_ROTATION");
+    UIInterfaceOrientationMask m = dm_rotation_mask(rotation, plist_orientations());
+#if !DM_GAME_SCREEN_UNION
+    // Only the profile whose stubs follow the picture's two shapes (DmLayout.h dm_picture_shape_auto) fills a phone standing up; another game's 16:9
+    // picture would sit letterboxed in the upper half. Automatic keeps the phone's landscapes for them; an explicit Portrait choice still stands it up.
+    if (!rotation || !*rotation || !strcmp(rotation, "auto")) m &= UIInterfaceOrientationMaskLandscape;
+#endif
+    return m;
+}
 void dm_rotation_set(const char *value) {
     if (value) setenv("DM_ROTATION", value, 1);
     const char *now = getenv("DM_ROTATION"); if (!now || !*now) now = "auto";
