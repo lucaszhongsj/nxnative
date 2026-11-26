@@ -240,9 +240,13 @@ fi
 [ "${DM_COPY_ROMFS:-YES}" != NO ] || [ "$PREPARE_XCODE" != YES ] || echo "DM_COPY_ROMFS = NO" >> Gen/dm.xcconfig
 xcodegen generate -q > /dev/null || die "xcodegen"
 # A phone standing up splits at its midpoint (DmLayout.h dm_layout), which only the profile whose stubs read the union window follows (screen_union): its
-# Info.plist adds the phone's portrait beside the template's two landscapes. Every other game keeps the phone's landscape contract (test_orientation_policy.py)
+# Info.plist adds the phone's portrait beside the template's two landscapes. Insert it only when the template does not list it already (a newer upstream's
+# template may carry it): the array must not hold the same orientation twice. Every other game keeps the phone's landscape contract (test_orientation_policy.py)
 if grep -qE '^screen_union[[:space:]]*on([[:space:]]|$)' "$GD/game.tsv"; then
-  plutil -insert UISupportedInterfaceOrientations.0 -string UIInterfaceOrientationPortrait -- Gen/Info.plist || die "portrait orientation"; t "orientation: the phone adds portrait (the profile follows the picture's two shapes)"
+  if ! plutil -extract UISupportedInterfaceOrientations json -o - Gen/Info.plist 2>/dev/null | grep -q 'UIInterfaceOrientationPortrait'; then
+    plutil -insert UISupportedInterfaceOrientations.0 -string UIInterfaceOrientationPortrait -- Gen/Info.plist || die "portrait orientation"
+    t "orientation: the phone adds portrait (the profile follows the picture's two shapes)"
+  fi
 fi
 # DMCommit / DMChain: the checkout that built the app (+dirty with uncommitted changes to tracked files) and the shader chain it carries, which the host logs at start (main.c).
 # plutil -replace inserts or overwrites (and sets the type), so a project.yml that already defines these keys does not abort the prepare.
