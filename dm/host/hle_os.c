@@ -81,14 +81,20 @@ __attribute__((weak)) void dm_cheats_present(void) {}   // strong definition in 
 int dm_detclock_enabled(void) { return detclock_cfg() && atomic_load(&g_gdet_on); }
 void dm_guest_frame_tick(void) {
     crash_watch_frame();
+#if DM_GAME_SCREEN_UNION
     uint64_t f = atomic_fetch_add(&g_guest_frame, 1) + 1;
+#else
+    atomic_fetch_add(&g_guest_frame, 1);
+#endif
     dm_cheats_present();   // apply enabled cheats once per presented guest frame across NVN, Vulkan, and OpenGL
+#if DM_GAME_SCREEN_UNION
     // The frame stamps of a profile's adaptive-view adapter (Animal Crossing's view.s): the adapter keeps +0xa8 as this present
     // counter and writes a stamp into +0xb0 / +0xb8 where the game draws the keyboard or a touch panel, so "the keyboard was
     // rendered within the last two presents" is a subtraction. The slot is past every field the frame step stubs read (+0x9c and
-    // below), so a profile without an adapter only sees a value nothing reads; the write is one relaxed store per present.
+    // below). Only the profile with that adapter pays the store and the trace poll; another profile's state page ends at +0x9c.
     if (dm_fps_state) __atomic_store_n((uint64_t *)(dm_fps_state + 0xa8), f, __ATOMIC_RELAXED);
     if (dm_fps_state) dm_screen_trace_poll();   // DM_SCREEN_TRACE: the composition records of the last frame
+#endif
     if (!detclock_cfg()) return;
     if (!atomic_load(&g_gdet_on)) {
         atomic_store(&g_gdet, wall_guest_ns()); atomic_store(&g_gdet_on, 1);
