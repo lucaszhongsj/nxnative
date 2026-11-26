@@ -714,6 +714,7 @@ int thr_list(pthread_t *out, int max) {
     g_unlock();
     return n;
 }
+#ifdef DM_HAS_COMPANION
 // A companion's expect-guarded inventory write: stop every guest thread, run body, resume. G pins the thread objects and keeps
 // StartThread / ExitThread from mutating the list; a new pthread still in its prologue cannot reach guest code until it takes G.
 // Refuse from a guest thread (it would suspend itself) or when G is held elsewhere. The ports come from the heap: MAX_H of them
@@ -734,6 +735,7 @@ int dm_guest_transaction(int (*body)(void *), void *context) {
     free(ports); pthread_mutex_unlock(&G);
     return ok;
 }
+#endif
 
 // Soak readings (DM_SOAK): handle table usage, live guest threads, total thread objects (including exited but not yet freed)
 void thr_counts(int *handles, int *live, int *objs) {

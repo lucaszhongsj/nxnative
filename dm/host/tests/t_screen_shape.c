@@ -23,7 +23,8 @@ int svc_nro_deactivate(module_t *m) { m->loaded = 0; return 1; }
 void dm_thread_service_connect(void) {}
 void dm_exl_sync_all(void) {}   // loader.c's run_module_inits: no exl modules here
 
-static uint8_t g_page[0x400];
+static uint8_t g_page[0x1000];   // the whole frame step page the profile reserves (loader.c FPS_STATE_SIZE: through the trace ring)
+_Static_assert(sizeof g_page >= 0xd44, "the frame step page's fields reach +0xd43 (loader.c FPS_STATE_SIZE)");
 static int g_cases, g_fails;
 
 static uint32_t at(size_t off) { uint32_t v; memcpy(&v, g_page + off, 4); return v; }
@@ -108,6 +109,16 @@ int main(void) {
     shape("1.12", 0, 0, "a 16:9 phone standing up is not the adapted device: 16:9");
     shape("1.43", 1920, 1344, "an iPhone Duo keeps main's range");
 #if DM_GAME_SCREEN_UNION
+    check(atf(0x80) == 0.0f, "the union profile clears the HUD's edge shift for a narrower picture");
+#else
+    check(atf(0x80) == 88.0f && atf(0x84) == 896.0f / 720.0f, "main's HUD keeps its edge shift (88) and stretch (896/720)");
+#endif
+#if DM_GAME_SCREEN_UNION
+    shape("1.55", 1920, 1240, "the union window's heights are multiples of 8");
+#else
+    shape("1.55", 1920, 1248, "main's heights are multiples of 48, so the 2/3 layout space stays whole");
+#endif
+#if DM_GAME_SCREEN_UNION
     shape("2.17", 1920, 888, "a 19.5:9 phone lying down");
 #else
     shape("2.17", 0, 0, "without the union stubs the range stops at 1.77: 16:9");
@@ -117,7 +128,7 @@ int main(void) {
     shape("1.77", 0, 0, "main's ceiling is exclusive: 16:9");
     shape("0", 0, 0, "0 is 16:9");
     shape(NULL, 0, 0, "unset is 16:9");
-#if DM_GAME_SCREEN_ASPECT
+#if DM_GAME_SCREEN_UNION
     union_shape();
     {   // The boot shape takes the same cap from the environment (front_ios.m sets it before the host starts)
         memset(g_page, 0, sizeof g_page);

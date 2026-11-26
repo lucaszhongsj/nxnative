@@ -21861,11 +21861,7 @@ static id<MTLTexture> present_raw_src(id<MTLTexture> src) {
 // differs from the game's, e.g. iPhone about 19.5:9 against the game's 16:9); when the ratios differ by under 1 % (the remainder from a game width that is a multiple of 8 in the
 // full-screen setup, e.g. 1952x900 against 2868x1320 differs by 0.17 %) the whole canvas, leaving no border of a few pixels
 static MTLViewport present_viewport(double pw, double ph, double dw, double dh) {
-    // The front end's picture fit (DM_PICTURE_FIT, the in-game menu's Picture: Fit or Fill): Fill covers the drawable and crops the edges, the way the front
-    // end lays its views out. A turn's first frame can still hold the picture of the shape before it, and letterboxing it into the new drawable made it shrink
-    // into a strip for one frame (33 ms at 30 fps); covering it keeps the screen full until the game's new-shape frame lands
-    const char *fit = getenv("DM_PICTURE_FIT");   // the in-game menu changes it while the game runs (GameMenu.swift sets the environment)
-    double s = fit && !strcmp(fit, "fill") ? fmax(dw / pw, dh / ph) : fmin(dw / pw, dh / ph);
+    double s = fmin(dw / pw, dh / ph);
     MTLViewport vp = {floor((dw - pw * s) / 2), floor((dh - ph * s) / 2), round(pw * s), round(ph * s), 0, 1};
     if (fabs((dw / dh) / (pw / ph) - 1) < 0.01) vp = (MTLViewport){0, 0, dw, dh, 0, 1};
     return vp;
@@ -21933,7 +21929,16 @@ static MTLViewport present_fit(id<MTLTexture> src, const int crop[4], NSUInteger
 static MTLViewport present_picture_fit(id<MTLTexture> src, const int crop[4], NSUInteger r[4], double dw, double dh) {
     if (atomic_load(&g_picture_shape) && (r[2] || r[3])) {
         double w = r[2], h = r[3];
-        if (!present_fill_on() || dw <= 0 || dh <= 0) return present_viewport(w, h, dw, dh);
+        if (!present_fill_on() || dw <= 0 || dh <= 0) {
+            // The front end's Fill where its view does not size the picture (iOS, front_ios.m): the frame at a turn still carries the shape the
+            // drawable had before it changed, so cover it (crop its edges) instead of letterboxing it into a strip for that one frame
+            const char *fit = getenv("DM_PICTURE_FIT");
+            if (fit && !strcmp(fit, "fill") && w > 0 && h > 0 && dw > 0 && dh > 0 && fabs((dw / dh) / (w / h) - 1) > 0.01) {
+                present_cover(w, h, r, dw, dh);
+                return (MTLViewport){0, 0, dw, dh, 0, 1};
+            }
+            return present_viewport(w, h, dw, dh);
+        }
         present_cover(w, h, r, dw, dh);
         return (MTLViewport){0, 0, dw, dh, 0, 1};
     }

@@ -1,3 +1,4 @@
+#ifdef DM_HAS_COMPANION
 // Guest memory access for an ACNH companion module (Eden Duo's ABI). The host owns the guest address space, so reads and the player's own inventory
 // writes go through hle_svc.c's locked heap helpers rather than a bare vm_read: a concurrent SetHeapSize cannot turn a bounds check into a use-after-free.
 #include "dm.h"
@@ -103,3 +104,4 @@ int dm_companion_guest_write_batch(const dm_companion_write_op *ops, uint32_t co
     }
     return dm_guest_transaction(apply_batch, &batch);
 }
+#endif

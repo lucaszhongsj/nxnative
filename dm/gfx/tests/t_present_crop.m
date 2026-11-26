@@ -304,14 +304,28 @@ int main(int argc, char **argv) { @autoreleasepool {
             EXPECT("picture width",sizes[i].w,(int)vp.width);EXPECT("picture height",sizes[i].h,(int)vp.height);
         }
         EXPECT("empty content is not upscaled",0,fx_wanted((MTLViewport){0,0,2868,1320,0,1},0,720));
-        // DM_PICTURE_FIT (the front end's Picture setting): Fit letterboxes a picture of another shape, Fill covers the drawable and crops its edges. A
-        // turn's first frame is exactly this case: the standing picture (1880x2040) in the lying-down drawable, one frame before the new shape lands
-        { MTLViewport vp = present_viewport(1880, 2040, 2868, 1320);
-          EXPECT("Fit letterboxes the picture of another shape", 1320, (int)vp.height); EXPECT("Fit narrows it", 1216, (int)vp.width); }
-        setenv("DM_PICTURE_FIT", "fill", 1);
-        { MTLViewport vp = present_viewport(1880, 2040, 2868, 1320);
-          EXPECT("Fill covers the drawable's width", 2868, (int)vp.width); EXPECT("Fill runs past its height", 1, vp.height > 1320); }
-        unsetenv("DM_PICTURE_FIT");
+        // DM_PICTURE_FIT (the front end's Picture setting, the Mac's present): Fit letterboxes a picture of another shape, Fill covers the drawable and crops
+        // its edges. A turn's first frame is exactly this case: the standing picture (1880x2040) in the lying-down drawable, one frame before the new shape lands
+        {   MTLTextureDescriptor *td2=[MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA8Unorm width:64 height:64 mipmapped:NO];
+            td2.storageMode=MTLStorageModePrivate;td2.usage=MTLTextureUsageShaderRead;
+            id<MTLTexture> pic=[g_dev newTextureWithDescriptor:td2];res_add(pic);res_commit();
+            mtl_present_picture(1880,2040);g_present_fill=-1;unsetenv("DM_PICTURE_FIT");
+            NSUInteger r[4];present_crop_rect(pic,NULL,r);
+            MTLViewport vp=present_fit(pic,NULL,r,2868,1320);
+            EXPECT("Fit letterboxes the picture of another shape",1320,(int)vp.height);EXPECT("Fit narrows it",1216,(int)vp.width);
+            setenv("DM_PICTURE_FIT","fill",1);g_present_fill=-1;present_crop_rect(pic,NULL,r);
+            vp=present_fit(pic,NULL,r,2868,1320);
+            EXPECT("Fill covers the drawable's width",2868,(int)vp.width);EXPECT("Fill covers the drawable's height",1320,(int)vp.height);
+            EXPECT("Fill crops the source to the drawable's shape",27,(int)r[3]);
+            // The production path: present_encode draws through present_picture_fit, which keeps the queued frame's picture rectangle
+            int cropPic[4]={0,0,1880,2040};NSUInteger q[4]={0,0,1880,2040};
+            vp=present_picture_fit(pic,cropPic,q,2868,1320);
+            EXPECT("Fill covers the drawable through the picture's crop",2868,(int)vp.width);EXPECT("Fill crops the queued picture",865,(int)q[3]);
+            unsetenv("DM_PICTURE_FIT");g_present_fill=-1;
+            q[0]=0;q[1]=0;q[2]=1880;q[3]=2040;vp=present_picture_fit(pic,cropPic,q,2868,1320);
+            EXPECT("Fit letterboxes the queued picture",1320,(int)vp.height);EXPECT("Fit narrows the queued picture",1216,(int)vp.width);
+            unsetenv("DM_PICTURE_FIT");g_present_fill=-1;mtl_present_picture(0,0);res_remove(pic);
+        }
     }
     if([MTLFXSpatialScalerDescriptor supportsMetal4FX:g_dev]) {   // the present pass through MetalFX into an offscreen canvas (present_offscreen_m4, as DM_NVN_SHOT_OUT uses it)
         g_fx_mode=1;

@@ -35,8 +35,8 @@ targets:
         UILaunchScreen: {}
         UIFileSharingEnabled: true          # Documents (log.txt, saves) visible in the Files app
         LSSupportsOpeningDocumentsInPlace: true
+        # The phone's two landscapes; a screen_union profile adds Portrait at build time (build_ipa.sh, DmLayout.h dm_layout)
         UISupportedInterfaceOrientations:
-          - UIInterfaceOrientationPortrait
           - UIInterfaceOrientationLandscapeRight
           - UIInterfaceOrientationLandscapeLeft
         UISupportedInterfaceOrientations~ipad:

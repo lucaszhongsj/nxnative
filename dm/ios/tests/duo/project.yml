@@ -32,7 +32,6 @@ targets:
         UIStatusBarHidden: true
         UIViewControllerBasedStatusBarAppearance: false
         UISupportedInterfaceOrientations:
-          - UIInterfaceOrientationPortrait
           - UIInterfaceOrientationLandscapeLeft
           - UIInterfaceOrientationLandscapeRight
         UISupportedInterfaceOrientations~ipad:
@@ -62,7 +61,6 @@ targets:
           - $(SRCROOT)/../../Sources
           - $(SRCROOT)/Sources/Fixtures
         SWIFT_OBJC_BRIDGING_HEADER: $(SRCROOT)/../../Sources/DmIOS-Bridging-Header.h
-        GCC_PREPROCESSOR_DEFINITIONS: "$(inherited) DM_COMPANION=1"   # front_ios.m's band view: the harness's stubs stand in for the Swift companion
         CLANG_ENABLE_OBJC_ARC: YES
         CODE_SIGN_STYLE: Automatic
         DEVELOPMENT_TEAM: ""
@@ -78,11 +76,6 @@ targets:
     settings:
       base:
         GENERATE_INFOPLIST_FILE: YES
-        HEADER_SEARCH_PATHS:
-          - $(inherited)
-          - $(SRCROOT)/../../../host
-          - $(SRCROOT)/../../Sources
-          - $(SRCROOT)/Sources/Fixtures
         PRODUCT_BUNDLE_IDENTIFIER: org.nxnative.DuoHarnessTests
         IPHONEOS_DEPLOYMENT_TARGET: "26.0"
         HEADER_SEARCH_PATHS:

@@ -19,7 +19,9 @@
 #include <sys/xattr.h>
 #include "romfs_image.h"
 #include "save_sync.h"
+#ifdef DM_HAS_COMPANION
 #include "companion.h"
+#endif
 
 #define RES_PATH_NOT_FOUND 0x202u      // fs module 2, description 1
 #define RES_PATH_EXISTS    0x402u      // fs module 2, description 2
@@ -1668,6 +1670,7 @@ HLE_FORCE("_ZN2nn2fs26SetPriorityOnCurrentThreadENS0_8PriorityE", "fsp-srv; file
 HLE_FORCE("_ZN2nn2fs6detail18IsEnabledAccessLogEj", "fsp-srv; access log always off (returns bool)", unsigned, h_fs_AccessLogMask, unsigned mask) { (void)mask; return 0; }
 HLE_FORCE("_ZN2nn2fs6detail18IsEnabledAccessLogEv", "fsp-srv; access log always off (returns bool)", unsigned, h_fs_AccessLog, void) { return 0; }
 
+#ifdef DM_HAS_COMPANION
 // The companion reads its art from the same RomFS the game mounts: DM_ROMFS is either an unpacked folder or a single
 // DMROMFS1 image file. Paths are relative to the rom mount, without a mount name. out == NULL && n == 0 asks for the size.
 size_t dm_companion_read_romfs(const char *path, uint64_t offset, void *out, size_t n) {
@@ -1735,3 +1738,4 @@ size_t dm_companion_read_romfs(const char *path, uint64_t offset, void *out, siz
     if (!found) LOG("fs companion: %s is not in the RomFS image", path);
     return result;
 }
+#endif

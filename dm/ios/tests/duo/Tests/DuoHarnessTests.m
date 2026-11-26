@@ -10,7 +10,6 @@
 #define DUO_HARNESS_HAS_NATIVE_POSE_API 0
 #endif
 #import "DmLayout.h"
-#import "companion_layout.h"
 #import "DmGameMenu.h"
 #import "DuoHarnessRuntime.h"
 #import "DmRotation.h"
@@ -99,8 +98,6 @@ typedef void (^DuoLiveHandler)(id<GCDevicePhysicalInput>, id<GCPhysicalInputElem
 @property (nonatomic, readonly) GCExtendedGamepad *extendedGamepad;
 @property (nonatomic, readonly) GCMotion *motion;
 @property (nonatomic, readonly) DuoLiveInput *input;
-@property (nonatomic, readonly) GCPhysicalInputProfile *physicalInputProfile;
-@property (nonatomic, readonly) GCMicroGamepad *microGamepad;
 - (instancetype)initWithCategory:(NSString *)category;
 @end
 @implementation DuoLiveController
@@ -114,10 +111,6 @@ typedef void (^DuoLiveHandler)(id<GCDevicePhysicalInput>, id<GCPhysicalInputElem
 - (NSString *)vendorName { return self.productCategory; }
 - (GCExtendedGamepad *)extendedGamepad { return nil; }
 - (GCMotion *)motion { return nil; }
-// The GameController framework asks the most recently active controller for its physical profile when the device session refreshes; a fake has none, and the pad's own
-// question (turning the system gestures of Home and Capture off) then leaves the buttons as they are.
-- (GCPhysicalInputProfile *)physicalInputProfile { return nil; }
-- (GCMicroGamepad *)microGamepad { return nil; }
 @end
 
 #if DUO_HARNESS_HAS_NATIVE_POSE_API
@@ -277,21 +270,15 @@ static Class DuoHarnessInstallReservedRegionProbe(UIView *view) API_AVAILABLE(io
     const UIEdgeInsets insets[] = {UIEdgeInsetsMake(59, 0, 34, 0), UIEdgeInsetsMake(50, 0, 24, 0)};
     for (NSUInteger i = 0; i < 2; i++) {
         CGRect bounds = sizes[i];
-        CGFloat aspect = dm_picture_shape_auto(bounds.size);
-        if (aspect <= 0) aspect = DM_PICTURE_16_9;   // a window the adapter does not follow keeps 16:9
-        DmLayout layout = dm_layout(bounds, insets[i], NO, CGRectNull, aspect);
-        // No fold: the area below the safe top splits in half, the picture fills the upper half and the panel the lower half
         CGFloat splitY = CGRectGetMidY(bounds);
+        CGRect safe = UIEdgeInsetsInsetRect(bounds, insets[i]);
+        DmLayout layout = dm_layout(bounds, insets[i], NO, CGRectNull, DM_PICTURE_16_9);
         XCTAssertTrue(layout.separated);
-        XCTAssertTrue(CGRectEqualToRect(layout.companion, CGRectMake(0, splitY, bounds.size.width, bounds.size.height - splitY)),
-                      @"The panel keeps the lower half");
-        XCTAssertTrue(CGRectEqualToRect(layout.controls, layout.companion),
-                      @"The pad floats over the whole band");
-        XCTAssertEqualWithAccuracy(layout.game.size.width / layout.game.size.height, aspect, 0.001);
-        if (dm_picture_shape_follows(bounds.size))
-            XCTAssertEqualWithAccuracy(layout.game.size.height, splitY, 0.5, @"The 19.5:9 phone's half fills the upper half");
-        XCTAssertEqualWithAccuracy(layout.game.size.width, bounds.size.width, 0.5, @"Its sides are not cropped: %@", NSStringFromCGRect(layout.game));
-        XCTAssertLessThanOrEqual(CGRectGetMaxY(layout.game), CGRectGetMinY(layout.companion), @"The band's top leaves no video/panel overlap");
+        XCTAssertTrue(CGRectEqualToRect(layout.controls, CGRectMake(0, splitY, bounds.size.width, bounds.size.height - splitY)));
+        XCTAssertEqualWithAccuracy(layout.game.size.width / layout.game.size.height, 16.0 / 9.0, 0.001);
+        XCTAssertGreaterThanOrEqual(CGRectGetMinY(layout.game), CGRectGetMinY(safe));
+        XCTAssertLessThanOrEqual(CGRectGetMaxY(layout.game), splitY);
+        XCTAssertLessThanOrEqual(CGRectGetMaxY(layout.game), CGRectGetMinY(layout.controls), @"The midpoint boundary leaves no video/control overlap");
     }
 }
 
@@ -313,174 +300,11 @@ static Class DuoHarnessInstallReservedRegionProbe(UIView *view) API_AVAILABLE(io
     XCTAssertLessThanOrEqual(CGRectGetMaxY(separated.game), CGRectGetMinY(separated.controls));
 }
 
-- (void)testPictureShapeAutoFillsHalfTheScreenWhenStandingUp {
-    // One device is followed beyond main's 1.3 to 1.77: a 19.5:9 phone. Standing up, its upper half's shape; lying down, its own wide shape.
-    XCTAssertEqualWithAccuracy(dm_picture_shape_auto(CGSizeMake(390, 844)), 2 * 390.0 / 844.0, 0.001);
-    XCTAssertEqual(dm_picture_shape_auto(CGSizeMake(375, 667)), 0.0, @"A 16:9 phone standing up is not adapted: 16:9");
-    XCTAssertEqualWithAccuracy(dm_picture_shape_auto(CGSizeMake(430, 932)), 2 * 430.0 / 932.0, 0.001);
-    // Every other device keeps main's answer: the screen's long side over its short one, 1.3 to 1.77, or 16:9 outside it.
-    XCTAssertEqualWithAccuracy(dm_picture_shape_auto(CGSizeMake(820, 1180)), 1180.0 / 820.0, 0.001, @"An unfolded Duo standing up keeps main's shape");
-    XCTAssertEqualWithAccuracy(dm_picture_shape_auto(CGSizeMake(744, 1133)), 1133.0 / 744.0, 0.001);
-    XCTAssertEqualWithAccuracy(dm_picture_shape_auto(CGSizeMake(1032, 1376)), 1376.0 / 1032.0, 0.001);
-    XCTAssertEqualWithAccuracy(dm_picture_shape_auto(CGSizeMake(1376, 1032)), 1376.0 / 1032.0, 0.001, @"An unfolded Duo lying down is 4:3");
-    XCTAssertEqualWithAccuracy(dm_picture_shape_auto(CGSizeMake(844, 390)), 844.0 / 390.0, 0.001, @"A 19.5:9 phone lying down");
-    XCTAssertEqualWithAccuracy(dm_picture_shape_auto(CGSizeMake(1024, 768)), 1024.0 / 768.0, 0.001, @"An iPad lying down is 4:3");
-    XCTAssertEqual(dm_picture_shape_auto(CGSizeMake(600, 600)), 0.0f, @"A square window is outside main's range: 16:9");
-    XCTAssertEqual(dm_picture_shape_auto(CGSizeZero), 0.0f);
-    XCTAssertEqualWithAccuracy(dm_picture_shape_auto(CGSizeMake(402, 874)), 2 * 402.0 / 874.0, 0.001, @"An iPhone 17 Pro standing up");
-    XCTAssertEqualWithAccuracy(dm_picture_shape_auto(CGSizeMake(874, 402)), 874.0 / 402.0, 0.001, @"The same phone lying down");
-}
-
 - (void)testPortraitWithoutHingeStatusStillSplitsVideoAboveControls {
-    // A phone standing up splits the screen at its midpoint: the picture fills the upper half, the panel the lower half
-    DmLayout layout = dm_layout(CGRectMake(0, 0, 390, 844), UIEdgeInsetsMake(59, 0, 34, 0), NO, CGRectNull, dm_picture_shape_auto(CGSizeMake(390, 844)));
+    DmLayout layout = dm_layout(CGRectMake(0, 0, 390, 844), UIEdgeInsetsMake(59, 0, 34, 0), NO, CGRectNull, DM_PICTURE_16_9);
     XCTAssertTrue(layout.separated);
-    XCTAssertEqualWithAccuracy(layout.game.size.height, 422, 0.5, @"The picture fills the upper half's height: %@", NSStringFromCGRect(layout.game));
-    XCTAssertEqualWithAccuracy(CGRectGetMinY(layout.game), 0, 0.5, @"It starts at the top of the screen");
-    XCTAssertEqualWithAccuracy(CGRectGetMaxY(layout.game), CGRectGetMinY(layout.companion), 0.5, @"No bar between the picture and the band");
-    XCTAssertEqualWithAccuracy(layout.game.size.width, 390, 0.5, @"The picture is the screen's width: its sides are not cropped");
-    XCTAssertEqualWithAccuracy(CGRectGetMinY(layout.companion), 422, 0.5);
-    XCTAssertEqualWithAccuracy(layout.companion.size.height, 422, 0.5, @"The panel keeps the lower half");
-    XCTAssertTrue(CGRectEqualToRect(layout.controls, layout.companion), @"The pad floats over the whole band");
-    XCTAssertEqualWithAccuracy(CGRectGetMaxY(layout.controls), 844, 0.5);
-    // An iPad standing up splits the area below its safe top in half
-    DmLayout ipad = dm_layout(CGRectMake(0, 0, 820, 1180), UIEdgeInsetsMake(24, 0, 20, 0), NO, CGRectNull, dm_picture_shape_auto(CGSizeMake(820, 1180)));
-    XCTAssertTrue(ipad.separated);
-    XCTAssertEqualWithAccuracy(CGRectGetMinY(ipad.companion), 590, 0.5, @"An iPad splits at its midpoint");
-    XCTAssertEqualWithAccuracy(ipad.game.size.height, 820 / (1180.0 / 820.0), 0.5, @"A device the adapter does not follow keeps main's shape inside the split");
-    XCTAssertEqualWithAccuracy(ipad.game.size.width, 820, 0.5, @"Its sides are not cropped");
-}
-
-- (void)testCompanionTakesTheBandUnderThePictureAndNoOtherLayoutHasOne {
-    // The pad floats over the band, so the panel is the whole band and is drawn under the keys: the same rectangle as the controls, not a part of it
-    DmLayout split = dm_layout(CGRectMake(0, 0, 390, 844), UIEdgeInsetsMake(59, 0, 34, 0), NO, CGRectNull, DM_PICTURE_16_9);
-    XCTAssertTrue(split.separated);
-    XCTAssertTrue(CGRectEqualToRect(split.companion, split.controls), @"The band is the pad's area: %@ against %@", NSStringFromCGRect(split.companion), NSStringFromCGRect(split.controls));
-    XCTAssertLessThanOrEqual(CGRectGetMaxY(split.game), CGRectGetMinY(split.companion), @"The picture stays above the band");
-    // A Duo's fold moves the band with the controls
-    DmLayout folded = dm_layout(CGRectMake(0, 0, 669, 951), UIEdgeInsetsMake(62, 0, 34, 0), NO, CGRectMake(0, 455.5, 669, 40), DM_PICTURE_16_9);
-    XCTAssertTrue(folded.separated);
-    XCTAssertTrue(CGRectEqualToRect(folded.companion, folded.controls));
-    XCTAssertEqualWithAccuracy(CGRectGetMinY(folded.companion), 495.5, 0.5, @"Below the fold's lower half");
-    // Landscape (the overlay) and a picture on a TV have no band
-    DmLayout overlay = dm_layout(CGRectMake(0, 0, 844, 390), UIEdgeInsetsZero, NO, CGRectNull, DM_PICTURE_16_9);
-    XCTAssertFalse(overlay.separated);
-    XCTAssertTrue(CGRectIsEmpty(overlay.companion));
-    DmLayout tv = dm_layout_pad_only(CGRectMake(0, 0, 390, 844));
-    XCTAssertFalse(tv.separated);
-    XCTAssertTrue(CGRectIsEmpty(tv.companion));
-}
-
-- (void)testProductionRootFollowsTheOrientationWithItsConsoleMode {
-    // A phone standing up is handheld, so the game's own touch screens (its software keyboard above all) take touches; lying down it returns to the mode it
-    // had. The harness stubs dm_set_opmode into a variable (DuoRuntimeStubs.m), so this reads the mode the front end asked for.
-    UIViewController *root = [self harnessRootViewController];
-    SEL follow = NSSelectorFromString(@"followOrientation:");
-    XCTAssertTrue([root respondsToSelector:follow], @"The front end switches the console mode by orientation");
-    NSMethodSignature *sig = [root methodSignatureForSelector:follow];
-    NSInvocation *call = [NSInvocation invocationWithMethodSignature:sig];
-    call.target = root; call.selector = follow;
-    CGRect standing = CGRectMake(0, 0, 390, 844), lying = CGRectMake(0, 0, 844, 390);
-    // The harness window stands up, so the app has already followed that orientation: settle it lying down and docked, the baseline the app starts from
-    [call setArgument:&lying atIndex:2]; [call invoke];
-    dm_set_opmode(1);
-    [call setArgument:&standing atIndex:2]; [call invoke];
-    XCTAssertEqual(dm_opmode(), 0, @"A phone standing up runs handheld: the game's keyboard takes touches");
-    [call setArgument:&lying atIndex:2]; [call invoke];
-    XCTAssertEqual(dm_opmode(), 1, @"Lying down it returns to the mode the player had");
-    // A choice made in the in-game menu while standing up is the one lying down returns to
-    [call setArgument:&standing atIndex:2]; [call invoke];
-    XCTAssertEqual(dm_opmode(), 0);
-    dm_set_opmode(1);   // the player docks it from the in-game menu while standing up
-    [call setArgument:&lying atIndex:2]; [call invoke];
-    XCTAssertEqual(dm_opmode(), 1, @"The player's docked choice while standing up is what lying down keeps");
-}
-
-- (void)testPlayerConsoleModeChosenWhileStandingUpSurvivesTheReturn {
-    // A phone standing up forces handheld, so a player who wants docked there picks it in the in-game menu; lying down must keep that choice, not the
-    // handheld it replaced. This is the case a baseline of docked hides: the mode held for the return would still be handheld.
-    UIViewController *root = [self harnessRootViewController];
-    SEL follow = NSSelectorFromString(@"followOrientation:");
-    NSInvocation *call = [NSInvocation invocationWithMethodSignature:[root methodSignatureForSelector:follow]];
-    call.target = root; call.selector = follow;
-    CGRect standing = CGRectMake(0, 0, 390, 844), lying = CGRectMake(0, 0, 844, 390);
-    dm_set_opmode(0);   // a player who was handheld lying down
-    [call setArgument:&lying atIndex:2]; [call invoke];
-    dm_set_opmode(0);
-    [call setArgument:&standing atIndex:2]; [call invoke];
-    XCTAssertEqual(dm_opmode(), 0, @"Standing up it stays handheld");
-    // The in-game menu's docked pick while standing up
-    XCTAssertTrue(dm_setting_live("DM_OPMODE", "1"));
-    XCTAssertEqual(dm_opmode(), 1);
-    [call setArgument:&lying atIndex:2]; [call invoke];
-    XCTAssertEqual(dm_opmode(), 1, @"Lying down keeps the player's docked pick, not the handheld it replaced");
-}
-
-- (void)testSplitPadPassesACompanionTapThroughToTheBand {
-    // A tap on no key inside the band goes to the companion's view below (tabs, item slots); a tap on a key or on the picture stays with the pad.
-    CGRect bounds = CGRectMake(0, 0, 390, 844);
-    DmLayout layout = dm_layout(bounds, UIEdgeInsetsMake(59, 0, 34, 0), NO, CGRectNull, DM_PICTURE_16_9);
-    UIView *pad = [self padForLayout:layout bounds:bounds];
-    CGPoint minus = [self controlCenterNamed:@"−" inPad:pad];
-    XCTAssertEqual([pad hitTest:minus withEvent:nil], pad, @"A key still belongs to the pad");
-    // The band's middle-left is clear of the top menu pill, the two rows of thumb groups and the right stick: it must pass through
-    CGPoint clear = CGPointMake(CGRectGetMinX(layout.companion) + 12, CGRectGetMidY(layout.companion));
-    XCTAssertTrue(CGRectContainsPoint(layout.controls, clear));
-    XCTAssertNil([pad hitTest:clear withEvent:nil], @"No key there: the companion below receives the tap");
-    // Landscape has no band: the pad keeps the whole view
-    DmLayout overlay = dm_layout(CGRectMake(0, 0, 844, 390), UIEdgeInsetsZero, NO, CGRectNull, DM_PICTURE_16_9);
-    UIView *landscapePad = [self padForLayout:overlay bounds:CGRectMake(0, 0, 844, 390)];
-    XCTAssertEqual([landscapePad hitTest:CGPointMake(8, 8) withEvent:nil], landscapePad, @"With no split the pad owns the view");
-}
-
-- (void)testProductionRootPutsThePanelUnderThePadAndOutOfItsWay {
-    UIViewController *root = [self harnessRootViewController];
-    UIView *pad = [root valueForKey:@"pad"];
-    UIView *companion = [root valueForKey:@"companion"];
-    XCTAssertNotNil(companion, @"The front end keeps a view for the band");
-    XCTAssertEqual(companion.superview, root.view);
-    // The pad is above the panel: its keys and touches cover the panel, which the band's own background fills underneath
-    NSInteger padIndex = [root.view.subviews indexOfObjectIdenticalTo:pad];
-    NSInteger panelIndex = [root.view.subviews indexOfObjectIdenticalTo:companion];
-    XCTAssertGreaterThan(padIndex, panelIndex, @"The pad is added after the panel, so it floats over it");
-    // The pad floats over the panel and passes through a tap on no key: the companion's own tabs and item slots then receive it (DmGamepad.m hitTest)
-    XCTAssertTrue(companion.isUserInteractionEnabled);
-    [root.view layoutIfNeeded];
-    BOOL portrait = root.view.bounds.size.height > root.view.bounds.size.width;
-    XCTAssertEqual(companion.hidden, !portrait, @"The panel is shown only where a split gives it a band");
-    if (portrait) {
-        CGFloat splitY = root.view.bounds.size.height / 2;
-        XCTAssertEqualWithAccuracy(CGRectGetMinY(companion.frame), splitY, 1.0,
-                                   @"The panel takes the lower half: %@", NSStringFromCGRect(companion.frame));
-        XCTAssertLessThanOrEqual(CGRectGetMaxY([(UIView *)[root valueForKey:@"game"] frame]), CGRectGetMinY(companion.frame),
-                                 @"The picture stays in the upper half");
-    }
-}
-
-- (void)testCompanionBarKeepsTheCanvasDockRatio {
-    // A standing phone's bar is the canvas's own dock row (114 of 968 body + 114 dock) plus the home
-    // indicator's strip, so the panel keeps the ratio its pages were authored with.
-    dm_companion_surface_layout phone = dm_companion_surface_make_safe(CGSizeMake(393, 426), 0, (dm_companion_dock_insets){0, 0, 34});
-    XCTAssertEqualWithAccuracy(phone.nav_scale, 393.0 / 1240.0, 0.0005);
-    XCTAssertEqualWithAccuracy(phone.footer.size.height, 114 * (393.0 / 1240.0) + 34, 0.6);
-    XCTAssertEqualWithAccuracy(phone.content.size.height, 426 - phone.footer.size.height, 0.6);
-    XCTAssertEqualWithAccuracy(CGRectGetMaxY(phone.footer), 426, 0.6);
-    XCTAssertEqualWithAccuracy(CGRectGetMidY(phone.nav_art), CGRectGetMidY(phone.footer), 0.6,
-                               @"The bar centres in the footer, the home indicator's strip included");
-    // The window's own canvas span (952..1080) lands on its rectangle: the icons are drawn where the art drew them
-    XCTAssertEqualWithAccuracy(phone.nav_offset.y + 952 * phone.nav_scale, CGRectGetMinY(phone.nav_art), 0.6);
-    XCTAssertEqualWithAccuracy(phone.nav_offset.y + 1080 * phone.nav_scale, CGRectGetMaxY(phone.nav_art), 0.6);
-    // A standing band with no home indicator: the bar is the canvas row alone.
-    dm_companion_surface_layout flat = dm_companion_surface_make_safe(CGSizeMake(375, 426), 0, (dm_companion_dock_insets){0});
-    XCTAssertEqualWithAccuracy(flat.footer.size.height, 114 * (375.0 / 1240.0), 0.6);
-    // A narrow standing band scales by its width: the content keeps all the height above the bar.
-    dm_companion_surface_layout narrow = dm_companion_surface_make_safe(CGSizeMake(320, 426), 0, (dm_companion_dock_insets){0, 0, 34});
-    XCTAssertEqualWithAccuracy(narrow.footer.size.height, 114 * (320.0 / 1240.0) + 34, 0.6);
-    XCTAssertEqualWithAccuracy(narrow.content.size.height + narrow.footer.size.height, 426, 0.6);
-    // A wide panel (an iPad's lower half) keeps the fitted square it had.
-    dm_companion_surface_layout wide = dm_companion_surface_make_safe(CGSizeMake(820, 590), 0, (dm_companion_dock_insets){0});
-    XCTAssertEqualWithAccuracy(wide.body.size.width, 546, 0.6);
-    XCTAssertEqualWithAccuracy(wide.body.size.height, 546, 0.6);
+    XCTAssertTrue(CGRectEqualToRect(layout.controls, CGRectMake(0, 422, 390, 422)));
+    XCTAssertLessThanOrEqual(CGRectGetMaxY(layout.game), CGRectGetMinY(layout.controls));
 }
 
 - (void)testPortraitControlsUseAnchoredGroupsWithASeparatedThreeDimensionalLeftPair {
@@ -498,27 +322,27 @@ static Class DuoHarnessInstallReservedRegionProbe(UIView *view) API_AVAILABLE(io
         UIView *pad = [self padForLayout:layout bounds:bounds];
 
         CGRect lower = layout.controls;
-        // Two rows of controls in a standing phone's band: the stick and the diamond in the upper row, the D-pad and the right stick in the lower one,
-        // each in its own column at a quarter and three quarters of the band's width.
-        CGFloat u = [self portraitUnitForLayout:layout];
-        CGPoint leftColumn = dm_pad_portrait_column(lower, NO);
-        CGPoint rightColumn = dm_pad_portrait_column(lower, YES);
-        CGFloat upperRow = dm_pad_portrait_row(lower, NO, YES).y;
-        CGFloat lowerRow = dm_pad_portrait_row(lower, YES, YES).y;
+        CGFloat u = MIN(MIN(lower.size.height / 430.0, lower.size.width / 700.0), 1.3);
+        CGPoint leftAnchor = CGPointMake(CGRectGetMinX(lower) + 0.28 * lower.size.width,
+                                         CGRectGetMinY(lower) + 0.58 * lower.size.height);
+        CGPoint rightAnchor = CGPointMake(CGRectGetMinX(lower) + 0.72 * lower.size.width, leftAnchor.y);
         CGRect stickRing = [self largestShapePathBoundsInLayer:pad.layer];
         CGPoint renderedStick = CGPointMake(CGRectGetMidX(stickRing), CGRectGetMidY(stickRing));
-        XCTAssertEqualWithAccuracy(renderedStick.x, leftColumn.x, 0.5,
-                                   @"The 3D joystick should sit in the left column (case %lu)", (unsigned long)i);
-        XCTAssertEqualWithAccuracy(renderedStick.y, upperRow, 0.5, @"The joystick is in the upper row (case %lu)", (unsigned long)i);
+        CGPoint expectedStick = CGPointMake(leftAnchor.x - (48 * u + 6 * u), leftAnchor.y);
+        XCTAssertEqualWithAccuracy(renderedStick.x, expectedStick.x, 0.5,
+                                   @"The 3D joystick should sit left of the D-pad with their pair centered at the left anchor (case %lu)", (unsigned long)i);
+        XCTAssertEqualWithAccuracy(renderedStick.y, expectedStick.y, 0.5);
 
         CGPoint faces = [self faceDiamondCenterInPad:pad];
-        XCTAssertEqualWithAccuracy(faces.x, rightColumn.x, 0.5,
-                                   @"The ABXY diamond should be centered at the right portrait column (case %lu)", (unsigned long)i);
-        XCTAssertEqualWithAccuracy(faces.y, upperRow, 0.5, @"The diamond is in the upper row (case %lu)", (unsigned long)i);
+        XCTAssertEqualWithAccuracy(faces.x, rightAnchor.x, 0.5,
+                                   @"The ABXY diamond should be centered at the right portrait anchor (case %lu)", (unsigned long)i);
+        XCTAssertEqualWithAccuracy(faces.y, rightAnchor.y, 0.5);
 
-        CGPoint dpadCenter = CGPointMake(leftColumn.x, lowerRow);
-        XCTAssertEqualWithAccuracy(dpadCenter.y, lowerRow, 0.5, @"The D-pad is in the lower row (case %lu)", (unsigned long)i);
-        DuoFakeTouch *right = [self touchAt:CGPointMake(dpadCenter.x + 0.6 * dm_pad_portrait_sizes(YES).dpadR * u, dpadCenter.y) time:1];
+        CGPoint dpadCenter = CGPointMake(leftAnchor.x + (77 * u + 6 * u), leftAnchor.y);
+        CGFloat artGap = dpadCenter.x - 48 * u - CGRectGetMaxX(stickRing);
+        XCTAssertEqualWithAccuracy(artGap, 12 * u, 0.5,
+                                   @"The rendered joystick and D-pad hit center should preserve a 12 scaled-point gap (case %lu)", (unsigned long)i);
+        DuoFakeTouch *right = [self touchAt:CGPointMake(dpadCenter.x + 0.6 * 48 * u, dpadCenter.y) time:1];
         [self beginTouches:@[right] onPad:pad];
         XCTAssertEqual(duo_harness_input().buttons, DM_BTN_RIGHT,
                        @"The D-pad hit target should share its specified portrait position (case %lu)", (unsigned long)i);
@@ -535,178 +359,39 @@ static Class DuoHarnessInstallReservedRegionProbe(UIView *view) API_AVAILABLE(io
     }
 }
 
-// A standing phone's pad: two rows of controls, the left stick and the ABXY diamond in the upper one, the D-pad and the right stick in the lower one,
-// each in its own column. The right stick has a ring of its own, is drawn there and is pressed there.
-- (void)testPortraitPadLaysTwoRowsWithARightStickOfItsOwn {
+- (void)testPortraitTwoDimensionalStickAndFaceAnchorsAndKeepsDpadInactive {
     CGRect bounds = CGRectMake(0, 0, 390, 844);
     UIEdgeInsets insets = UIEdgeInsetsMake(59, 0, 34, 0);
     DmLayout layout = [self portraitControlLayoutForBounds:bounds insets:insets division:CGRectNull];
+    [NSUserDefaults.standardUserDefaults setObject:@0 forKey:@"DmPadLayout"];
     UIView *pad = [self padForLayout:layout bounds:bounds];
-    CGRect band = layout.controls;
 
-    CGPoint leftColumn = dm_pad_portrait_column(band, NO), rightColumn = dm_pad_portrait_column(band, YES);
-    CGFloat upperRow = dm_pad_portrait_row(band, NO, YES).y, lowerRow = dm_pad_portrait_row(band, YES, YES).y;
-    XCTAssertGreaterThan(lowerRow, upperRow, @"The lower row is below the upper one");
-    XCTAssertGreaterThan(upperRow, CGRectGetMinY(band), @"The upper row leaves the top of the band clear for the panel");
-    XCTAssertLessThan(lowerRow, CGRectGetMaxY(band), @"The lower row stays inside the band");
+    CGRect lower = layout.controls;
+    CGFloat u = MIN(MIN(lower.size.height / 430.0, lower.size.width / 700.0), 1.3);
+    CGPoint leftAnchor = CGPointMake(CGRectGetMinX(lower) + 0.28 * lower.size.width,
+                                     CGRectGetMinY(lower) + 0.58 * lower.size.height);
+    CGPoint rightAnchor = CGPointMake(CGRectGetMinX(lower) + 0.72 * lower.size.width, leftAnchor.y);
+    CGRect stickRing = [self largestShapePathBoundsInLayer:pad.layer];
+    XCTAssertEqualWithAccuracy(CGRectGetMidX(stickRing), leftAnchor.x, 0.5,
+                               @"In 2D, the left stick itself occupies the left portrait anchor");
+    XCTAssertEqualWithAccuracy(CGRectGetMidY(stickRing), leftAnchor.y, 0.5);
+    CGPoint faces = [self faceDiamondCenterInPad:pad];
+    XCTAssertEqualWithAccuracy(faces.x, rightAnchor.x, 0.5);
+    XCTAssertEqualWithAccuracy(faces.y, rightAnchor.y, 0.5);
 
-    // The left stick's ring is in the upper row's left column.
-    CGRect stickRing = [self stickRingAt:CGPointMake(leftColumn.x, upperRow) inPad:pad];
-    XCTAssertFalse(CGRectIsNull(stickRing), @"The left stick is drawn");
-    XCTAssertEqualWithAccuracy(CGRectGetMidX(stickRing), leftColumn.x, 0.5, @"The stick is in the left column");
-    XCTAssertEqualWithAccuracy(CGRectGetMidY(stickRing), upperRow, 0.5, @"The stick is in the upper row");
+    DuoFakeTouch *stick = [self touchAt:leftAnchor time:1];
+    [self beginTouches:@[stick] onPad:pad];
+    [self moveTouch:stick to:CGPointMake(leftAnchor.x + 30 * u, leftAnchor.y) onPad:pad];
+    XCTAssertGreaterThan(duo_harness_input().lx, 0,
+                         @"A touch at the visible 2D stick must drive the left-stick mapping");
+    [self endTouches:@[stick] onPad:pad cancelled:NO];
 
-    // The right stick's ring is drawn in the lower row's right column: a circle of the stick's radius, next to the D-pad.
-    CGRect rightRing = [self stickRingAt:CGPointMake(rightColumn.x, lowerRow) inPad:pad];
-    XCTAssertFalse(CGRectIsNull(rightRing), @"The right stick is drawn");
-    XCTAssertEqualWithAccuracy(CGRectGetMidX(rightRing), rightColumn.x, 0.5, @"The right stick is in the right column");
-    XCTAssertEqualWithAccuracy(CGRectGetMidY(rightRing), lowerRow, 0.5, @"The right stick is in the lower row");
-    // The lower row reads as one size: the right stick is drawn at the D-pad's own scale, a little under the left stick.
-    XCTAssertEqualWithAccuracy(rightRing.size.width, stickRing.size.width * DM_PAD_DPAD_SCALE, 0.5, @"The right stick is drawn at the D-pad's scale");
-
-    // Every shoulder is drawn at the ABXY key's radius, so the top row and the diamond read as one size. A shoulder's teardrop carries its tip 1.45
-    // radii from the centre, so its bounding box is about 2.025 times the radius where a key's is two.
-    CGFloat keyR = [self controlPathBoundsNamed:@"A" inPad:pad].size.width / 2;
-    XCTAssertEqualWithAccuracy([self controlPathBoundsNamed:@"ZL" inPad:pad].size.width / keyR, 2.025, 0.06, @"A shoulder is drawn at the key's size");
-
-    // The keys keep their gap: neighbouring keys' drawn circles do not touch (the first generation's did, at 3 u).
-    CGPoint a = [self controlCenterNamed:@"A" inPad:pad], b = [self controlCenterNamed:@"B" inPad:pad];
-    CGFloat faceR = [self controlPathBoundsNamed:@"A" inPad:pad].size.width / 2;
-    XCTAssertGreaterThan(hypot(a.x - b.x, a.y - b.y), 2 * faceR + 8, @"Neighbouring keys keep a gap of their own size, not a crowded row");
-
-    // The later generation's profile leaves 2D out of the menu; a saved 2D choice still applies (dm_pad_layout_set).
-    XCTAssertFalse(dm_pad_layout_offered(0), @"The menu offers no 2D layout");
-    XCTAssertTrue(dm_pad_layout_offered(1), @"3D stays");
-    XCTAssertTrue(dm_pad_layout_offered(2), @"Tap stays: this profile's is the band's panel, which takes touches in either console mode");
-
-    // A touch in the right stick's ring drives the right stick and moves nothing else.
-    DuoFakeTouch *touch = [self touchAt:CGPointMake(rightColumn.x, lowerRow) time:1];
-    [self beginTouches:@[touch] onPad:pad];
-    [self moveTouch:touch to:CGPointMake(rightColumn.x + 30, lowerRow) onPad:pad];
-    DuoHarnessInput input = duo_harness_input();
-    XCTAssertGreaterThan(input.rx, 0, @"The right stick answers in its own ring");
-    XCTAssertEqual(input.buttons, 0, @"The right stick is no button");
-    [self endTouches:@[touch] onPad:pad cancelled:NO];
-}
-
-// The same pad, laid out lying down and then standing up: the right stick's ring comes on and off with the band, since the panel takes the picture's
-// place below it. A ring that is drawn but hidden would be a control the player cannot see.
-- (void)testRightStickRingFollowsTheLayoutOfOnePad {
-    CGRect bounds = CGRectMake(0, 0, 390, 844);
-    DmLayout lying = dm_layout(CGRectMake(0, 0, 844, 390), UIEdgeInsetsZero, NO, CGRectNull, DM_PICTURE_16_9);
-    UIView *pad = [self padForLayout:lying bounds:bounds];
-    XCTAssertTrue([self rightStickRingLayerInPad:pad].hidden, @"A lying phone leaves the right stick undrawn (a touch in the right third holds it)");
-    // Lying down the ring is gone, but the right third still holds the undrawn stick at its full size.
-    CGRect ctl = lying.controls;
-    CGPoint inRightThird = CGPointMake(CGRectGetMaxX(ctl) - ctl.size.width * 0.15, CGRectGetMidY(ctl));
-    DuoFakeTouch *touch = [self touchAt:inRightThird time:2];
-    [self beginTouches:@[touch] onPad:pad];
-    [self moveTouch:touch to:CGPointMake(inRightThird.x + 30, inRightThird.y) onPad:pad];
-    XCTAssertGreaterThan(duo_harness_input().rx, 0, @"The right third holds the undrawn right stick");
-    [self endTouches:@[touch] onPad:pad cancelled:NO];
-
-    DmLayout standing = [self portraitControlLayoutForBounds:bounds insets:UIEdgeInsetsMake(59, 0, 34, 0) division:CGRectNull];
-    dm_gamepad_arrange(pad, standing);
-    [pad setNeedsLayout]; [pad layoutIfNeeded];
-    XCTAssertFalse([self rightStickRingLayerInPad:pad].hidden, @"Standing up, the right stick's ring is shown with the band");
-
-    dm_gamepad_arrange(pad, lying);
-    [pad setNeedsLayout]; [pad layoutIfNeeded];
-    XCTAssertTrue([self rightStickRingLayerInPad:pad].hidden, @"Lying down again, it goes");
-}
-
-// This profile's pad switches between the pad and the game's own touch screen on a triple tap in the bottom strip, standing or lying, and the
-// switch is the run's own: the stored layout never changes.
-- (void)testBottomTripleTapSwitchesThePadAndTouchScreen {
-    CGRect sizes[] = {CGRectMake(0, 0, 390, 844), CGRectMake(0, 0, 844, 390)};
-    NSString *saved = [NSUserDefaults.standardUserDefaults objectForKey:@"DmPadLayout"];
-    dm_set_opmode(0);
-    for (NSUInteger i = 0; i < 2; i++) {
-        CGRect bounds = sizes[i];
-        UIEdgeInsets insets = UIEdgeInsetsMake(59, 0, 34, 0);
-        DmLayout layout = bounds.size.height > bounds.size.width
-            ? [self portraitControlLayoutForBounds:bounds insets:insets division:CGRectNull]
-            : dm_layout(bounds, UIEdgeInsetsZero, NO, CGRectNull, DM_PICTURE_16_9);
-        UIView *pad = [self padForLayout:layout bounds:bounds];
-        dm_pad_layout_set(1);
-        CGRect c = layout.controls;
-        CGPoint bottom = CGPointMake(CGRectGetMidX(c), CGRectGetMaxY(c) - 10);   // on the home indicator
-
-        // Only the indicator's place answers: three taps well above it switch nothing.
-        CGPoint beside = CGPointMake(CGRectGetMidX(c), CGRectGetMaxY(c) - 110);
-        for (NSNumber *t in @[@0.5, @0.6, @0.7]) {
-            DuoFakeTouch *touch = [self touchAt:beside time:t.doubleValue];
-            [self beginTouches:@[touch] onPad:pad]; [self endTouches:@[touch] onPad:pad cancelled:NO];
-        }
-        XCTAssertEqual(dm_pad_layout(), 1, @"Only the home indicator's place switches (case %lu)", (unsigned long)i);
-
-        // The pad takes the tap there even though no control did, so the panel below cannot swallow the triple tap.
-        XCTAssertEqual([pad hitTest:bottom withEvent:nil], pad, @"The pad's own touch area reaches the triple tap (case %lu)", (unsigned long)i);
-        // Standing up the strip stops at the safe area's edge: the band's bar above it keeps its own taps (its tabs), so a
-        // panel button there is not swallowed by the triple tap.
-        if (i == 0) {
-            CGPoint onBar = CGPointMake(CGRectGetMidX(c), CGRectGetMaxY(c) - 34 - 4);
-            XCTAssertNil([pad hitTest:onBar withEvent:nil], @"A tap on the panel's bar reaches the panel");
-        }
-
-        // Two taps are not a switch.
-        [self beginTouches:@[[self touchAt:bottom time:1]] onPad:pad]; [self endTouches:@[[self touchAt:bottom time:1]] onPad:pad cancelled:NO];
-        [self beginTouches:@[[self touchAt:bottom time:1.1]] onPad:pad]; [self endTouches:@[[self touchAt:bottom time:1.1]] onPad:pad cancelled:NO];
-        XCTAssertEqual(dm_pad_layout(), 1, @"Two taps leave the pad (case %lu)", (unsigned long)i);
-
-        // Three, half a second apart at most, switch to Tap, and three more switch back.
-        for (NSNumber *t in @[@2.0, @2.4, @2.8]) {
-            DuoFakeTouch *touch = [self touchAt:bottom time:t.doubleValue];
-            [self beginTouches:@[touch] onPad:pad]; [self endTouches:@[touch] onPad:pad cancelled:NO];
-        }
-        XCTAssertEqual(dm_pad_layout(), 2, @"A bottom triple tap switches to Tap, also a slow one (case %lu)", (unsigned long)i);
-        XCTAssertEqual(duo_harness_input().buttons, 0, @"The taps are swallowed, not pressed (case %lu)", (unsigned long)i);
-        for (NSNumber *t in @[@3.0, @3.1, @3.2]) {
-            DuoFakeTouch *touch = [self touchAt:bottom time:t.doubleValue];
-            [self beginTouches:@[touch] onPad:pad]; [self endTouches:@[touch] onPad:pad cancelled:NO];
-        }
-        XCTAssertEqual(dm_pad_layout(), 1, @"Three more switch the pad back (case %lu)", (unsigned long)i);
-
-        // The indicator's own length plus the finger's slop: the system draws it twice as long lying down, so a tap near its end counts in
-        // both orientations where a tap beyond it does not.
-        CGPoint atEnd = CGPointMake(CGRectGetMidX(c) + (i == 0 ? 70 : 120), CGRectGetMaxY(c) - 10);
-        for (NSNumber *t in @[@4.0, @4.1, @4.2]) {
-            DuoFakeTouch *touch = [self touchAt:atEnd time:t.doubleValue];
-            [self beginTouches:@[touch] onPad:pad]; [self endTouches:@[touch] onPad:pad cancelled:NO];
-        }
-        XCTAssertEqual(dm_pad_layout(), 2, @"A triple tap at the indicator's end switches (case %lu)", (unsigned long)i);
-        for (NSNumber *t in @[@5.0, @5.1, @5.2]) {
-            DuoFakeTouch *touch = [self touchAt:atEnd time:t.doubleValue];
-            [self beginTouches:@[touch] onPad:pad]; [self endTouches:@[touch] onPad:pad cancelled:NO];
-        }
-        XCTAssertEqual(dm_pad_layout(), 1, @"Three more at the end switch it back (case %lu)", (unsigned long)i);
-        CGPoint past = CGPointMake(CGRectGetMidX(c) + (i == 0 ? 150 : 200), CGRectGetMaxY(c) - 10);
-        for (NSNumber *t in @[@6.0, @6.1, @6.2]) {
-            DuoFakeTouch *touch = [self touchAt:past time:t.doubleValue];
-            [self beginTouches:@[touch] onPad:pad]; [self endTouches:@[touch] onPad:pad cancelled:NO];
-        }
-        XCTAssertEqual(dm_pad_layout(), 1, @"Past the indicator's end nothing switches (case %lu)", (unsigned long)i);
-    }
-    XCTAssertEqualObjects([NSUserDefaults.standardUserDefaults objectForKey:@"DmPadLayout"], saved ?: @1, @"The run's switch is never stored");
-}
-
-// The indicator's length follows the screen's short side, so a wider phone's trigger reaches further: a 440-point phone answers at a point a
-// 390-point one's never would (a fixed length fails this).
-- (void)testBottomTripleTapAreaFollowsTheScreensWidth {
-    CGRect bounds = CGRectMake(0, 0, 440, 956);   // an iPhone 16 Pro Max
-    DmLayout layout = [self portraitControlLayoutForBounds:bounds insets:UIEdgeInsetsMake(62, 0, 34, 0) division:CGRectNull];
-    UIView *pad = [self padForLayout:layout bounds:bounds];
-    NSString *saved = [NSUserDefaults.standardUserDefaults objectForKey:@"DmPadLayout"];
-    dm_set_opmode(0); dm_pad_layout_set(1);
-    CGRect c = layout.controls;
-    CGPoint p = CGPointMake(CGRectGetMidX(c) + 85, CGRectGetMaxY(c) - 10);
-    for (NSNumber *t in @[@1.0, @1.1, @1.2]) {
-        DuoFakeTouch *touch = [self touchAt:p time:t.doubleValue];
-        [self beginTouches:@[touch] onPad:pad]; [self endTouches:@[touch] onPad:pad cancelled:NO];
-    }
-    XCTAssertEqual(dm_pad_layout(), 2, @"The indicator's length follows the screen: a wider phone's end answers");
-    dm_pad_layout_set(1);
-    XCTAssertEqualObjects([NSUserDefaults.standardUserDefaults objectForKey:@"DmPadLayout"], saved ?: @1, @"The run's switch is never stored");
+    CGPoint hiddenDpad = CGPointMake(leftAnchor.x + (77 + 6 + 0.6 * 48) * u, leftAnchor.y);
+    DuoFakeTouch *dpad = [self touchAt:hiddenDpad time:2];
+    [self beginTouches:@[dpad] onPad:pad];
+    XCTAssertEqual(duo_harness_input().buttons & DM_BTN_RIGHT, 0,
+                   @"The 2D layout must not expose the 3D D-pad at its portrait 3D position");
+    [self endTouches:@[dpad] onPad:pad cancelled:NO];
 }
 
 - (void)testPortraitThreeDimensionalAnchorsKeepStickDpadFaceAndGameTouchesIndependent {
@@ -715,15 +400,15 @@ static Class DuoHarnessInstallReservedRegionProbe(UIView *view) API_AVAILABLE(io
     DmLayout layout = [self portraitControlLayoutForBounds:bounds insets:insets division:CGRectMake(0, 455.5, 669, 40)];
     UIView *pad = [self padForLayout:layout bounds:bounds];
     CGRect lower = layout.controls;
-    CGFloat u = [self portraitUnitForLayout:layout];
-    CGFloat upperRow = dm_pad_portrait_row(lower, NO, YES).y;
-    CGFloat lowerRow = dm_pad_portrait_row(lower, YES, YES).y;
-    CGPoint stickCenter = CGPointMake(dm_pad_portrait_column(lower, NO).x, upperRow);
-    CGPoint dpadCenter = CGPointMake(dm_pad_portrait_column(lower, NO).x, lowerRow);
-    CGPoint faceA = CGPointMake(dm_pad_portrait_column(lower, YES).x + dm_pad_portrait_sizes(YES).faceGap * u, upperRow);
+    CGFloat u = MIN(MIN(lower.size.height / 430.0, lower.size.width / 700.0), 1.3);
+    CGPoint leftAnchor = CGPointMake(CGRectGetMinX(lower) + 0.28 * lower.size.width,
+                                     CGRectGetMinY(lower) + 0.58 * lower.size.height);
+    CGPoint stickCenter = CGPointMake(leftAnchor.x - 54 * u, leftAnchor.y);
+    CGPoint dpadCenter = CGPointMake(leftAnchor.x + 83 * u, leftAnchor.y);
+    CGPoint faceA = CGPointMake(CGRectGetMinX(lower) + 0.72 * lower.size.width + 50 * u, leftAnchor.y);
     CGPoint video = CGPointMake(CGRectGetMidX(layout.game), CGRectGetMidY(layout.game));
     DuoFakeTouch *stick = [self touchAt:stickCenter time:1];
-    DuoFakeTouch *right = [self touchAt:CGPointMake(dpadCenter.x + 0.6 * dm_pad_portrait_sizes(YES).dpadR * u, dpadCenter.y) time:1];
+    DuoFakeTouch *right = [self touchAt:CGPointMake(dpadCenter.x + 0.6 * 48 * u, dpadCenter.y) time:1];
     DuoFakeTouch *a = [self touchAt:faceA time:1];
     DuoFakeTouch *game = [self touchAt:video time:1];
 
@@ -749,21 +434,19 @@ static Class DuoHarnessInstallReservedRegionProbe(UIView *view) API_AVAILABLE(io
     XCTAssertTrue(CGRectEqualToRect(layout.game, dm_aspect_fit(bounds, DM_PICTURE_16_9)));
     UIView *pad = [self padForLayout:layout bounds:bounds];
     CGFloat u = MIN(bounds.size.height / 430.0, 1.3);
-    // The profile's later landscape layout: the three clusters on one line, each keeping the shoulders' margin to the screen's edge.
-    CGFloat reach = (DM_PAD_SPACED_EDGE_X_U + 77) * u, line = bounds.size.height - (DM_PAD_SPACED_EDGE_Y_U + 77) * u;
     CGRect stickRing = [self largestShapePathBoundsInLayer:pad.layer];
-    XCTAssertEqualWithAccuracy(CGRectGetMidX(stickRing), reach, 0.5);
-    XCTAssertEqualWithAccuracy(CGRectGetMidY(stickRing), line, 0.5);
+    XCTAssertEqualWithAccuracy(CGRectGetMidX(stickRing), 81 * u, 0.5);
+    XCTAssertEqualWithAccuracy(CGRectGetMidY(stickRing), bounds.size.height - 82 * u, 0.5);
     CGPoint faces = [self faceDiamondCenterInPad:pad];
-    XCTAssertEqualWithAccuracy(faces.x, bounds.size.width - reach, 0.5);
-    XCTAssertEqualWithAccuracy(faces.y, line, 0.5);
+    XCTAssertEqualWithAccuracy(faces.x, bounds.size.width - 81 * u, 0.5);
+    XCTAssertEqualWithAccuracy(faces.y, bounds.size.height - 82 * u, 0.5);
 
-    CGPoint stickCenter = CGPointMake(reach, line);
-    CGPoint dpadCenter = CGPointMake(DM_PAD_SPACED_LOW_X_U * u, line);
+    CGPoint stickCenter = CGPointMake(81 * u, bounds.size.height - 82 * u);
+    CGPoint dpadCenter = CGPointMake(231 * u, bounds.size.height - 64 * u);
     CGPoint aCenter = [self faceAIn:layout bounds:bounds];
     CGPoint video = CGPointMake(CGRectGetMidX(layout.game), CGRectGetMidY(layout.game));
     DuoFakeTouch *stick = [self touchAt:stickCenter time:1];
-    DuoFakeTouch *right = [self touchAt:CGPointMake(dpadCenter.x + 0.6 * dm_pad_portrait_sizes(YES).dpadR * u, dpadCenter.y) time:1];
+    DuoFakeTouch *right = [self touchAt:CGPointMake(dpadCenter.x + 0.6 * 48 * u, dpadCenter.y) time:1];
     DuoFakeTouch *a = [self touchAt:aCenter time:1];
     DuoFakeTouch *game = [self touchAt:video time:1];
     [self beginTouches:@[stick, right, a, game] onPad:pad];
@@ -877,11 +560,12 @@ static Class DuoHarnessInstallReservedRegionProbe(UIView *view) API_AVAILABLE(io
     XCTAssertEqualWithAccuracy(game.frame.size.width / game.frame.size.height, 16.0 / 9.0, 0.01);
 }
 
-- (void)testSeparatedHitTargetsMeetTheMinimumsAtTheirDrawnSize {
+- (void)testSmallSeparatedHitTargetsMeetMinimumsWithoutGrowingArtwork {
     CGRect bounds = CGRectMake(0, 0, 390, 844);
     DmLayout layout = [self separatedLayout:bounds];
     UIView *pad = [self padForLayout:layout bounds:bounds];
-    CGFloat u = [self portraitUnitForLayout:layout];
+    CGFloat u = MIN(MIN(layout.controls.size.height / 430.0, layout.controls.size.width / 700.0), 1.3);
+    XCTAssertEqualWithAccuracy(u, 390.0 / 700.0, 0.001);
 
     // Probe just inside 44 pt face targets, inward from each visible button center. The
     // expected button remains the nearest target even where neighboring target circles overlap.
@@ -892,17 +576,12 @@ static Class DuoHarnessInstallReservedRegionProbe(UIView *view) API_AVAILABLE(io
         NSString *name = faces[i];
         CGPoint center = [self controlCenterNamed:name inPad:pad];
         CGPoint probe = CGPointMake(center.x + faceOffsets[i].x, center.y + faceOffsets[i].y);
+        XCTAssertLessThan([self controlPathBoundsNamed:name inPad:pad].size.width, 44);
+        XCTAssertFalse([self controlNamed:name containsPoint:probe inPad:pad], @"%@ artwork should keep its scaled visual size", name);
         [self assertButton:faceBits[i] at:probe onPad:pad time:10 + i];
     }
-    // The portrait split draws its keys a quarter larger, so the artwork covers the 44 pt probe; the target is still at least 44 pt.
-    DmPadPortraitSizes zs = dm_pad_portrait_sizes(YES);
-    CGFloat faceR = zs.faceR * u, faceGap = zs.faceGap * u;
-    CGFloat faceHitR = MIN(MAX(faceR * 1.25, faceGap * 0.75), 1.2 * faceGap);
-    XCTAssertGreaterThanOrEqual(faceHitR * 2, 44, @"A face key answers a 44 pt target");
-    XCTAssertEqualWithAccuracy([self controlPathBoundsNamed:@"A" inPad:pad].size.width, faceR * 2, 0.01, @"The portrait split draws its keys a quarter larger, at nine tenths of the room");
 
-    // Shoulder buttons, triggers, and stick clicks are frequent 44 pt targets too. The split draws them a quarter larger, so the artwork covers the
-    // 44 pt probe at ZL and ZR; the target still answers there all the same.
+    // Shoulder buttons, triggers, and stick clicks are frequent 44 pt targets too.
     NSArray<NSString *> *wideButtons = @[@"ZL", @"L", @"ZR", @"R", @"L3", @"R3"];
     const uint64_t wideBits[] = {DM_BTN_ZL, DM_BTN_L, DM_BTN_ZR, DM_BTN_R, DM_BTN_LS, DM_BTN_RS};
     // Probe outward on corner controls that overlap expanded L3/R3 targets.
@@ -911,12 +590,10 @@ static Class DuoHarnessInstallReservedRegionProbe(UIView *view) API_AVAILABLE(io
         NSString *name = wideButtons[i];
         CGPoint center = [self controlCenterNamed:name inPad:pad];
         CGPoint probe = CGPointMake(center.x + wideOffsets[i].x, center.y + wideOffsets[i].y);
+        XCTAssertLessThan([self controlPathBoundsNamed:name inPad:pad].size.width, 44);
+        XCTAssertFalse([self controlNamed:name containsPoint:probe inPad:pad], @"%@ artwork should keep its scaled visual size", name);
         [self assertButton:wideBits[i] at:probe onPad:pad time:20 + i];
     }
-    // A shoulder is a teardrop at the ABXY key's radius (its tip reaches past the circle); a stick click is that key's circle, a little smaller.
-    CGFloat aR = [self controlPathBoundsNamed:@"A" inPad:pad].size.width / 2;
-    XCTAssertEqualWithAccuracy([self controlPathBoundsNamed:@"L" inPad:pad].size.width / aR, 2.025, 0.06, @"A shoulder is drawn at the key's size");
-    XCTAssertEqualWithAccuracy([self controlPathBoundsNamed:@"L3" inPad:pad].size.width, 17 * u * 1.25 * 2, 0.01, @"The stick clicks keep their own size");
 
     // Minus/plus use 28 pt targets. Their vertical probe is outside the drawn pill.
     NSArray<NSString *> *menuButtons = @[@"−", @"+"];
@@ -980,10 +657,7 @@ static Class DuoHarnessInstallReservedRegionProbe(UIView *view) API_AVAILABLE(io
     [self endTouches:@[left] onPad:pad cancelled:NO];
 
     UIButton *menu = [self menuButtonInPad:pad];
-    // The gear answers its 44-point circle wherever that lies in the safe area: the later pad's top row sits lower, so its circle stops short of the
-    // very edge and the probe follows it.
-    CGPoint menuProbe = CGPointMake(menu.center.x, MAX(CGRectGetMinY(controls) + 0.8, menu.center.y - 21.5));
-    XCTAssertEqual([pad hitTest:menuProbe withEvent:nil], menu, @"The menu button stays reachable at the top of the safe area");
+    XCTAssertEqual([pad hitTest:CGPointMake(menu.center.x, CGRectGetMinY(controls) + 0.8) withEvent:nil], menu, @"The menu button stays reachable at the safe top edge");
 }
 
 - (void)testFaceTargetsKeepTheirMultiButtonSlideBehavior {
@@ -1010,8 +684,7 @@ static Class DuoHarnessInstallReservedRegionProbe(UIView *view) API_AVAILABLE(io
     UIView *pad = [self padForLayout:[self separatedLayout:bounds] bounds:bounds];
     CGPoint zl = [self controlCenterNamed:@"ZL" inPad:pad];
     CGPoint ls = [self controlCenterNamed:@"L3" inPad:pad];
-    // The two targets' normalized distances cross at 0.60 of the way (their radii differ); 0.75 is clearly nearer to the click.
-    CGPoint nearerToL3 = CGPointMake(zl.x + (ls.x - zl.x) * 0.75, zl.y + (ls.y - zl.y) * 0.75);
+    CGPoint nearerToL3 = CGPointMake(zl.x + (ls.x - zl.x) * 0.6, zl.y);
     DuoFakeTouch *touch = [self touchAt:nearerToL3 time:1];
 
     [self beginTouches:@[touch] onPad:pad];
@@ -1068,23 +741,18 @@ static Class DuoHarnessInstallReservedRegionProbe(UIView *view) API_AVAILABLE(io
     [self endTouches:@[a] onPad:pad cancelled:YES];
 }
 
-- (void)testDockingKeepsTheTapLayoutForThisProfile {
-    // This profile's Tap is the band's panel, not the game's touch screen, so a TV does not take it away and the menu still offers it.
+- (void)testDockingDropsTheTapLayout {
     dm_set_opmode(0);
     CGRect bounds = CGRectMake(0, 0, 844, 390);
     [self padForLayout:dm_layout(bounds, UIEdgeInsetsZero, NO, CGRectNull, DM_PICTURE_16_9) bounds:bounds];
     dm_pad_layout_set(2);
     XCTAssertEqual(dm_pad_layout(), 2);
     dm_set_opmode(1); dm_gamepad_opmode_changed();
-    XCTAssertEqual(dm_pad_layout(), 2, @"Docked, the band's panel still takes the touches: Tap stays");
-    XCTAssertTrue(dm_pad_layout_offered(2), @"And the menu offers it");
-    dm_pad_layout_set(1);
+    XCTAssertEqual(dm_pad_layout(), 0, @"Docked, the game reads no touch screen: Tap goes");
+    XCTAssertFalse(dm_pad_layout_offered(2));
     dm_pad_layout_set(2);
-    XCTAssertEqual(dm_pad_layout(), 2, @"Tap can be picked while docked");
-    dm_pad_layout_set(0);
-    XCTAssertEqual(dm_pad_layout(), 1, @"2D is never entered: this profile has 3D and Tap only");
-    // This profile keeps the layout for the run only: the stored choice is the one setUp made, not the switch.
-    XCTAssertEqualObjects([NSUserDefaults.standardUserDefaults objectForKey:@"DmPadLayout"], @1, @"The run's switch is not stored");
+    XCTAssertEqual(dm_pad_layout(), 0, @"Tap cannot be picked while docked");
+    XCTAssertEqualObjects([NSUserDefaults.standardUserDefaults objectForKey:@"DmPadLayout"], @0);
     dm_set_opmode(0);
 }
 
@@ -1322,8 +990,7 @@ static Class DuoHarnessInstallReservedRegionProbe(UIView *view) API_AVAILABLE(io
     NSData *plist = [NSData dataWithContentsOfURL:[NSBundle.mainBundle URLForResource:@"Info" withExtension:@"plist"]];
     NSDictionary *info = [NSPropertyListSerialization propertyListWithData:plist options:0 format:nil error:nil];
     NSSet *landscape = [NSSet setWithArray:@[@"UIInterfaceOrientationLandscapeLeft", @"UIInterfaceOrientationLandscapeRight"]];
-    // The harness's own plist carries what the app's does, so a test that reads it reads the app's contract (test_orientation_policy.py holds both to it)
-    XCTAssertEqualObjects([NSSet setWithArray:info[@"UISupportedInterfaceOrientations"]], [landscape setByAddingObject:@"UIInterfaceOrientationPortrait"]);
+    XCTAssertEqualObjects([NSSet setWithArray:info[@"UISupportedInterfaceOrientations"]], landscape);
     NSSet *all = [landscape setByAddingObjectsFromSet:[NSSet setWithArray:@[@"UIInterfaceOrientationPortrait", @"UIInterfaceOrientationPortraitUpsideDown"]]];
     XCTAssertEqualObjects([NSSet setWithArray:info[@"UISupportedInterfaceOrientations~ipad"]], all);
     XCTAssertNil(info[@"UIRequiresFullScreen"]);
@@ -1415,9 +1082,6 @@ static Class DuoHarnessInstallReservedRegionProbe(UIView *view) API_AVAILABLE(io
     return pad;
 }
 
-// The unit of a standing phone's controls: the gap between the two rows, as the pad itself takes it (DmLayout.h). The test and the pad never disagree.
-- (CGFloat)portraitUnitForLayout:(DmLayout)layout { return dm_pad_portrait_unit(layout.controls, YES); }
-
 - (DmLayout)portraitControlLayoutForBounds:(CGRect)bounds insets:(UIEdgeInsets)insets division:(CGRect)division {
     DmLayout layout = dm_layout(bounds, insets, NO, division, DM_PICTURE_16_9);
     CGRect safe = UIEdgeInsetsInsetRect(bounds, insets);
@@ -1427,36 +1091,12 @@ static Class DuoHarnessInstallReservedRegionProbe(UIView *view) API_AVAILABLE(io
     return layout;
 }
 
-// The right stick's ring (DmGamepad.m's _rring), which the pad names for this check.
-- (CALayer *)rightStickRingLayerInPad:(UIView *)pad { return [self layerNamed:@"rightStickRing" inLayer:pad.layer]; }
-
-- (CALayer *)layerNamed:(NSString *)name inLayer:(CALayer *)layer {
-    if ([layer.name isEqualToString:name]) return layer;
-    for (CALayer *child in layer.sublayers) { CALayer *found = [self layerNamed:name inLayer:child]; if (found) return found; }
-    return nil;
-}
-
 - (void)collectShapePathBoundsInLayer:(CALayer *)layer result:(NSMutableArray<NSValue *> *)result {
     if ([layer isKindOfClass:CAShapeLayer.class]) {
         CGPathRef path = ((CAShapeLayer *)layer).path;
         if (path) [result addObject:[NSValue valueWithCGRect:CGPathGetBoundingBox(path)]];
     }
     for (CALayer *child in layer.sublayers) [self collectShapePathBoundsInLayer:child result:result];
-}
-
-// The circle drawn at a point of a standing phone's pad: the right stick's ring in the lower row's right column, or the left stick's in the upper row's
-// left column. Both are the band's largest circles; the D-pad's arms are not circles.
-- (CGRect)stickRingAt:(CGPoint)centre inPad:(UIView *)pad {
-    NSMutableArray<NSValue *> *bounds = [NSMutableArray array];
-    [self collectShapePathBoundsInLayer:pad.layer result:bounds];
-    CGRect best = CGRectNull;
-    for (NSValue *value in bounds) {
-        CGRect candidate = value.CGRectValue;
-        if (CGRectIsNull(candidate)) continue;
-        if (fabs(CGRectGetMidX(candidate) - centre.x) > 1 || fabs(CGRectGetMidY(candidate) - centre.y) > 1) continue;
-        if (CGRectIsNull(best) || candidate.size.width > best.size.width) best = candidate;
-    }
-    return best;
 }
 
 - (CGRect)largestShapePathBoundsInLayer:(CALayer *)layer {
@@ -1502,22 +1142,15 @@ static Class DuoHarnessInstallReservedRegionProbe(UIView *view) API_AVAILABLE(io
     else [pad touchesEnded:set withEvent:nil];
 }
 
-// The A key where the pad itself draws it (the pad's own safe area and layout), so the test touches the real key.
 - (CGPoint)faceAIn:(DmLayout)layout bounds:(CGRect)bounds {
     CGRect safe = CGRectIntersection(layout.controls, UIEdgeInsetsInsetRect(bounds, UIEdgeInsetsZero));
-    if (layout.separated && bounds.size.height > bounds.size.width) {
-        CGFloat u = dm_pad_portrait_unit(safe, YES);
-        CGPoint faceCenter = dm_pad_portrait_column(safe, YES);
-        faceCenter.y = dm_pad_portrait_row(safe, NO, YES).y;
-        return CGPointMake(faceCenter.x + dm_pad_portrait_sizes(YES).faceGap * u, faceCenter.y);
-    }
     CGFloat u = layout.separated ? MIN(MIN(safe.size.height / 430.0, safe.size.width / 700.0), 1.3) : MIN(bounds.size.height / 430.0, 1.3);
-#if DM_GAME_PORTRAIT_PAD
-    // The profile's later landscape layout: the diamond's A key on the stick's line, the shoulders' margin from the right edge.
-    return CGPointMake(CGRectGetMaxX(safe) - (DM_PAD_SPACED_EDGE_X_U + 50) * u, CGRectGetMaxY(safe) - (DM_PAD_SPACED_EDGE_Y_U + 77) * u);
-#else
+    if (layout.separated && bounds.size.height > bounds.size.width) {
+        CGPoint faceCenter = CGPointMake(CGRectGetMinX(safe) + 0.72 * safe.size.width,
+                                         CGRectGetMinY(safe) + 0.58 * safe.size.height);
+        return CGPointMake(faceCenter.x + 50 * u, faceCenter.y);
+    }
     return CGPointMake(CGRectGetMaxX(safe) - 81 * u + 50 * u, CGRectGetMaxY(safe) - 82 * u);
-#endif
 }
 
 - (CATextLayer *)textLayerNamed:(NSString *)name inLayer:(CALayer *)layer {
@@ -1570,9 +1203,8 @@ static Class DuoHarnessInstallReservedRegionProbe(UIView *view) API_AVAILABLE(io
     DmLayout layout = [self separatedLayout:bounds];
     UIView *pad = [self padForLayout:layout bounds:bounds];
     CGPoint a = [self faceAIn:layout bounds:bounds];
-    CGFloat u = dm_pad_portrait_unit(layout.controls, YES);
-    CGFloat fg = dm_pad_portrait_sizes(YES).faceGap * u;
-    CGPoint b = CGPointMake(a.x - fg, a.y + fg);
+    CGFloat u = MIN(MIN(layout.controls.size.height / 430.0, layout.controls.size.width / 700.0), 1.3);
+    CGPoint b = CGPointMake(a.x - 50 * u, a.y + 50 * u);
     CGPoint video = CGPointMake(CGRectGetMidX(layout.game), CGRectGetMidY(layout.game));
     DuoFakeTouch *ta = [self touchAt:a time:1], *tb = [self touchAt:b time:1], *tv = [self touchAt:video time:1];
 
@@ -1679,7 +1311,6 @@ static Class DuoHarnessInstallReservedRegionProbe(UIView *view) API_AVAILABLE(io
     XCTAssertEqual(input.touch_count, 0);
     [self endTouches:@[video, button] onPad:pad cancelled:NO];
 }
-
 
 - (void)testConnectedVirtualControllerKeepsVideoTouchAndMapsPhysicalButtons {
     if (@available(iOS 17.0, *)) {

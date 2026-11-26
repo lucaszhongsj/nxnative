@@ -481,8 +481,11 @@ int dm_fps_step_max;   // the largest step the stubs give the game (STEP_MAX in 
 static const char *g_fps_mod;   // the module holding the state page (for the log)
 static float g_render_scale_max = 1.0f;   // the render-scale stub's largest scale (RENDER_SCALE in its fixups table; 1 for a stub that only lowers the game's size)
 static int g_fstep_t120;                  // the frame step stub takes ticks of 1/120 s (the FRAME_STEP_120 capability): the page's unit (+0x38) is 120, and 40 fps is taken
+// The page's fields reach the composition trace's ring and its head / tail (dm_screen_trace_poll below: +0x2e0 .. +0xd43), so the whole page must be inside
+// the module. patch_nso.py reserves at least 0x1000 for it: the gap from FS_STATE_OFF to PATCH_OFF, or 0x4000 behind a front patch area (FAR).
+#define FPS_STATE_SIZE 0xd44
 static void install_fps_state(module_t *m) {
-    if (m->fps_state_off + 0x40 > m->size || m->fps_state_off < m->key_page_off + m->key_page_size) die("%s: frame step state page out of range", m->name);
+    if (m->fps_state_off + FPS_STATE_SIZE > m->size || m->fps_state_off < m->key_page_off + m->key_page_size) die("%s: frame step state page out of range", m->name);
     dm_fps_state = m->base + m->fps_state_off; g_fps_mod = m->name; dm_fps_step_max = (int)m->step_max;
     if (m->render_scale_max > 1) g_render_scale_max = (float)m->render_scale_max;
     g_fstep_t120 = m->fstep_t120;
@@ -503,15 +506,20 @@ static int shape_in_range(float a) {
     if (!DM_GAME_SCREEN_UNION) return 0;   // the phone's shapes need the profile whose stubs read the output's width (its union window)
     return (a >= DM_SCREEN_PORTRAIT_MIN && a < DM_SCREEN_PORTRAIT_MAX) || (a >= DM_SCREEN_LANDSCAPE_MIN && a < DM_SCREEN_LANDSCAPE_MAX);
 }
-// The output a shape asks for: the game's own 1920-wide values scale to its width, and its height is the one that gives the ratio, a multiple of 8.
-// Below 16:9 the width narrows when the height would pass the game's layout tables (2048): 0.92 asks for 2088 and gets 1880x2040
+// The output a shape asks for. Main's shapes keep the game's 1920-wide values at their width and take the height that gives the ratio, a multiple of 48 so the
+// 2/3 layout space (1280 wide) stays whole. A profile whose stubs read the union window also follows a 19.5:9 phone: its height is a multiple of 8 and, below
+// 16:9, its width narrows when the height would pass the game's layout tables (2048): 0.92 asks for 2088 and gets 1880x2040
 static void shape_output(float a, uint32_t *w, uint32_t *h) {
+#if DM_GAME_SCREEN_UNION
     uint32_t ow = 1920, oh = (uint32_t)(1920.0f / a / 8.0f + 0.5f) * 8;
     if (oh > 2048) {
         ow = (uint32_t)(2048.0f * a / 8.0f) * 8; oh = (uint32_t)((float)ow / a / 8.0f + 0.5f) * 8;
         LOG("%s: screen shape %.3f: output %ux%u (the game's layout tables stop at a display height of 2048)", g_fps_mod, a, ow, oh);
     }
     *w = ow; *h = oh;
+#else
+    *w = 1920; *h = (uint32_t)(1920.0f / a / 48.0f + 0.5f) * 48;
+#endif
 }
 // The picture's output, capped to the front end's view pixels (DM_SCREEN_ASPECT_PX, dm_screen_shape_px): the 1920-wide shape is a coordinate space,
 // not a resolution, and a standing phone's 1880x2040 picture was drawn into a 1206x1311 view -- 2.4 times the pixels, which the GPU paid for and which
@@ -539,7 +547,11 @@ static uint32_t g_union_w, g_union_h;
 static void shape_apply(float a, int pending) {
     extern void mtl_present_screen(uint32_t w, uint32_t h), mtl_present_picture(uint32_t w, uint32_t h);
     uint32_t ow, oh; shape_output_capped(a, &ow, &oh);
-    uint32_t lh = (uint32_t)((float)oh * 1280.0f / (float)ow + 0.5f); float lf = (float)lh;
+#if DM_GAME_SCREEN_UNION
+    uint32_t lh = (uint32_t)((float)oh * 1280.0f / (float)ow + 0.5f); float lf = (float)lh;   // 1280 wide, the picture's own height
+#else
+    uint32_t lh = oh * 2 / 3; float lf = (float)lh;   // main's layout space: 2/3 of the output, whole for a multiple of 48
+#endif
     // The field of view: views of the screen's ratio (the scene, the HUD's camera) keep 16:9's sides and show more above and below (patches.py's sead::PerspectiveProjection stubs)
     // k is the vertical angle's factor. A taller screen (r < 16:9) widens it so the sides stay 16:9's. A wider screen (r > 16:9, a 19.5:9 phone in landscape) must not
     // narrow it: the vertical angle stays, the projection's aspect takes r, and the scene shows more at the sides. Without the floor a wider screen narrowed the angle
@@ -568,6 +580,7 @@ static void shape_apply(float a, int pending) {
     // background is about 720 tall, the weapon wheel's gradient 1280; the map's tiles are left alone anyway)
     // DM_SCREEN_HUD=<edge>,<listed>,<full-screen width>,<full-screen height>[,<tallest>] overrides them for trials
     float anc[7] = {(float)lh / 2 - 360.0f, (float)lh / 720.0f, 280.0f, 100.0f, 1270.0f, 710.0f, 1300.0f};
+#if DM_GAME_SCREEN_UNION
     // A wider screen (oh < 1080, a 19.5:9 phone in landscape) has no room above or below: the vertical shift and the vertical stretch fall back to "do nothing"
     // (0 and 1), so the HUD keeps its 16:9 rows and the layouts' y row is not scaled. The scene's extra width comes from the projection's aspect, not from these.
     if (anc[0] < 0) anc[0] = 0;
@@ -576,6 +589,7 @@ static void shape_apply(float a, int pending) {
     // widgets already lie inside the picture: moving them out as well puts them past it (seen on an iPhone
     // standing up). A wider picture keeps the move.
     if (r < 16.0f / 9.0f) anc[0] = 0.0f;
+#endif
     const char *hv = getenv("DM_SCREEN_HUD");
     if (hv && sscanf(hv, "%f,%f,%f,%f,%f", &anc[2], &anc[3], &anc[4], &anc[5], &anc[6]) < 4) LOG("[RED] DM_SCREEN_HUD=%s: <edge>,<listed>,<full width>,<full height>[,<tallest>]; keeping the rest", hv);
     memcpy(dm_fps_state + 0x80, anc, sizeof anc);
@@ -662,10 +676,12 @@ void dm_fps_state_apply(void) {
                 } else LOG("[RED] DM_SCREEN_ASPECT_UNION needs the resolution table forced to the picture's mode (bit 10 of DM_SCREEN_ASPECT_SITES): keeping one shape");
             }
             { uint32_t u[2] = {g_union_w, g_union_h}; memcpy(dm_fps_state + 0x68, u, 8); }
+#if DM_GAME_SCREEN_UNION
             {   // The front end's view pixels (DM_SCREEN_ASPECT_PX=1206x1311): the picture's output is capped to them (shape_output_capped)
                 const char *px = getenv("DM_SCREEN_ASPECT_PX");
                 if (px) { unsigned w, h; if (sscanf(px, "%ux%u", &w, &h) == 2) { g_cap_w = w; g_cap_h = h; LOG("%s: screen shape: the picture's output is capped to the view's %ux%u pixels (DM_SCREEN_ASPECT_PX)", g_fps_mod, w, h); } else LOG("[RED] DM_SCREEN_ASPECT_PX=%s: <width>x<height>; the picture keeps the shape's own 1920-wide size", px); }
             }
+#endif
             shape_apply(a, 0);   // the game has not started: the page is its live shape, as a build without a runtime change has it
         }
     }

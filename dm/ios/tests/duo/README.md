@@ -28,11 +28,3 @@ APP="$DERIVED_DATA/Build/Products/Debug-iphonesimulator/DuoHarness.app"
 xcrun simctl install "$DEVICE" "$APP"
 xcrun simctl launch "$DEVICE" org.nxnative.DuoHarness
 ```
-
-The app's `DmPadLayout` (its `NSUserDefaults`) outlives a test run: `DmGamepad` reads it when the app starts, which is before `setUp` saves it and sets 3D, so the root-view tests see whatever an earlier run or the player left there. A run that is interrupted can leave 2D or Tap behind and change which controls those tests meet. Uninstall the app before a run that must be reproducible:
-
-```sh
-xcrun simctl uninstall "$DEVICE" org.nxnative.DuoHarness
-```
-
-The only thing it clears is that layout choice; the app then starts on the profile's `pad_layout`.
