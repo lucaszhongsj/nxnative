@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # The compile cache as one file (dm/tools/shader_cache.py): entries in and out, bytes stored once, several threads and processes, a damaged file, pruning, and taking in a cache from before it.
-import concurrent.futures as cf, hashlib, os, sqlite3, subprocess, sys, tarfile, tempfile, threading, time, unittest
+import concurrent.futures as cf, contextlib, errno, hashlib, os, sqlite3, subprocess, sys, tarfile, tempfile, threading, time, unittest
 from pathlib import Path
 from unittest import mock
 
@@ -38,6 +38,11 @@ def forked_work(i):
 def dies_in_batch(i):
     s = STORE; assert s is not None
     with s.batch(): s.put('dead', b'd'); os._exit(9)
+
+
+def remote_blob_ids(prefix):
+    assert STORE is not None
+    return STORE.blob_ids(prefix)
 
 
 def forked_stores(path, work):
@@ -129,11 +134,40 @@ class Entries(Base):
         self.assertEqual(self.blobs(), 1)
         self.assertEqual(self.store.get('shader/d/mac/k_b.metallib'), b'L' * 100000)
 
+    def test_blob_ids_match_shared_local_entries_only(self):
+        ro_path = self.root / 'ro.db'
+        ro = shader_cache.Store(ro_path); ro.put('stage/a/ro', b'same'); ro.close()
+        s = shader_cache.Store(self.root / 'local.db', readonly=ro_path); self.addCleanup(s.close)
+        s.put('stage/a/1', b'same'); s.put('stage/a/2', b'same'); s.put('stage/a/3', b'other'); s.put('stage/ab/1', b'same')
+        ids = s.blob_ids('stage/a/')
+        self.assertEqual(set(ids), {'stage/a/1', 'stage/a/2', 'stage/a/3'})
+        self.assertEqual(ids['stage/a/1'], ids['stage/a/2'])
+        self.assertNotEqual(ids['stage/a/1'], ids['stage/a/3'])
+
     def test_to_file_and_from_file(self):
         src, dst = self.root / 'src', self.root / 'dst'; src.write_bytes(b'data')
         self.store.put_file('f', src)
         self.assertTrue(self.store.to_file('f', dst)); self.assertEqual(dst.read_bytes(), b'data')
         self.assertFalse(self.store.to_file('absent', self.root / 'none')); self.assertFalse((self.root / 'none').exists())
+
+    def test_to_file_removes_tmp_after_failed_write_or_rename(self):
+        dst = self.root / 'dst'; dst.write_bytes(b'old')
+        self.store.put('f', b'new data')
+        @contextlib.contextmanager
+        def failing_open(path, mode):
+            with open(path, mode) as file:
+                def write(data):
+                    file.write(data[:2])
+                    raise OSError(errno.ENOSPC, 'No space left on device')
+                yield mock.Mock(write=write)
+        for action in ('write', 'rename'):
+            with self.subTest(action=action):
+                patch = mock.patch.object(shader_cache, 'open', failing_open, create=True) if action == 'write' else mock.patch.object(shader_cache.os, 'replace', side_effect=OSError(errno.ENOSPC, 'No space left on device'))
+                with patch:
+                    with self.assertRaises(OSError) as raised: self.store.to_file('f', dst)
+                self.assertEqual(raised.exception.errno, errno.ENOSPC)
+                self.assertEqual(dst.read_bytes(), b'old')
+                self.assertEqual(list(self.root.glob('dst.tmp-*')), [])
 
     def test_other_threads_read_on_connections_of_their_own(self):
         # one connection gives an entry's bytes at 190 MB/s; the library image is written from 300,000 entries (shader_lib.py write), read by a few threads at once
@@ -449,6 +483,17 @@ class Writers(Base):
                 "s.db.execute('BEGIN IMMEDIATE'); s.put('half', b'2'); os.kill(os.getpid(), 9)\n")
         subprocess.run([sys.executable, '-c', code, str(REPO / 'dm/tools'), str(self.path)])
         self.assertEqual(self.store.names(''), {'done'})
+
+    def test_remote_blob_ids(self):
+        import concurrent.futures as cf, multiprocessing
+        global SERVED; SERVED = shader_cache.Served(self.store, 1)
+        self.store.put('stage/a/1', b'same'); self.store.put('stage/a/2', b'same'); self.store.put('stage/a/3', b'other')
+        with cf.ProcessPoolExecutor(1, mp_context=multiprocessing.get_context('fork'), initializer=worker_start) as ex:
+            ex.submit(int).result(); SERVED.start()
+            ids = ex.submit(remote_blob_ids, 'stage/a/').result()
+        self.assertEqual(set(ids), {'stage/a/1', 'stage/a/2', 'stage/a/3'})
+        self.assertEqual(ids['stage/a/1'], ids['stage/a/2'])
+        self.assertNotEqual(ids['stage/a/1'], ids['stage/a/3'])
 
 
 class Damage(unittest.TestCase):

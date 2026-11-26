@@ -815,6 +815,7 @@ def screen_shape(ctx):
               'ret', 0xd65f03c0]
     _emit_stub(here, emit, items)
     put(0x265140, [B(0x265140, start)], 'nn::ui2d::DrawInfo::SetProjectionMtx: y row divided by the stretch, then the keyboard UI dock (bit 6, one chained stub)')
+    ctx.capabilities.add('SCREEN_ASPECT')
 
 
     # Adapter site assertions, hooks and caches. 0x27d4c0 (Pane::Calculate entry)

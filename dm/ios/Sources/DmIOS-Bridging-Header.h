@@ -1,8 +1,9 @@
-// The C and Objective-C functions Launcher.swift, GameMenu.swift and LauncherSettings.swift call (CloudSaves.h, DmGameMenu.h, save_sync.h's report before Play, the screen's rate). project.yml points SWIFT_OBJC_BRIDGING_HEADER here.
+// The C and Objective-C functions Launcher.swift, GameMenu.swift, LauncherSettings.swift and DmHostingController.swift call (CloudSaves.h, DmGameMenu.h, DmRotation.h, save_sync.h's report before Play, the screen's rate). project.yml points SWIFT_OBJC_BRIDGING_HEADER here.
 #import "CloudSaves.h"
 #import "DmGameMenu.h"
+#import "DmRotation.h"
 #include "save_sync.h"
-int front_screen_max_fps(void);   // front.h, front_ios.m: the Frame rate row offers 120 only on a 120 Hz screen (LauncherSettings.swift offeredOptions)
+int front_screen_max_fps(void);   // front.h, front_ios.m: the Frame rate row offers 40 and 120 only on a 120 Hz screen (LauncherSettings.swift offeredOptions)
 // The optional portrait companion's native engine and its C layout helpers; Swift reaches them only under the DM_COMPANION compilation condition.
 #import "companion_apple.h"
 #include "companion_layout.h"

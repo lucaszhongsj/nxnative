@@ -21,6 +21,7 @@ uint64_t resolve_import(module_t *m, const char *name) { (void)m; (void)name; re
 int hle_implements(const char *name) { (void)name; return 0; }
 int svc_nro_deactivate(module_t *m) { m->loaded = 0; return 1; }
 void dm_thread_service_connect(void) {}
+void dm_exl_sync_all(void) {}   // loader.c's run_module_inits: no exl modules here
 
 static uint8_t g_page[0x400];
 static int g_cases, g_fails;
