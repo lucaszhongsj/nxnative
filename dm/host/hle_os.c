@@ -77,10 +77,12 @@ uint64_t guest_ns_at_host_time(uint64_t host_ns) {
 // (nn::os::GetSystemTickFrequency answers 0x1dcd650, sdk 20.5.19 Ounce). Read at 19.2 MHz, every tick span a Switch 2 game measured came out 1.63 times too short, and the
 // same clock's GPU timestamps 1.63 times too late: Donkey Kong Bananza's frame-rate controller took its frame for seconds long and held it at 20 fps (present interval 3)
 uint64_t guest_ticks(void) { return dm_sdk_ounce() ? guest_ns() / 32 : guest_ns() * 12 / 625; }
+__attribute__((weak)) void dm_cheats_present(void) {}   // strong definition in hle_cheats.c; standalone tests linking hle_os.c without cheats stay no-ops
 int dm_detclock_enabled(void) { return detclock_cfg() && atomic_load(&g_gdet_on); }
 void dm_guest_frame_tick(void) {
     crash_watch_frame();
     uint64_t f = atomic_fetch_add(&g_guest_frame, 1) + 1;
+    dm_cheats_present();   // apply enabled cheats once per presented guest frame across NVN, Vulkan, and OpenGL
     // The frame stamps of a profile's adaptive-view adapter (Animal Crossing's view.s): the adapter keeps +0xa8 as this present
     // counter and writes a stamp into +0xb0 / +0xb8 where the game draws the keyboard or a touch panel, so "the keyboard was
     // rendered within the last two presents" is a subtraction. The slot is past every field the frame step stubs read (+0x9c and

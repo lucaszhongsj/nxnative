@@ -82,4 +82,6 @@ void mtl_present_screen(uint32_t w, uint32_t h);   // a screen taller than 16:9 
 void mtl_present_picture(uint32_t w, uint32_t h);   // the picture at a window's origin inside a window that holds every shape (loader.c DM_SCREEN_ASPECT_UNION): its shape, whatever the texture's; 0 = none
 void mtl_set_fstep_fine(int on);                   // late frames at a 30 fps cap's hold 2 are shown on the 60 Hz link at frame latency 2 (hle_nvn.c fstep_tick)
 void mtl_present_wait(uint64_t ticket);   // as in nvn_obj.h: wait until that present has been handed to the GPU
+int mtl_present_texture_ready(uint64_t ticket, uint64_t copy);   // non-blocking readiness check (copy == 0 checks ticket only)
+int mtl_present_wait_timeout(uint64_t ticket, uint64_t timeout_ns);   // bounded ticket wait: 1 ready, 0 timed out
 void mtl_present_wait_texture(uint64_t ticket, uint64_t copy);   // the next acquire of a presented texture, or a queue finish: with a snapshot (copy, from mtl_present) its copy has run on the GPU, else as mtl_present_wait

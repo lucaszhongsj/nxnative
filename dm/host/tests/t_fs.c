@@ -379,11 +379,15 @@ int main(void) {
         unsetenv("DM_ROMFS_OVERLAY"); g_nmnt = 0;
         {   // another program's RomFS by its index (Super Mario Bros. Wonder's Switch 2 program mounts its Switch 1 program's, index 0): romfs_programs/<index>.img beside DM_ROMFS
             char pd[1100], pd2[1100]; snprintf(pd, sizeof pd, "%s/romfs_programs", root); snprintf(pd2, sizeof pd2, "%s/progs", root); mkdir(pd, 0755); mkdir(pd2, 0755);
-            memcpy(img + 32, "HELLO", 5); snprintf(fn, sizeof fn, "%s/0.img", pd); f = fopen(fn, "wb"); fwrite(img, 1, sizeof img, f); fclose(f); memcpy(img + 32, "hello", 5);
-            CHECK(h_fs_MountRomIdx("content", 0, NULL, 0) == RES_OK && read_fs("content:/data/a", got, sizeof got) && !strcmp(got, "HELLO"), "MountRom with a program index mounts that program's image (got %s)", got);
-            CHECK(h_fs_MountRomIdx("own", 1, NULL, 0) == RES_OK && read_fs("own:/data/a", got, sizeof got) && !strcmp(got, "hello"), "an index with no image mounts this program's own RomFS (got %s)", got);
-            snprintf(fn, sizeof fn, "%s/0.img", pd2); CHECK(!link(ip, fn), "stage a program image elsewhere"); setenv("DM_ROMFS_PROGRAMS", pd2, 1);
-            CHECK(h_fs_MountRomIdx("content2", 0, NULL, 0) == RES_OK && read_fs("content2:/data/a", got, sizeof got) && !strcmp(got, "hello"), "DM_ROMFS_PROGRAMS names the folder (the iOS app's, when its RomFS is in Documents)");
+            int own = (int)(DM_GAME_PROGRAM_ID & 0xfff), other = own == 0 ? 1 : 0;
+            memcpy(img + 32, "HELLO", 5); snprintf(fn, sizeof fn, "%s/%d.img", pd, other); f = fopen(fn, "wb"); fwrite(img, 1, sizeof img, f); fclose(f); memcpy(img + 32, "hello", 5);
+            CHECK(h_fs_MountRomIdx("content", other, NULL, 0) == RES_OK && read_fs("content:/data/a", got, sizeof got) && !strcmp(got, "HELLO"), "MountRom with another program's index mounts that program's image (got %s)", got);
+            char own_image[1200]; snprintf(own_image, sizeof own_image, "%s/%d.img", pd, own); CHECK(!link(fn, own_image), "stage a stale image at the current index");
+            CHECK(h_fs_MountRomIdx("own", own, NULL, 0) == RES_OK && read_fs("own:/data/a", got, sizeof got) && !strcmp(got, "hello"), "the current index uses DM_ROMFS even when a stale sibling image exists (got %s)", got);
+            int missing = own == 2 ? 3 : 2;
+            CHECK(h_fs_MountRomIdx("fallback", missing, NULL, 0) == RES_OK && read_fs("fallback:/data/a", got, sizeof got) && !strcmp(got, "hello"), "an index with no image falls back to the current RomFS (got %s)", got);
+            snprintf(fn, sizeof fn, "%s/%d.img", pd2, other); CHECK(!link(ip, fn), "stage a program image elsewhere"); setenv("DM_ROMFS_PROGRAMS", pd2, 1);
+            CHECK(h_fs_MountRomIdx("content2", other, NULL, 0) == RES_OK && read_fs("content2:/data/a", got, sizeof got) && !strcmp(got, "hello"), "DM_ROMFS_PROGRAMS names the folder (the iOS app's, when its RomFS is in Documents)");
             unsetenv("DM_ROMFS_PROGRAMS"); g_nmnt = 0;
         }
         snprintf(fn, sizeof fn, "%s/2.img", root); CHECK(!link(ip, fn), "stage a DLC image"); setenv("DM_AOC_DIR", root, 1);
@@ -641,6 +645,37 @@ int main(void) {
         CHECK(h_fs_MountSave("save", NULL) == RES_OK && h_fs_OpenFile(&h, "save:/savedata0.bin", MODE_READ) != RES_OK, "an erased file stays erased at the next mount");
         CHECK(read_fs("save:/both.bin", got, sizeof got) && !strcmp(got, "new") && read_fs("save:/m/a", got, sizeof got) && !strcmp(got, "ma"), "a second mount changes nothing else");
 #undef OLD
+        g_nmnt = 0;
+    }
+
+    printf("⑩ stale writable handles rejected after rollback\n");
+    {   char s1[1100], s2[1100], f1[1200], f2[1200];
+        snprintf(s1, sizeof s1, "%s/stale1", root); snprintf(s2, sizeof s2, "%s/stale2", root);
+        mkdir(s1, 0755); mkdir(s2, 0755);
+        unsetenv("DM_TEST_FS_FAIL"); unsetenv("DM_TEST_FS_FAILAT");
+        setenv("DM_SAVE", s1, 1); g_nmnt = 0;
+        CHECK(h_fs_MountSave("save", NULL) == RES_OK && mount_ex("save2", s2, 0, 1) == RES_OK, "mount two independent transactional saves");
+        CHECK(h_fs_CreateFile("save:/stale", 0) == RES_OK && write_save("save:/stale", "orig") == RES_OK && h_fs_Commit("save") == RES_OK, "commit original bytes to save:/stale");
+        CHECK(h_fs_CreateFile("save2:/peer", 0) == RES_OK && write_save("save2:/peer", "peer0") == RES_OK && h_fs_Commit("save2") == RES_OK, "commit original bytes to save2:/peer");
+        uint64_t h = 0, h2 = 0, h_new = 0;
+        CHECK(h_fs_OpenFile(&h, "save:/stale", MODE_WRITE) == RES_OK, "open writable handle on save:/stale");
+        CHECK(h_fs_OpenFile(&h2, "save2:/peer", MODE_WRITE) == RES_OK, "open writable handle on unaffected save2:/peer");
+        g_mode = 1; g_calls = 0;
+        CHECK(h_fs_WriteFile(h, 0, "bad", 3, NULL) == RES_FAIL, "injected zero-byte write fails and taints save");
+        g_mode = 0;
+        CHECK(h_fs_Commit("save") == RES_FAIL, "commit rolls back save while handle h remains open");
+        snprintf(f1, sizeof f1, "%s/stale", s1); snprintf(f2, sizeof f2, "%s/peer", s2);
+        CHECK(same(f1, "orig"), "committed save:/stale remains orig after rollback");
+        CHECK(h_fs_WriteFile(h, 0, "after", 5, NULL) == RES_FAIL, "WriteFile rejects stale handle after rollback");
+        CHECK(h_fs_SetFileSize(h, 1) == RES_FAIL, "SetFileSize rejects stale handle after rollback");
+        CHECK(h_fs_SetFileSize(h2, 5) == RES_OK && h_fs_WriteFile(h2, 0, "peer1", 5, NULL) == RES_OK, "unaffected second transaction handle still writes and resizes");
+        h_fs_CloseFile(h2);
+        CHECK(h_fs_Commit("save2") == RES_OK && same(f2, "peer1"), "unaffected second transaction commits peer1");
+        h_fs_CloseFile(h);
+        CHECK(h_fs_OpenFile(&h_new, "save:/stale", MODE_WRITE) == RES_OK, "close and reopen save:/stale (FD reuse)");
+        CHECK(h_fs_SetFileSize(h_new, 8) == RES_OK && h_fs_WriteFile(h_new, 0, "replaced", 8, NULL) == RES_OK, "reopened handle writes replacement bytes");
+        h_fs_CloseFile(h_new);
+        CHECK(h_fs_Commit("save") == RES_OK && same(f1, "replaced"), "commit succeeds and on-disk save:/stale equals replaced");
         g_nmnt = 0;
     }
 
