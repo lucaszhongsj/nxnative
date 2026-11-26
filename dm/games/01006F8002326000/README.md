@@ -122,7 +122,7 @@ The layouts' fit in `_dm_view_ui_override` / `_dm_view_panel_projection` (`Lscre
 
 Seen on an iPhone standing up (0.92, 2026-11-20) with the fit and the edge widgets' move both on: the title screen's version line sat high in the picture beside the performance HUD and the picture's bottom edge showed no layout; a player's chat balloon sat at the character's feet with its name plate overlapping it; the camera mode's frame corners, hints and zoom column stayed in the picture's middle. With that move off (an earlier app and `DM_SCREEN_ASPECT_SITES=0xfffff5ff`) the layouts kept 16:9, centred, the scene still filled the picture's portrait shape, and the player found the screen as it should be; a picture narrower than 16:9 now clears the move itself, so no switch is needed.
 
-Open: the keyboard dock has been checked headless on a Mac only (0.92 and 2.17, an island save); it needs a device check.
+Open: the dock's drawing has been checked headless on a Mac only (0.92 and 2.17, an island save), and so has the name entry, which the adapter leaves undocked (its keyboard stamp does not fire there): at 0.92 in handheld mode a touch on q reaches the panel at (76, 467) through the band fit alone and the letter enters (Mac, 2026-11-26). A docked keyboard's touch mapping (the `+0x1c4` fraction) and the whole dock still need a device check.
 
 ## Found on this game
 
