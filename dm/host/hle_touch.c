@@ -47,9 +47,10 @@ static float ui_y(float y) {
         // A game that docks its interface to the picture's bottom while its text keyboard is up (the ACNH
         // patch moves the interface's projection and records it in its frame step page) draws a control
         // below where the mapped band has it: the touch that lands on it maps to a place higher in the
-        // interface, by the dock over the band's height (474 of the 1057-pixel band at 0.92)
-        uint32_t docked; memcpy(&docked, dm_fps_state + 0x1c4, 4);
-        if (docked == 1) v -= 0.4484f;
+        // interface, by the dock over the band's height. The state page's +0x1c4 is that fraction itself
+        // (the profile's adapter writes it; the projection and clip derive their units from it)
+        float dock; memcpy(&dock, dm_fps_state + 0x1c4, 4);
+        if (dock > 0.0f) v -= dock;
     }
     return v < 0 ? 0 : v > 1 ? 1 : v;
 }

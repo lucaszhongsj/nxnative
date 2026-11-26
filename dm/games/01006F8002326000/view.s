@@ -2,10 +2,14 @@
 // The projection/scissor entry-point lead comes from the MIT-0 ACNH 3.0.X
 // Ultrawide project. Vertical coverage and dynamic cache checks are local.
 // State (the frame step page): +0x58 target aspect (0 = 16:9), +0xa0 layout match,
-// +0xa8/+0xb0/+0xb8 native UI frame stamps, +0x240 the composition trace's flag,
-// +0x24c the last UI projection it reported, +0x250 backdrop coverage (loader.c's
-// switches; 0 = keep the game's composition). The trace's records are at +0x2e0,
-// its head / tail at +0xce0 / +0xce4. No host-managed pointer is needed.
+// +0xa8/+0xb0/+0xb8 native UI frame stamps, +0x1c4 the UI dock (the fraction of the
+// 16:9 layout band the interface moves down while the keyboard is up; hle_touch.c
+// subtracts it, this file's projection and clip derive their own units from it),
+// +0x1c8 the fraction the projection carries now, +0x1f0 the dock's hold stamp,
+// +0x240 the composition trace's flag, +0x24c the last UI projection it reported,
+// +0x250 backdrop coverage (loader.c's switches; 0 = keep the game's composition).
+// The trace's records are at +0x2e0, its head / tail at +0xce0 / +0xce4. No
+// host-managed pointer is needed.
 .text
 .p2align 2
 .globl _dm_view_matrix
@@ -136,16 +140,28 @@ Lui_dock_hold:
     b.hi Lui_dock_done
     mov w10, #1
 Lui_dock_done:
-    str w10, [x15, #0x1c4]       ; what the touch mapping reads
-    ldr w17, [x15, #0x1c8]       ; whether the projection carries the dock now
-    cmp w17, w10
+    ; The dock in one unit: the fraction of the 16:9 layout band the interface moves down, 323 of the
+    ; 720-unit layout space. hle_touch.c subtracts this fraction from a touch's band coordinate; the
+    ; projection and the clip below are the same fraction in their own units, so a change of the
+    ; keyboard's height or of the layout scale is made here once.
+    ldr s1, LDock_lay
+    ldr s2, LLayout_720
+    fdiv s1, s1, s2
+    cbnz w10, Lui_dock_have
+    fmov s1, wzr
+Lui_dock_have:
+    str s1, [x15, #0x1c4]        ; what the touch mapping reads
+    ldr s2, [x15, #0x1c8]        ; the fraction the projection carries now
+    fcmp s1, s2
     b.eq Lui_override_done
-    str w10, [x15, #0x1c8]
+    str s1, [x15, #0x1c8]
+    fsub s1, s1, s2              ; the change, in the projection's units
+    ldr s2, LLayout_720
+    fmul s1, s1, s2
+    ldr s2, LProj_per_layout
+    fmul s1, s1, s2
+    fneg s1, s1                  ; down is negative in the projection
     ldr s0, [x0, #0x1c]
-    ldr s1, Lui_shift
-    cbnz w10, Lui_override_apply
-    fneg s1, s1
-Lui_override_apply:
     fadd s0, s0, s1
     str s0, [x0, #0x1c]
 Lui_override_done:
@@ -153,7 +169,9 @@ Lui_override_done:
     ldp q0, q1, [sp], #32
     ldp x8, x30, [sp], #16
     ret
-Lui_shift: .float -690.0
+LDock_lay: .float 323.0
+LLayout_720: .float 720.0
+LProj_per_layout: .float 2.136222222   ; the projection's y translation per layout unit this lens gives (690 / 323)
 // x0 = screen projection, w8 = accepted. No retained matrix is a scale source.
 Lscreen_projection:
     mov w8, wzr
@@ -243,11 +261,14 @@ Lui_depth_w: .float -2.000200033187866
 _dm_view_clip:
     adrp x15, _dm_view_state@PAGE
     add x15, x15, _dm_view_state@PAGEOFF
-    ldr w16, [x15, #0x1c4]
-    cbz w16, Lclip_done
+    ldr s4, [x15, #0x1c4]        ; the dock, as the layout band's fraction (0 = none)
+    fcmp s4, #0.0
+    b.eq Lclip_done
+    ldr s5, LLayout_720
+    fmul s4, s4, s5
+    fneg s4, s4
     ldr s2, [x3, #4]
     ldr s3, [x3, #0xc]
-    ldr s4, Lclip_shift
     fadd s2, s2, s4
     fadd s3, s3, s4
     str s2, [x3, #4]
@@ -255,7 +276,6 @@ _dm_view_clip:
 Lclip_done:
     sub sp, sp, #0x1c0
     b _dm_return_0031d44b4
-Lclip_shift: .float -323.0
 
 // Scissor conversion follows the current perspective matrix. Capture-local
 // orthographic projections retain their native coordinates. Preserve NZCV.

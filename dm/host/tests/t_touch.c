@@ -4,8 +4,9 @@
 #include <string.h>
 #include <stdint.h>
 typedef struct { uint32_t id; float x, y; } dm_touch;
-// The frame step page hle_touch.c reads +0x58 from: zero (16:9) until the picture-shape cases set a ratio.
-static uint8_t g_state_page[0x60];
+// The frame step page hle_touch.c reads: +0x58 the picture's ratio (zero, 16:9, until the picture-shape cases set one)
+// and +0x1c4 the UI dock (the fraction of the 16:9 layout band the interface moves down; the profile's adapter writes it)
+static uint8_t g_state_page[0x200];
 uint8_t *dm_fps_state = g_state_page;
 void dm_touch_set(const dm_touch *t, int n);
 int touch_fill(void *out, uint64_t now_ns);
@@ -78,10 +79,17 @@ int main(void) {
     dm_touch t = {8, 0.5f, 0.6f}; dm_touch_set(&t, 1);
     expect("taller picture: y 0.6 lands at 0.6932 of the height (640, 499)", T0 + 366666674, 23, 1, (want_pt[]){{16666667, 1, 8, 640, 499}});
     dm_touch_set(NULL, 0); touch_fill((uint8_t[0x290]){0}, T0 + 383333341);                 // sample 24: End
+    // 10 The UI dock (state +0x1c4, the profile's adapter): while the game's text keyboard is up the interface is drawn
+    // 323 of its 720-unit layout space lower, so a control sits that fraction of the band below where the band maps it
+    float dock = 323.0f / 720.0f; memcpy(g_state_page + 0x1c4, &dock, 4);
+    dm_touch docked = {10, 0.5f, 0.6f}; dm_touch_set(&docked, 1);
+    expect("docked interface: the same touch lands 0.4486 of the band higher (640, 176)", T0 + 400000008, 25, 1, (want_pt[]){{16666667, 1, 10, 640, 176}});
+    dm_touch_set(NULL, 0); touch_fill((uint8_t[0x290]){0}, T0 + 416666675);                 // sample 26: End
+    dock = 0.0f; memcpy(g_state_page + 0x1c4, &dock, 4);
     r = 16.0f / 9.0f; memcpy(g_state_page + 0x58, &r, 4);
     dm_touch s = {9, 0.25f, 0.6f}; dm_touch_set(&s, 1);
-    expect("16:9 picture: a touch is not mapped (320, 432)", T0 + 400000008, 25, 1, (want_pt[]){{16666667, 1, 9, 320, 432}});
-    dm_touch_set(NULL, 0); touch_fill((uint8_t[0x290]){0}, T0 + 416666675);                 // sample 26: End
+    expect("16:9 picture: a touch is not mapped (320, 432)", T0 + 433333342, 27, 1, (want_pt[]){{16666667, 1, 9, 320, 432}});
+    dm_touch_set(NULL, 0); touch_fill((uint8_t[0x290]){0}, T0 + 450000009);                 // sample 28: End
     r = 0.0f; memcpy(g_state_page + 0x58, &r, 4);
     printf("== %d checks, %d failed ==\n", cases, fails);
     return fails != 0;

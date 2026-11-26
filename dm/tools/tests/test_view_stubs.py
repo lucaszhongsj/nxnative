@@ -110,7 +110,7 @@ class ChainedStubSavesX30(unittest.TestCase):
         self.words, self.puts = [], []
         self.ctx = SimpleNamespace(here=lambda: self.BASE + 4 * len(self.words), emit=self.words.append,
                                    site=lambda off, orig: None, put=lambda off, words, why: self.puts.append((off, list(words))),
-                                   state=self.STATE)
+                                   state=self.STATE, capabilities=set())   # as patch_nso.py's frame step context
 
     def _stub(self, off):
         # the branch put at a site names its stub; a bl there calls one directly and has no stub of its own

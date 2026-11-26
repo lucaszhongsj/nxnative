@@ -23,40 +23,42 @@ from nso_asm import ADRP, B, BL, BCOND, CBZ, LDP_POST, STP_PRE, STRX, TBZ
 # Bit 10 makes the size table use the docked entry while the console is handheld, for a window that holds every shape (DM_SCREEN_ASPECT_UNION): see the mode stub below
 # ==== BEGIN GENERATED VIEW CODE (gen_view_stubs.py; do not edit) ====
 # Generated from view.s by dm/games/01006F8002326000/gen_view_stubs.py; do not edit.
-source_sha256 = '86ccafb21b300294d18bcb68124836b01633c22a26babb2787ddd733a4f772a8'
+source_sha256 = 'f9792c7e2cd2d3b20a4d70ce876408d5ceb557ae0ced028aa87ee6131c7e703e'
 words = [
     0x2d558801, 0x9000000f, 0x910001ef, 0xb941cdf0, 0xb94059f1, 0x35000090,
     0x34000211, 0x2a1103f0, 0xb901cdf0, 0x1e270206, 0x1e263846, 0x1e20c0c6,
-    0x1e20c045, 0x1c002c44, 0x1e2408a5, 0x1e2520c0, 0x540000c8, 0x34000071,
-    0x1e270222, 0x1400000e, 0x1c002ae2, 0x1400000c, 0x34000171, 0x1c002a86,
+    0x1e20c045, 0x1c002dc4, 0x1e2408a5, 0x1e2520c0, 0x540000c8, 0x34000071,
+    0x1e270222, 0x1400000e, 0x1c002c62, 0x1400000c, 0x34000171, 0x1c002c06,
     0x1e262040, 0x54000101, 0x1e270227, 0x1e2718c6, 0x1e2e1003, 0x1e2348c6,
     0x1e260821, 0x1e2040e2, 0x1e2c1003, 0x14000000, 0x39402008, 0x350004a8,
     0x9000000f, 0x910001ef, 0xb94059ef, 0x3400042f, 0xadbe07e0, 0xad010fe2,
     0xd53b420f, 0xf81f0fef, 0xf940000f, 0x90000010, 0x91000210, 0xeb1001ff,
-    0x54000281, 0xbd40b000, 0x1c002721, 0x1e212000, 0x54000201, 0x9000000f,
+    0x54000281, 0xbd40b000, 0x1c0028a1, 0x1e212000, 0x54000201, 0x9000000f,
     0x910001ef, 0xb94059ef, 0x3400004f, 0x1e2701e0, 0xbd400c01, 0xbd402002,
-    0x1e211841, 0x1e20c021, 0x1e203821, 0x1e20c021, 0x1c0025c2, 0x1e220802,
+    0x1e211841, 0x1e20c021, 0x1e203821, 0x1e20c021, 0x1c002742, 0x1e220802,
     0x1e222020, 0x1a9f97e8, 0xf84107ef, 0xd51b420f, 0xad410fe2, 0xacc207e0,
-    0xd65f03c0, 0x91002100, 0xa9bf7be8, 0xadbf07e0, 0xa9bf2be9, 0x94000022,
-    0x9000000f, 0x910001ef, 0x94000177, 0x2a0803e9, 0x9400017e, 0x2a080129,
+    0xd65f03c0, 0x91002100, 0xa9bf7be8, 0xadbf07e0, 0xa9bf2be9, 0x9400002c,
+    0x9000000f, 0x910001ef, 0x94000183, 0x2a0803e9, 0x9400018a, 0x2a080129,
     0x34000069, 0xb940a9f0, 0xb901f1f0, 0xb940a9f0, 0xb941f1f1, 0x2a1f03ea,
-    0x340000b1, 0x4b110210, 0x7100921f, 0x54000048, 0x5280002a, 0xb901c5ea,
-    0xb941c9f1, 0x6b0a023f, 0x54000100, 0xb901c9ea, 0xbd401c00, 0x1c000121,
-    0x3500004a, 0x1e214021, 0x1e212800, 0xbd001c00, 0xa8c12be9, 0xacc107e0,
-    0xa8c17be8, 0xd65f03c0, 0xc42c8000, 0x2a1f03e8, 0x9000000f, 0x910001ef,
-    0xb94059f0, 0x34000710, 0xb9403c10, 0x350006d0, 0xb9403810, 0x52b7f00e,
-    0x6b0e021f, 0x54000641, 0xb9402810, 0x180006ae, 0x6b0e021f, 0x540005c1,
-    0xb9402c10, 0x1800064e, 0x6b0e021f, 0x54000541, 0xb9400810, 0xb940180e,
-    0x2a0e0210, 0x350004d0, 0xbd400000, 0xbd401401, 0x1c0004e2, 0x1c001c43,
-    0x1c001c84, 0x1e223802, 0x1e20c042, 0x1e242040, 0x54000189, 0x1e202008,
-    0x5400036d, 0x1c0003c2, 0x1e222000, 0x54000308, 0x1e230842, 0x1e223822,
-    0x1e20c042, 0x1e242040, 0x54000268, 0x1e231820, 0xb94055f0, 0x365801f0,
-    0xb94059f0, 0x34000050, 0x1e270203, 0x1c000200, 0x1c001962, 0x1e231842,
-    0x1e2e1004, 0x1e245842, 0x1e220800, 0x1e230801, 0xbd000000, 0xbd001401,
-    0x52800028, 0x14000002, 0x2a1f03e8, 0xb94241f0, 0x34000050, 0xb9024de8,
-    0xd65f03c0, 0x3fc5d182, 0xbf80068e, 0xc0000347, 0x9000000f, 0x910001ef,
-    0xb941c5f0, 0x34000110, 0xbd400462, 0xbd400c63, 0x1c0000e4, 0x1e242842,
-    0x1e242863, 0xbd000462, 0xbd000c63, 0xd10703ff, 0x14000000, 0xc3a18000,
+    0x340000b1, 0x4b110210, 0x7100921f, 0x54000048, 0x5280002a, 0x1c0002e1,
+    0x1c0002e2, 0x1e221821, 0x3500004a, 0x1e2703e1, 0xbd01c5e1, 0xbd41c9e2,
+    0x1e222020, 0x54000160, 0xbd01c9e1, 0x1e223821, 0x1c0001a2, 0x1e220821,
+    0x1c000182, 0x1e220821, 0x1e214021, 0xbd401c00, 0x1e212800, 0xbd001c00,
+    0xa8c12be9, 0xacc107e0, 0xa8c17be8, 0xd65f03c0, 0x43a18000, 0x44340000,
+    0x4008b7dd, 0x2a1f03e8, 0x9000000f, 0x910001ef, 0xb94059f0, 0x34000710,
+    0xb9403c10, 0x350006d0, 0xb9403810, 0x52b7f00e, 0x6b0e021f, 0x54000641,
+    0xb9402810, 0x180006ae, 0x6b0e021f, 0x540005c1, 0xb9402c10, 0x1800064e,
+    0x6b0e021f, 0x54000541, 0xb9400810, 0xb940180e, 0x2a0e0210, 0x350004d0,
+    0xbd400000, 0xbd401401, 0x1c0004e2, 0x1c001c83, 0x1c001cc4, 0x1e223802,
+    0x1e20c042, 0x1e242040, 0x54000189, 0x1e202008, 0x5400036d, 0x1c0003c2,
+    0x1e222000, 0x54000308, 0x1e230842, 0x1e223822, 0x1e20c042, 0x1e242040,
+    0x54000268, 0x1e231820, 0xb94055f0, 0x365801f0, 0xb94059f0, 0x34000050,
+    0x1e270203, 0x1c000200, 0x1c0019a2, 0x1e231842, 0x1e2e1004, 0x1e245842,
+    0x1e220800, 0x1e230801, 0xbd000000, 0xbd001401, 0x52800028, 0x14000002,
+    0x2a1f03e8, 0xb94241f0, 0x34000050, 0xb9024de8, 0xd65f03c0, 0x3fc5d182,
+    0xbf80068e, 0xc0000347, 0x9000000f, 0x910001ef, 0xbd41c5e4, 0x1e202088,
+    0x54000140, 0x1cfff6c5, 0x1e250884, 0x1e214084, 0xbd400462, 0xbd400c63,
+    0x1e242842, 0x1e242863, 0xbd000462, 0xbd000c63, 0xd10703ff, 0x14000000,
     0x1e221803, 0x1e241822, 0xa9bf43ef, 0xa9bf47ee, 0x9000000f, 0x910001ef,
     0xb94059ef, 0x340002cf, 0xb9404e70, 0x35000290, 0xadbe9be5, 0x3d800be7,
     0xbd402665, 0xbd401266, 0x1e2618a5, 0x1e20c0a5, 0xf940626f, 0x2d451de6,
@@ -105,7 +107,7 @@ words = [
     0x52800028, 0xd65f03c0, 0x2a1f03e8, 0x9109d1f1, 0xb9400231, 0x340000d1,
     0xb940a9f0, 0x4b110210, 0x7100121f, 0x54000048, 0x52800028, 0xd65f03c0,
     0xa9bf7be0, 0x91004000, 0x94000003, 0xa8c17be0, 0xd65f03c0, 0xa9bf7bef,
-    0x9000000f, 0x910001ef, 0xb941e9f0, 0x11000610, 0xb901e9f0, 0x97fffe8a,
+    0x9000000f, 0x910001ef, 0xb941e9f0, 0x11000610, 0xb901e9f0, 0x97fffe88,
     0x340002e8, 0x9000000f, 0x910001ef, 0xb941edf0, 0x11000610, 0xb901edf0,
     0x1cffefe1, 0xb94059f0, 0x34000050, 0x1e270201, 0x1cffef62, 0x1e222020,
     0x5400016a, 0x97ffffd4, 0x34000128, 0x1e221821, 0x1e2e1002, 0x1e213841,
@@ -310,8 +312,8 @@ words = [
     0xffffffff, 0xffffffff, 0x4e545f50, 0x616d726f, 0xffffffff, 0xffffffff,
     0x4e425f50, 0x616d726f, 0xffffffff, 0xffffffff,
 ]
-symbols = {'_dm_view_area': 1120, '_dm_view_backdrop': 2592, '_dm_view_backdrop_call': 2556, '_dm_view_backdrop_probe': 2192, '_dm_view_cache': 136, '_dm_view_capture': 896, '_dm_view_clip': 712, '_dm_view_create': 1012, '_dm_view_footer_match': 3688, '_dm_view_footer_recalc': 3840, '_dm_view_footer_y': 3948, '_dm_view_keyboard_frame': 1700, '_dm_view_keyboard_window': 4276, '_dm_view_keyboard_window_call': 4256, '_dm_view_layout': 1472, '_dm_view_matrix': 0, '_dm_view_near_xy': 1320, '_dm_view_near_y': 1260, '_dm_view_panel_projection': 1916, '_dm_view_scissor': 768, '_dm_view_scissor_origin': 2044, '_dm_view_sphere': 1380, '_dm_view_touch_page': 1732, '_dm_view_transition': 4824, '_dm_view_transition_fast_call': 4784, '_dm_view_ui_override': 292, '_dm_view_ui_projection': 1896, '_dm_view_units': 1224}
-relocations = [(4, 3, '_dm_view_state'), (8, 4, '_dm_view_state'), (132, 2, '_dm_return_037e5978'), (144, 3, '_dm_view_state'), (148, 4, '_dm_view_state'), (180, 3, '_dm_code_04a65608'), (184, 4, '_dm_code_04a65608'), (212, 3, '_dm_view_state'), (216, 4, '_dm_view_state'), (312, 3, '_dm_view_state'), (316, 4, '_dm_view_state'), (448, 3, '_dm_view_state'), (452, 4, '_dm_view_state'), (712, 3, '_dm_view_state'), (716, 4, '_dm_view_state'), (760, 2, '_dm_return_0031d44b4'), (784, 3, '_dm_view_state'), (788, 4, '_dm_view_state'), (892, 2, '_dm_return_03a308f0'), (904, 3, '_dm_view_state'), (908, 4, '_dm_view_state'), (1008, 2, '_dm_return_03a2eac0'), (1016, 3, '_dm_view_state'), (1020, 4, '_dm_view_state'), (1116, 2, '_dm_return_013a29a8'), (1128, 3, '_dm_view_state'), (1132, 4, '_dm_view_state'), (1232, 3, '_dm_view_state'), (1236, 4, '_dm_view_state'), (1256, 2, '_dm_return_01462bb8'), (1264, 3, '_dm_view_state'), (1268, 4, '_dm_view_state'), (1316, 2, '_dm_return_037e5a50'), (1324, 3, '_dm_view_state'), (1328, 4, '_dm_view_state'), (1376, 2, '_dm_return_037e5a80'), (1384, 3, '_dm_view_state'), (1388, 4, '_dm_view_state'), (1448, 2, '_dm_return_013a37c8'), (1496, 3, '_dm_view_state'), (1500, 4, '_dm_view_state'), (1656, 2, '_dm_return_00268ee4'), (1728, 2, '_dm_return_03268180'), (1752, 3, '_dm_code_049adc80'), (1756, 4, '_dm_code_049adc80'), (1796, 3, '_dm_view_state'), (1800, 4, '_dm_view_state'), (1920, 3, '_dm_view_state'), (1924, 4, '_dm_view_state'), (1948, 3, '_dm_view_state'), (1952, 4, '_dm_view_state'), (2068, 3, '_dm_view_state'), (2072, 4, '_dm_view_state'), (2188, 2, '_dm_return_03a30988'), (2200, 3, '_dm_view_state'), (2204, 4, '_dm_view_state'), (2560, 2, '_dm_code_00264a10'), (2616, 3, '_dm_view_state'), (2620, 4, '_dm_view_state'), (3856, 3, '_dm_view_state'), (3860, 4, '_dm_view_state'), (3944, 2, '_dm_return_0027d4c4'), (3984, 3, '_dm_view_state'), (3988, 4, '_dm_view_state'), (4020, 3, '_dm_view_state'), (4024, 4, '_dm_view_state'), (4052, 3, '_dm_view_state'), (4056, 4, '_dm_view_state'), (4120, 3, '_dm_view_state'), (4124, 4, '_dm_view_state'), (4200, 2, '_dm_return_0027d7c0'), (4272, 2, '_dm_return_0029a18c'), (4300, 3, '_dm_code_0474de58'), (4304, 4, '_dm_code_0474de58'), (4652, 3, '_dm_view_state'), (4656, 4, '_dm_view_state'), (4788, 2, '_dm_code_00265220'), (4824, 3, '_dm_view_state'), (4828, 4, '_dm_view_state')]
+symbols = {'_dm_view_area': 1168, '_dm_view_backdrop': 2640, '_dm_view_backdrop_call': 2604, '_dm_view_backdrop_probe': 2240, '_dm_view_cache': 136, '_dm_view_capture': 944, '_dm_view_clip': 752, '_dm_view_create': 1060, '_dm_view_footer_match': 3736, '_dm_view_footer_recalc': 3888, '_dm_view_footer_y': 3996, '_dm_view_keyboard_frame': 1748, '_dm_view_keyboard_window': 4324, '_dm_view_keyboard_window_call': 4304, '_dm_view_layout': 1520, '_dm_view_matrix': 0, '_dm_view_near_xy': 1368, '_dm_view_near_y': 1308, '_dm_view_panel_projection': 1964, '_dm_view_scissor': 816, '_dm_view_scissor_origin': 2092, '_dm_view_sphere': 1428, '_dm_view_touch_page': 1780, '_dm_view_transition': 4872, '_dm_view_transition_fast_call': 4832, '_dm_view_ui_override': 292, '_dm_view_ui_projection': 1944, '_dm_view_units': 1272}
+relocations = [(4, 3, '_dm_view_state'), (8, 4, '_dm_view_state'), (132, 2, '_dm_return_037e5978'), (144, 3, '_dm_view_state'), (148, 4, '_dm_view_state'), (180, 3, '_dm_code_04a65608'), (184, 4, '_dm_code_04a65608'), (212, 3, '_dm_view_state'), (216, 4, '_dm_view_state'), (312, 3, '_dm_view_state'), (316, 4, '_dm_view_state'), (488, 3, '_dm_view_state'), (492, 4, '_dm_view_state'), (752, 3, '_dm_view_state'), (756, 4, '_dm_view_state'), (812, 2, '_dm_return_0031d44b4'), (832, 3, '_dm_view_state'), (836, 4, '_dm_view_state'), (940, 2, '_dm_return_03a308f0'), (952, 3, '_dm_view_state'), (956, 4, '_dm_view_state'), (1056, 2, '_dm_return_03a2eac0'), (1064, 3, '_dm_view_state'), (1068, 4, '_dm_view_state'), (1164, 2, '_dm_return_013a29a8'), (1176, 3, '_dm_view_state'), (1180, 4, '_dm_view_state'), (1280, 3, '_dm_view_state'), (1284, 4, '_dm_view_state'), (1304, 2, '_dm_return_01462bb8'), (1312, 3, '_dm_view_state'), (1316, 4, '_dm_view_state'), (1364, 2, '_dm_return_037e5a50'), (1372, 3, '_dm_view_state'), (1376, 4, '_dm_view_state'), (1424, 2, '_dm_return_037e5a80'), (1432, 3, '_dm_view_state'), (1436, 4, '_dm_view_state'), (1496, 2, '_dm_return_013a37c8'), (1544, 3, '_dm_view_state'), (1548, 4, '_dm_view_state'), (1704, 2, '_dm_return_00268ee4'), (1776, 2, '_dm_return_03268180'), (1800, 3, '_dm_code_049adc80'), (1804, 4, '_dm_code_049adc80'), (1844, 3, '_dm_view_state'), (1848, 4, '_dm_view_state'), (1968, 3, '_dm_view_state'), (1972, 4, '_dm_view_state'), (1996, 3, '_dm_view_state'), (2000, 4, '_dm_view_state'), (2116, 3, '_dm_view_state'), (2120, 4, '_dm_view_state'), (2236, 2, '_dm_return_03a30988'), (2248, 3, '_dm_view_state'), (2252, 4, '_dm_view_state'), (2608, 2, '_dm_code_00264a10'), (2664, 3, '_dm_view_state'), (2668, 4, '_dm_view_state'), (3904, 3, '_dm_view_state'), (3908, 4, '_dm_view_state'), (3992, 2, '_dm_return_0027d4c4'), (4032, 3, '_dm_view_state'), (4036, 4, '_dm_view_state'), (4068, 3, '_dm_view_state'), (4072, 4, '_dm_view_state'), (4100, 3, '_dm_view_state'), (4104, 4, '_dm_view_state'), (4168, 3, '_dm_view_state'), (4172, 4, '_dm_view_state'), (4248, 2, '_dm_return_0027d7c0'), (4320, 2, '_dm_return_0029a18c'), (4348, 3, '_dm_code_0474de58'), (4352, 4, '_dm_code_0474de58'), (4700, 3, '_dm_view_state'), (4704, 4, '_dm_view_state'), (4836, 2, '_dm_code_00265220'), (4872, 3, '_dm_view_state'), (4876, 4, '_dm_view_state')]
 # ==== END GENERATED VIEW CODE ====
 
 def relocated_words(words, relocations, symbols, address, state):

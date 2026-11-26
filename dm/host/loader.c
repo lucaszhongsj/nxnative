@@ -631,6 +631,10 @@ void dm_fps_state_apply(void) {
     const char *dr = getenv("DM_DYNAMIC_RESOLUTION"); uint32_t dyn = dr && !strcmp(dr, "1");
     if (dr && strcmp(dr, "0") && strcmp(dr, "1")) LOG("[RED] DM_DYNAMIC_RESOLUTION=%s: must be 0 or 1; keeping full resolution", dr);
     memcpy(dm_fps_state + 0x40, &dyn, sizeof dyn);
+    // The UI dock: the profile's adapter (ACNH's view.s) writes the fraction of the 16:9 layout band the
+    // interface moves down while the keyboard is up (+0x1c4), and the fraction its projection carries (+0x1c8);
+    // hle_touch.c subtracts it from a touch's band coordinate. A fresh page starts undocked
+    { uint32_t nodock[2] = {0, 0}; memcpy(dm_fps_state + 0x1c4, nodock, sizeof nodock); }
     // Screen shape: DM_SCREEN_ASPECT, the picture's width / height (the profile's range below), makes the builds with screen-shape stubs render that
     // shape: the output keeps the game's 1920-wide values at its width and takes the height that gives the ratio (1.43 → 1920x1344, 2.17 → 1920x888);
     // a taller shape narrows the width to stay under the layout tables' 2048 (0.92 → 1880x2040). State +0x48 u32 output height, +0x4c u32 layout

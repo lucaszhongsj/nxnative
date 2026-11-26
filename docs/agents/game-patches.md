@@ -114,7 +114,7 @@ Every patch bound tighter than it could be: the open gaps, then the blocked, kep
 - **`build` → `game`**, rendering, blocked: the stubs have no function-matched form yet, judgement: screen shape: the sizes, the view, the layouts' projection and their edge widgets (DM_SCREEN_ASPECT). The output size is the host's, but where the game takes its sizes, its cameras and its layouts are this build's code
 - **`build` → `game`**, rendering, blocked: the stubs have no function-matched form yet, judgement: adaptive view: cached projections, scissors, captures, field ranges and UI docking (DM_SCREEN_ASPECT). The state page is the host's, but every adapter site is this build's code
 
-- **3.0.3 `main`** `ff1d1c05…` ([patches.py:843](../../dm/games/01006F8002326000/patches.py#L843))
+- **3.0.3 `main`** `ff1d1c05…` ([patches.py:845](../../dm/games/01006F8002326000/patches.py#L845))
   <details><summary>70 frame-step sites</summary>
 
   - frame step `+0x15083c`: refresh cached projection after a view target change
